@@ -24,7 +24,7 @@ def create_new_soul_window(window_id, orb_color_input='lightgreen', aura_color_i
         new_window = pyglet.window.Window(
             width=WINDOW_WIDTH,
             height=WINDOW_HEIGHT,
-            caption=f"AudioOrbWindow_{window_id}",
+            caption=f"SoulWindow_{window_id}",
             style=pyglet.window.Window.WINDOW_STYLE_OVERLAY,
             config=config,
             vsync=True,
@@ -41,7 +41,7 @@ def create_new_soul_window(window_id, orb_color_input='lightgreen', aura_color_i
 
         if sys.platform == 'win32':
             try:
-                window_title = f"AudioOrbWindow_{window_id}"
+                window_title = f"SoulWindow_{window_id}"
                 new_window.set_caption(window_title)
                 hwnd = ctypes.windll.user32.FindWindowW(None, ctypes.create_unicode_buffer(window_title))
                 if not hwnd:
