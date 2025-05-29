@@ -46,7 +46,7 @@ WANDER_AMPLITUDE = 0.5    # Amplitude of the orb's wandering motion
 
 # Shader File Paths
 SHADER_DIR = 'shaders/'
-ORB_VERTEX_SHADER_PATH = SHADER_DIR + 'orb.vert'
-ORB_FRAGMENT_SHADER_PATH = SHADER_DIR + 'orb.frag'
-AURA_VERTEX_SHADER_PATH = SHADER_DIR + 'aura.vert'
-AURA_FRAGMENT_SHADER_PATH = SHADER_DIR + 'aura.frag'
+ORB_VERTEX_SHADER_PATH = f"{SHADER_DIR}orbs/default/default_orb.vert"
+ORB_FRAGMENT_SHADER_PATH = f"{SHADER_DIR}orbs/default/default_orb.frag"
+AURA_VERTEX_SHADER_PATH = f"{SHADER_DIR}auras/default/default_aura.vert"
+AURA_FRAGMENT_SHADER_PATH = f"{SHADER_DIR}auras/default/default_aura.frag"
