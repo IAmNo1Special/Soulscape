@@ -8,4 +8,5 @@ dependencies = [
     "numpy>=2.2.6",
     "pyautogui>=0.9.54",
     "pyglet>=2.1.6",
+    "watchdog>=6.0.0",
 ]
