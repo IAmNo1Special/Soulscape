@@ -494,6 +494,7 @@ class SoulApp:
         self.aura_renderer = AuraRenderer(aura_color_rgb)
         self.time = 0.0
         self.bulge_position = [0.0, 0.0, 0.0]
+        self.aura_visible = True  # Add flag to track aura visibility
 
         self.base_camera_distance = 2.0 
         self.base_window_height = float(WINDOW_HEIGHT)
@@ -546,7 +547,8 @@ class SoulApp:
         model = pmath.Mat4.from_translation(pmath.Vec3(wander_x, wander_y, wander_z))
 
         # Draw 3D elements
-        self.aura_renderer.draw(model, view, projection, self.time, self.bulge_position)
+        if self.aura_visible:
+            self.aura_renderer.draw(model, view, projection, self.time, self.bulge_position)
         self.orb_renderer.draw(model, view, projection, self.time, self.bulge_position)
         
         # Draw the batch (contains the name label)
@@ -572,6 +574,9 @@ class SoulApp:
         """
         Handles key press events for this specific window.
         """
+        if symbol == key.A:  # Toggle aura visibility when 'A' is pressed
+            self.aura_visible = not self.aura_visible
+            return pyglet.event.EVENT_HANDLED
         if symbol == key.ESCAPE:
             self.window.close()
             return pyglet.event.EVENT_HANDLED 
