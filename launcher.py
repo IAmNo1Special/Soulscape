@@ -6,7 +6,7 @@ import sys
 
 from constants import *
 from soul import SoulApp
-from color_utils import parse_color
+from utils.color_utils import parse_color
 
 active_souls = []
 active_windows = []
