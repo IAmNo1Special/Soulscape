@@ -1,15 +1,11 @@
 # soul.py
 import pyglet
 from pyglet.gl import *
-from pyglet.graphics import Batch, Group
-from pyglet.text import Label as PygletLabel
 from pyglet.window import key, mouse
 from pyglet import math as pmath
-import numpy as np
 import pyautogui
 import random
 import math
-import ctypes # For Windows-specific window behavior
 import time  # For double click timing
 
 # Import constants and shader utilities
