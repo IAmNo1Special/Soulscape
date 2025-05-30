@@ -14,7 +14,7 @@ import time  # For double click timing
 
 # Import constants and shader utilities
 from constants import *
-from shader_utils import create_shader_program
+from utils.shader_utils import create_shader_program
     
 
 # --- Geometry Generation ---
