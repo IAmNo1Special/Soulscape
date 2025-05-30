@@ -6,7 +6,7 @@ import os
 from typing import Optional, Callable
 
 # Import the shader watcher
-from shader_watcher import shader_watcher
+from utils.shader_watcher import shader_watcher
 
 class ShaderProgram:
     """Wrapper around Pyglet's shader program that supports hot-reloading"""
