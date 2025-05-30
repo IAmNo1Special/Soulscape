@@ -25,7 +25,7 @@ ORB_LAT_SEGMENTS = 64
 ORB_LONG_SEGMENTS = 64
 ORB_BULGE_STRENGTH = 0.3  # Fixed bulge strength for the orb
 ORB_SCALE = 1.0          # Overall scale of the main orb
-ORB_Y_OFFSET = -0.1       # Y position adjustment for the orb
+ORB_Y_OFFSET = -0.15       # Y position adjustment for the orb
 
 # Aura Properties
 AURA_RADIUS = 0.4
