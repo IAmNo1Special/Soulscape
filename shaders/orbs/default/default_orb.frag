@@ -88,16 +88,15 @@ void main() {
 
  
 
-  // Add glow
-
+  // Add glow (reduced intensity to prevent saturation)
   float glow = 1.0 - smoothstep(0.0, 0.5, dist);
+  final_color += vec3(0.3, 0.4, 0.6) * glow * 0.3;
+  
+  // Boost brightness but preserve color ratios
+  float luminance = dot(final_color, vec3(0.299, 0.587, 0.114));
+  float boost = mix(1.4, 1.0, luminance);  // Less boost for brighter colors
+  final_color *= boost;
 
-  final_color += vec3(0.5, 0.7, 1.0) * glow * 0.5;
-
-  final_color *= 1.5;
-
- 
-
-  fragColor = vec4(final_color, 1.0);
+  fragColor = vec4(clamp(final_color, 0.0, 1.0), 1.0);
 
 }
