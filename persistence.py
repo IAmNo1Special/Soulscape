@@ -1,0 +1,169 @@
+# persistence.py
+"""Persistence layer for saving and loading soul configurations."""
+
+import json
+import os
+from pathlib import Path
+
+from logger import log
+
+
+def get_appdata_dir() -> Path:
+    """Get the Soulscape data directory in %APPDATA%."""
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        soulscape_dir = Path(appdata) / "Soulscape"
+    else:
+        # Fallback to current directory
+        soulscape_dir = Path.cwd() / ".soulscape"
+
+    soulscape_dir.mkdir(parents=True, exist_ok=True)
+    return soulscape_dir
+
+
+def get_souls_file() -> Path:
+    """Get the path to souls.json."""
+    return get_appdata_dir() / "souls.json"
+
+
+def save_souls(souls: list[dict]) -> bool:
+    """
+    Save soul configurations to souls.json.
+
+    Args:
+        souls: List of soul dictionaries with keys:
+            - name: str
+            - orb_color: tuple[float, float, float]
+            - aura_color: tuple[float, float, float]
+            - position: tuple[int, int]
+
+    Returns:
+        True if save succeeded, False otherwise
+    """
+    try:
+        souls_file = get_souls_file()
+
+        # Convert tuples to lists for JSON serialization
+        serializable_souls = []
+        for soul in souls:
+            serializable_souls.append(
+                {
+                    "name": soul["name"],
+                    "orb_color": list(soul["orb_color"]),
+                    "aura_color": list(soul["aura_color"]),
+                    "position": list(soul["position"]),
+                }
+            )
+
+        with open(souls_file, "w", encoding="utf-8") as f:
+            json.dump(serializable_souls, f, indent=2)
+
+        log.info(f"Saved {len(souls)} souls to {souls_file}")
+        return True
+
+    except Exception as e:
+        log.error(f"Error saving souls: {e}")
+        return False
+
+
+def load_souls() -> list[dict]:
+    """
+    Load soul configurations from souls.json.
+
+    Returns:
+        List of soul dictionaries, or empty list if file doesn't exist or is invalid
+    """
+    try:
+        souls_file = get_souls_file()
+
+        if not souls_file.exists():
+            log.debug(f"No souls file found at {souls_file}")
+            return []
+
+        with open(souls_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Convert lists back to tuples
+        souls = []
+        for soul_data in data:
+            souls.append(
+                {
+                    "name": soul_data.get("name", "Unnamed Soul"),
+                    "orb_color": tuple(soul_data.get("orb_color", [0.56, 0.93, 0.56])),
+                    "aura_color": tuple(soul_data.get("aura_color", [1.0, 0.5, 0.0])),
+                    "position": tuple(soul_data.get("position", [100, 100])),
+                }
+            )
+
+        log.info(f"Loaded {len(souls)} souls from {souls_file}")
+        return souls
+
+    except json.JSONDecodeError as e:
+        log.error(f"Error parsing souls.json: {e}")
+        return []
+    except Exception as e:
+        log.error(f"Error loading souls: {e}")
+        return []
+
+
+def delete_souls_file() -> bool:
+    """Delete the souls.json file (for testing/reset)."""
+    try:
+        souls_file = get_souls_file()
+        if souls_file.exists():
+            souls_file.unlink()
+            log.info(f"Deleted {souls_file}")
+        return True
+    except Exception as e:
+        log.error(f"Error deleting souls file: {e}")
+        return False
+
+
+def get_settings_file() -> Path:
+    """Get the path to settings.json."""
+    return get_appdata_dir() / "settings.json"
+
+
+def save_settings(opacity: int) -> bool:
+    """
+    Save global settings to settings.json.
+
+    Args:
+        opacity: Window opacity (15-100)
+
+    Returns:
+        True if save succeeded, False otherwise
+    """
+    try:
+        settings_file = get_settings_file()
+        settings = {"opacity": opacity}
+        with open(settings_file, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+        log.info(f"Settings saved to {settings_file}")
+        return True
+    except Exception as e:
+        log.error(f"Error saving settings: {e}")
+        return False
+
+
+def load_settings() -> dict:
+    """
+    Load global settings from settings.json.
+
+    Returns:
+        Dict with 'opacity' key, or defaults if not found
+    """
+    defaults = {"opacity": 100}
+
+    try:
+        settings_file = get_settings_file()
+        if not settings_file.exists():
+            return defaults
+
+        with open(settings_file, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+
+        return {"opacity": settings.get("opacity", defaults["opacity"])}
+    except Exception as e:
+        log.error(f"Error loading settings: {e}")
+        return defaults

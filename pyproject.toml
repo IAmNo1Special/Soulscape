@@ -3,10 +3,18 @@ name = "reactive-orb"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.2.6",
+    "pillow>=11.0.0",
     "pyautogui>=0.9.54",
     "pyglet>=2.1.6",
+    "pyinstaller>=6.18.0",
+    "pystray>=0.19.5",
     "watchdog>=6.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.0",
 ]
