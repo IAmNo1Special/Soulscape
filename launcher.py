@@ -1,6 +1,7 @@
 # launcher.py
 """Soulscape launcher with system tray integration."""
 
+import os
 import random
 import sys
 import threading
@@ -180,7 +181,10 @@ def handle_soul_right_click(soul_app, screen_x, screen_y):
         dialog_thread.start()
 
     def on_toggle_aura():
-        soul_app.aura_visible = not soul_app.aura_visible
+        # Schedule the toggle on the main thread
+        pyglet.clock.schedule_once(
+            lambda dt: setattr(soul_app, "aura_visible", not soul_app.aura_visible), 0
+        )
 
     def on_dismiss():
         log.info(f"Dismissing soul: {soul_app.name}")
@@ -301,16 +305,19 @@ def _set_windows_startup(enabled):
             winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE
         )
         if enabled:
-            # Get the path to the current executable
-            exe_path = sys.executable
-            script_path = sys.argv[0] if sys.argv else ""
-            if script_path and not script_path.endswith(".exe"):
-                # Running as script, use pythonw to hide console
-                cmd = f'"{exe_path}" "{script_path}"'
+            # Determine command based on execution context
+            if getattr(sys, "frozen", False):
+                # PyInstaller or similar frozen executable
+                cmd = f'"{sys.executable}"'
             else:
-                cmd = f'"{exe_path}"'
+                # Running as script
+                # Use python.exe (or pythonw.exe if we could detect it, but sys.executable is safer fallback)
+                exe_path = sys.executable
+                script_path = os.path.abspath(sys.argv[0])
+                cmd = f'"{exe_path}" "{script_path}"'
+
             winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, cmd)
-            log.info("Added Soulscape to Windows startup.")
+            log.info(f"Added Soulscape to Windows startup: {cmd}")
         else:
             try:
                 winreg.DeleteValue(key, app_name)
@@ -345,13 +352,15 @@ def cleanup_and_exit():
         tray_controller = None
 
     # Cleanup souls
-    for soul_app in active_souls:
+    for soul_app in list(active_souls):  # Iterate over copy
         soul_app.cleanup()
+    active_souls.clear()
 
     # Close windows
-    for window_inst in active_windows:
+    for window_inst in list(active_windows):  # Iterate over copy
         if not window_inst.has_exit:
             window_inst.close()
+    active_windows.clear()
 
     log.info("All souls and windows cleaned up.")
     pyglet.app.exit()

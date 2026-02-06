@@ -1,9 +1,9 @@
 # window_manager.py
 """Platform-agnostic window management abstraction."""
 
-import ctypes
 import sys
 from abc import ABC, abstractmethod
+from ctypes import c_void_p, create_unicode_buffer, windll
 
 from logger import log
 
@@ -106,17 +106,20 @@ class WindowsWindowManager(WindowManager):
 
     def _get_hwnd(self, window, window_id: int):
         """Get the Win32 window handle for a Pyglet window."""
+        # Try to get internal handle directly from Pyglet window first
+        if hasattr(window, "_hwnd"):
+            return window._hwnd
+
+        # Fallback to legacy method
         window_title = f"SoulWindow_{window_id}"
         window.set_caption(window_title)
-        hwnd = ctypes.windll.user32.FindWindowW(
-            None, ctypes.create_unicode_buffer(window_title)
-        )
+        hwnd = windll.user32.FindWindowW(None, create_unicode_buffer(window_title))
         if not hwnd:
             log.warning(
                 f"Could not find window by caption. "
                 f"Falling back to GetForegroundWindow for soul {window_id}."
             )
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            hwnd = windll.user32.GetForegroundWindow()
         return hwnd
 
     def apply_transparency(self, window, window_id: int) -> bool:
@@ -126,13 +129,13 @@ class WindowsWindowManager(WindowManager):
             if not hwnd:
                 return False
 
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, self.GWL_EXSTYLE)
+            style = windll.user32.GetWindowLongW(hwnd, self.GWL_EXSTYLE)
             new_style = style | self.WS_EX_LAYERED
             new_style &= ~self.WS_EX_TRANSPARENT  # Keep window clickable
-            ctypes.windll.user32.SetWindowLongW(hwnd, self.GWL_EXSTYLE, new_style)
+            windll.user32.SetWindowLongW(hwnd, self.GWL_EXSTYLE, new_style)
 
             # Color key: black (0x000000) becomes transparent
-            ctypes.windll.user32.SetLayeredWindowAttributes(
+            windll.user32.SetLayeredWindowAttributes(
                 hwnd, 0x000000, 0, self.LWA_COLORKEY
             )
             log.debug(f"Transparency applied for soul {window_id}.")
@@ -149,9 +152,7 @@ class WindowsWindowManager(WindowManager):
             if not hwnd:
                 return False
 
-            z_order = ctypes.c_void_p(
-                -1 if enabled else -2
-            )  # HWND_TOPMOST or HWND_NOTOPMOST
+            z_order = c_void_p(-1 if enabled else -2)  # HWND_TOPMOST or HWND_NOTOPMOST
 
             # For NOTOPMOST, need to use different approach
             SWP_FRAMECHANGED = 0x0020
@@ -162,7 +163,7 @@ class WindowsWindowManager(WindowManager):
                 | SWP_FRAMECHANGED
             )
 
-            result = ctypes.windll.user32.SetWindowPos(
+            result = windll.user32.SetWindowPos(
                 hwnd,
                 z_order,
                 0,
@@ -189,9 +190,9 @@ class WindowsWindowManager(WindowManager):
             if not hwnd:
                 return False
 
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, self.GWL_EXSTYLE)
+            style = windll.user32.GetWindowLongW(hwnd, self.GWL_EXSTYLE)
             new_style = (style | self.WS_EX_TOOLWINDOW) & ~self.WS_EX_APPWINDOW
-            ctypes.windll.user32.SetWindowLongW(hwnd, self.GWL_EXSTYLE, new_style)
+            windll.user32.SetWindowLongW(hwnd, self.GWL_EXSTYLE, new_style)
             log.debug(f"Hidden from taskbar for soul {window_id}.")
             return True
 
@@ -212,7 +213,7 @@ class WindowsWindowManager(WindowManager):
 
             # Combine color key (for background) with alpha (for overall opacity)
             # Using LWA_COLORKEY | LWA_ALPHA allows both
-            ctypes.windll.user32.SetLayeredWindowAttributes(
+            windll.user32.SetLayeredWindowAttributes(
                 hwnd, 0x000000, alpha, self.LWA_COLORKEY | self.LWA_ALPHA
             )
             log.info(f"Opacity set to {opacity}% for soul {window_id}.")

@@ -38,6 +38,7 @@ from constants import (
     AURA_SCALE_Y,
     AURA_SCALE_Z,
     AURA_VERTEX_SHADER_PATH,
+    AURA_Y_OFFSET,
     CAMERA_FOV,
     CAMERA_ROTATION_SPEED,
     HOVER_AMPLITUDE,
@@ -52,8 +53,7 @@ from constants import (
     ORB_Y_OFFSET,
     ROAM_PAUSE_MAX,
     ROAM_PAUSE_MIN,
-    WINDOW_HEIGHT,
-    WINDOW_WIDTH,
+    WINDOW_OVERSHOOT,
 )
 from logger import log
 from utils.shader_utils import create_shader_program
@@ -62,7 +62,7 @@ from utils.shader_utils import create_shader_program
 # --- Geometry Generation ---
 def create_sphere(radius, lat_segments, long_segments):
     """
-    Generates vertex, normal, and index data for a sphere.
+    Generates vertex, normal, and index data for a sphere using shared pole vertices.
 
     Args:
         radius (float): The radius of the sphere.
@@ -76,32 +76,73 @@ def create_sphere(radius, lat_segments, long_segments):
     normals = []
     indices = []
 
-    # Generate vertices and normals
-    for lat in range(lat_segments + 1):
+    # North Pole (Index 0)
+    vertices.extend([0.0, radius, 0.0])
+    normals.extend([0.0, 1.0, 0.0])
+
+    # Generate vertices for the rings (excluding poles)
+    # lat goes from 1 to lat_segments - 1
+    for lat in range(1, lat_segments):
         theta = lat * math.pi / lat_segments
         sin_theta = math.sin(theta)
         cos_theta = math.cos(theta)
 
+        y = cos_theta
         for long in range(long_segments + 1):
             phi = long * 2 * math.pi / long_segments
             sin_phi = math.sin(phi)
             cos_phi = math.cos(phi)
 
             x = cos_phi * sin_theta
-            y = cos_theta
             z = sin_phi * sin_theta
+
+            # For texturing, we might need duplicated vertices at the seam (long=0 and long=long_segments).
+            # But for simple colored rendering, we could share them.
+            # However, providing a seam allows valid UV mapping in the future.
+            # We will keep the seam vertices (long + 1) per ring.
 
             vertices.extend([x * radius, y * radius, z * radius])
             normals.extend([x, y, z])
 
-    # Generate indices
-    for lat in range(lat_segments):
-        for long in range(long_segments):
-            first = (lat * (long_segments + 1)) + long
-            second = first + long_segments + 1
+    # South Pole (Index: 1 + (lat_segments - 1) * (long_segments + 1))
+    vertices.extend([0.0, -radius, 0.0])
+    normals.extend([0.0, -1.0, 0.0])
 
-            indices.extend([first, second, first + 1])
-            indices.extend([second, second + 1, first + 1])
+    south_pole_index = len(vertices) // 3 - 1
+    verts_per_ring = long_segments + 1
+
+    # Generate Indices
+
+    # 1. Top Cap (North Pole to first ring)
+    # First ring starts at index 1
+    for i in range(long_segments):
+        # Triangle: NorthPole, Ring1[i], Ring1[i+1]
+        indices.extend([0, 1 + i, 1 + i + 1])
+
+    # 2. Body (Between rings)
+    # We have lat_segments - 2 bands of quads (filled with 2 triangles)
+    # Rings are indexed 0 to lat_segments-2 (internally in loop)
+    # Current ring start index: 1 + ring_idx * verts_per_ring
+    for i in range(lat_segments - 2):
+        row_start = 1 + i * verts_per_ring
+        next_row_start = row_start + verts_per_ring
+
+        for j in range(long_segments):
+            current = row_start + j
+            next_val = next_row_start + j
+
+            # Quad: current, next, current+1, next+1
+            # Triangle 1
+            indices.extend([current, next_val, current + 1])
+            # Triangle 2
+            indices.extend([next_val, next_val + 1, current + 1])
+
+    # 3. Bottom Cap (Last ring to South Pole)
+    last_ring_start = 1 + (lat_segments - 2) * verts_per_ring
+    for i in range(long_segments):
+        # Triangle: SouthPole, LastRing[i+1], LastRing[i]
+        # Note winding order!
+        indices.extend([south_pole_index, last_ring_start + i + 1, last_ring_start + i])
 
     return {
         "vertices": (GLfloat * len(vertices))(*vertices),
@@ -187,6 +228,7 @@ class AuraRenderer:
 
         with self.program:
             aura_model = model.scale((AURA_SCALE_X, AURA_SCALE_Y, AURA_SCALE_Z))
+            aura_model = aura_model.translate(pmath.Vec3(0, AURA_Y_OFFSET, 0))
 
             self.program["model"] = aura_model
             self.program["view"] = view
@@ -234,19 +276,6 @@ class WindowPhysics:
         # Track previous position for smooth movement
         self.last_x = int(self.x)
         self.last_y = int(self.y)
-
-        # Create a label for the name
-        self.name_label = pyglet.text.Label(
-            name,
-            font_name="Arial",
-            font_size=12,
-            x=WINDOW_WIDTH // 2,  # Center of the window
-            y=10,  # Position below the orb
-            anchor_x="center",
-            anchor_y="center",
-            color=(255, 255, 255, 0),  # Start with 0 alpha (invisible)
-            batch=window_ref.batch if hasattr(window_ref, "batch") else None,
-        )
 
     def on_mouse_press(self, x_mouse_relative, y_mouse_relative, button, modifiers):
         """Handles mouse press events to initiate dragging."""
@@ -296,47 +325,16 @@ class WindowPhysics:
     def on_mouse_enter(self, x, y):
         """Handles mouse enter event to show the name label."""
         self.is_hovered = True
-        if hasattr(self, "name_label"):
-            pyglet.clock.unschedule(self.fade_label_out)
-            pyglet.clock.schedule_interval(self.fade_label_in, 1 / 60.0)
 
     def on_mouse_leave(self, x, y):
         """Handles mouse leave event to hide the name label."""
         self.is_hovered = False
-        if hasattr(self, "name_label"):
-            pyglet.clock.unschedule(self.fade_label_in)
-            pyglet.clock.schedule_interval(self.fade_label_out, 1 / 60.0)
-
-    def fade_label_in(self, dt):
-        """Gradually fades in the name label."""
-        if hasattr(self, "name_label"):
-            current_alpha = self.name_label.color[3]
-            if current_alpha < 255:
-                new_alpha = min(255, current_alpha + 15)
-                self.name_label.color = (255, 255, 255, new_alpha)
-            else:
-                pyglet.clock.unschedule(self.fade_label_in)
-
-    def fade_label_out(self, dt):
-        """Gradually fades out the name label."""
-        if hasattr(self, "name_label"):
-            current_alpha = self.name_label.color[3]
-            if current_alpha > 0:
-                new_alpha = max(0, current_alpha - 15)
-                self.name_label.color = (255, 255, 255, new_alpha)
-            else:
-                pyglet.clock.unschedule(self.fade_label_out)
 
     def on_mouse_motion(self, x, y, dx, dy):
         """Tracks mouse motion to update follow target."""
         # Update mouse position for following
         self.mouse_x = x
         self.mouse_y = y
-
-        # Update name label position to stay centered under the orb
-        if hasattr(self, "name_label"):
-            self.name_label.x = WINDOW_WIDTH // 2
-            self.name_label.y = 10
 
     def on_mouse_drag(
         self, x_mouse_relative, y_mouse_relative, dx, dy, buttons, modifiers
@@ -377,8 +375,14 @@ class WindowPhysics:
             # Clamp to screen edges immediately during drag
             screen_width = self.window.screen.width
             screen_height = self.window.screen.height
-            self.x = max(0, min(self.x, screen_width - self.window.width))
-            self.y = max(0, min(self.y, screen_height - self.window.height))
+            self.x = max(
+                -WINDOW_OVERSHOOT,
+                min(self.x, screen_width - self.window.width + WINDOW_OVERSHOOT),
+            )
+            self.y = max(
+                -WINDOW_OVERSHOOT,
+                min(self.y, screen_height - self.window.height + WINDOW_OVERSHOOT),
+            )
 
             self.window.set_location(int(self.x), int(self.y))
 
@@ -410,7 +414,11 @@ class WindowPhysics:
 
             # Apply hover to Y position directly for display
             final_y = max(
-                0, min(self.y + hover_y, self.window.screen.height - self.window.height)
+                -WINDOW_OVERSHOOT,
+                min(
+                    self.y + hover_y,
+                    self.window.screen.height - self.window.height + WINDOW_OVERSHOOT,
+                ),
             )
             self.window.set_location(int(self.x), int(final_y))
 
@@ -488,8 +496,15 @@ class WindowPhysics:
         window_height = self.window.height
 
         # Clamp to screen edges with sub-pixel precision
-        self.x = max(0.0, min(self.x, screen_width - window_width))
-        self.y = max(0.0, min(self.y, screen_height - window_height))
+        # Clamp to screen edges with sub-pixel precision
+        self.x = max(
+            float(-WINDOW_OVERSHOOT),
+            min(self.x, screen_width - window_width + float(WINDOW_OVERSHOOT)),
+        )
+        self.y = max(
+            float(-WINDOW_OVERSHOOT),
+            min(self.y, screen_height - window_height + float(WINDOW_OVERSHOOT)),
+        )
 
         # Only update window position if it changed by at least 1 pixel
         new_x, new_y = int(round(self.x)), int(round(self.y))
@@ -535,20 +550,10 @@ class SoulApp:
         self.bulge_position = [0.0, 0.0, 0.0]
         self.aura_visible = True  # Add flag to track aura visibility
 
-        self.base_camera_distance = 3.0
-        self.base_window_height = float(WINDOW_HEIGHT)
-
-        # Create a batch for efficient drawing
-        self.batch = pyglet.graphics.Batch()
+        self.camera_distance = 1.0
 
         # Create window physics with the provided name or default
-        soul_name = name if name is not None else f"Soul {len(pyglet.app.windows)}"
-        self.name = soul_name  # Store for serialization
-        self.window_physics = WindowPhysics(self.window, soul_name, on_move_end)
-
-        # Update the name label with the batch
-        if hasattr(self.window_physics, "name_label"):
-            self.window_physics.name_label.batch = self.batch
+        self.window_physics = WindowPhysics(self.window, self.name, on_move_end)
 
         # Push handlers in layers - WindowPhysics first (bottom), then SoulApp (top)
         # This way SoulApp.on_mouse_press is called first and can intercept RIGHT clicks
@@ -559,7 +564,6 @@ class SoulApp:
             on_mouse_press=self.on_mouse_press,
             on_key_press=self.on_key_press,
         )
-
         pyglet.clock.schedule_interval(self.update, 1 / 60.0)
 
     def to_dict(self):
@@ -586,13 +590,7 @@ class SoulApp:
         """
         self.window.clear()
 
-        current_camera_distance = self.base_camera_distance * (
-            self.window.height / self.base_window_height
-        )
-        if current_camera_distance < 0.1:
-            current_camera_distance = 0.1
-
-        view = pmath.Mat4.from_translation(pmath.Vec3(0, 0, -current_camera_distance))
+        view = pmath.Mat4.from_translation(pmath.Vec3(0, 0, -self.camera_distance))
         view = view.rotate(self.time * CAMERA_ROTATION_SPEED, pmath.Vec3(0, 1, 0))
 
         aspect_ratio = (
@@ -610,17 +608,6 @@ class SoulApp:
                 model, view, projection, self.time, self.bulge_position
             )
         self.orb_renderer.draw(model, view, projection, self.time, self.bulge_position)
-
-        # Draw the batch (contains the name label)
-        # Pyglet's batch will handle the 2D rendering automatically
-
-        # Update name label position to be centered at the bottom of the window
-        # This is done right before drawing to ensure it's in sync with the frame
-        if hasattr(self.window_physics, "name_label"):
-            self.window_physics.name_label.x = self.window.width // 2
-            self.window_physics.name_label.y = 20  # Small offset from bottom
-
-        self.batch.draw()
 
     def on_resize(self, width, height):
         """
@@ -673,11 +660,31 @@ class SoulApp:
         Cleans up all resources associated with this soul.
         Unschedules callbacks and cleans up OpenGL resources.
         """
+        try:
+            # Ensure the correct OpenGL context is active before deleting resources
+            if self.window and hasattr(self.window, "context") and self.window.context:
+                self.window.switch_to()
+        except Exception as e:
+            log.error(f"Error switching context during cleanup for {self.name}: {e}")
+
         # Unschedule the update callback
         try:
             pyglet.clock.unschedule(self.update)
         except Exception:
             pass  # May not be scheduled
+
+        # Remove event handlers to prevent circular references or unwanted events
+        if self.window:
+            try:
+                self.window.remove_handlers(self.window_physics)
+                self.window.remove_handlers(
+                    on_draw=self.on_draw,
+                    on_resize=self.on_resize,
+                    on_mouse_press=self.on_mouse_press,
+                    on_key_press=self.on_key_press,
+                )
+            except Exception as e:
+                log.warning(f"Error removing handlers for {self.name}: {e}")
 
         # Clean up orb renderer
         if hasattr(self, "orb_renderer"):

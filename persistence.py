@@ -3,6 +3,7 @@
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from logger import log
@@ -28,7 +29,7 @@ def get_souls_file() -> Path:
 
 def save_souls(souls: list[dict]) -> bool:
     """
-    Save soul configurations to souls.json.
+    Save soul configurations to souls.json using atomic write.
 
     Args:
         souls: List of soul dictionaries with keys:
@@ -55,8 +56,16 @@ def save_souls(souls: list[dict]) -> bool:
                 }
             )
 
-        with open(souls_file, "w", encoding="utf-8") as f:
-            json.dump(serializable_souls, f, indent=2)
+        # Atomic write: write to temp, then replace
+        fd, temp_path = tempfile.mkstemp(dir=souls_file.parent, text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(serializable_souls, f, indent=2)
+            os.replace(temp_path, souls_file)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
 
         log.info(f"Saved {len(souls)} souls to {souls_file}")
         return True
@@ -126,7 +135,7 @@ def get_settings_file() -> Path:
 
 def save_settings(opacity: int) -> bool:
     """
-    Save global settings to settings.json.
+    Save global settings to settings.json using atomic write.
 
     Args:
         opacity: Window opacity (15-100)
@@ -137,8 +146,17 @@ def save_settings(opacity: int) -> bool:
     try:
         settings_file = get_settings_file()
         settings = {"opacity": opacity}
-        with open(settings_file, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
+
+        fd, temp_path = tempfile.mkstemp(dir=settings_file.parent, text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2)
+            os.replace(temp_path, settings_file)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
         log.info(f"Settings saved to {settings_file}")
         return True
     except Exception as e:
