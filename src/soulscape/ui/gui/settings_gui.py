@@ -14,6 +14,7 @@ class SoulSettingsDialog:
         name="New Soul",
         orb_color=(0.56, 0.93, 0.56),
         aura_color=(1.0, 0.5, 0.0),
+        stats=None,
         on_apply=None,
     ):
         """
@@ -36,8 +37,8 @@ class SoulSettingsDialog:
         self.root.attributes("-topmost", True)
 
         # Center the window
-        window_width = 300
-        window_height = 200
+        window_width = 320
+        window_height = 450
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x = (screen_width - window_width) // 2
@@ -47,6 +48,7 @@ class SoulSettingsDialog:
         # Store colors
         self.orb_color = orb_color
         self.aura_color = aura_color
+        self.stats = stats or {}
 
         self._create_widgets(name)
 
@@ -57,13 +59,19 @@ class SoulSettingsDialog:
         frame.pack(fill=tk.BOTH, expand=True)
 
         # Name entry
-        tk.Label(frame, text="Soul Name:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        tk.Label(frame, text="Soul Name:").grid(
+            row=0, column=0, sticky=tk.W, pady=5
+        )
         self.name_entry = tk.Entry(frame, width=20)
         self.name_entry.insert(0, name)
-        self.name_entry.grid(row=0, column=1, columnspan=2, sticky=tk.EW, pady=5)
+        self.name_entry.grid(
+            row=0, column=1, columnspan=2, sticky=tk.EW, pady=5
+        )
 
         # Orb color picker
-        tk.Label(frame, text="Orb Color:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        tk.Label(frame, text="Orb Color:").grid(
+            row=1, column=0, sticky=tk.W, pady=5
+        )
         self.orb_color_btn = tk.Button(
             frame,
             text="Choose...",
@@ -76,7 +84,9 @@ class SoulSettingsDialog:
         self._update_orb_preview()
 
         # Aura color picker
-        tk.Label(frame, text="Aura Color:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        tk.Label(frame, text="Aura Color:").grid(
+            row=2, column=0, sticky=tk.W, pady=5
+        )
         self.aura_color_btn = tk.Button(
             frame,
             text="Choose...",
@@ -88,16 +98,91 @@ class SoulSettingsDialog:
         self.aura_preview.grid(row=2, column=2, pady=5, padx=5)
         self._update_aura_preview()
 
+        # Stats Display (Read-only for now)
+        if self.stats:
+            stats_frame = tk.LabelFrame(frame, text="Stats", padx=10, pady=5)
+            stats_frame.grid(
+                row=3, column=0, columnspan=3, sticky=tk.EW, pady=10
+            )
+
+            # Nature
+            nature = self.stats.get("nature", "Unknown")
+            tk.Label(stats_frame, text=f"Nature: {nature}").grid(
+                row=0, column=0, columnspan=2, sticky=tk.W
+            )
+            tk.Label(
+                stats_frame, text=f"Level: {self.stats.get('level', 1)}"
+            ).grid(row=0, column=2, columnspan=2, sticky=tk.E)
+
+            # Stat Grid
+            stats_data = [
+                ("HP", "hp"),
+                ("Atk", "attack"),
+                ("Def", "defense"),
+                ("SpA", "sp_atk"),
+                ("SpD", "sp_def"),
+                ("Spe", "speed"),
+            ]
+
+            # We need the calculated values. Passing the whole stats dict which has structure:
+            # {base: {}, ivs: {}, evs: {}, level: 1, nature: 'Safe'}
+            # Wait, Soul.to_dict calls SoulStats.to_dict which returns raw data.
+            # But the USER wants to see the calculated values?
+            # SoulStats.to_dict DOES NOT return calculated values. It returns base/ivs/evs.
+            # I must calculate them here or update SoulStats.to_dict to include them.
+            # Or simpler: The Plan said "display these stats".
+            # If I only have base/iv/ev, I can't easily show final stats without re-implementing formula here.
+            # Better approach: Update SoulStats.to_dict to include "calculated" stats?
+            # Or just show IVs/EVs for now?
+            # Let's show IVs for now as they are the "genes".
+            # And maybe calculate approximate final if possible?
+            # Actually, re-implementing the formula here is trivial if I just import the formula? But this runs in a separate process (GUI).
+            # importing soulscape.core.stats here is safe? Yes.
+
+            # Let's import SoulStats in this file to use its calculation logic if needed, OR
+            # simpler: Update Soul.to_dict to include "calculated_stats" key!
+            # That is the cleanest separation. GUI shouldn't calculate stats.
+            # But I already edited Soul.to_dict.
+            # Let's just show raw IVs for now, or just import SoulStats here?
+            # Importing SoulStats here is fine.
+
+            # Grid headers
+            tk.Label(stats_frame, text="Stat").grid(
+                row=1, column=0, sticky=tk.W
+            )
+            tk.Label(stats_frame, text="IV").grid(row=1, column=1)
+            tk.Label(stats_frame, text="EV").grid(row=1, column=2)
+            tk.Label(stats_frame, text="Base").grid(row=1, column=3)
+
+            ivs = self.stats.get("ivs", {})
+            evs = self.stats.get("evs", {})
+            base = self.stats.get("base", {})
+
+            for i, (label, key) in enumerate(stats_data):
+                row = i + 2
+                tk.Label(stats_frame, text=label).grid(
+                    row=row, column=0, sticky=tk.W
+                )
+                tk.Label(stats_frame, text=str(ivs.get(key, 0))).grid(
+                    row=row, column=1
+                )
+                tk.Label(stats_frame, text=str(evs.get(key, 0))).grid(
+                    row=row, column=2
+                )
+                tk.Label(stats_frame, text=str(base.get(key, 0))).grid(
+                    row=row, column=3
+                )
+
         # Buttons frame
         btn_frame = tk.Frame(frame)
-        btn_frame.grid(row=3, column=0, columnspan=3, pady=20)
+        btn_frame.grid(row=4, column=0, columnspan=3, pady=20)
 
-        tk.Button(btn_frame, text="Apply", command=self._on_apply, width=10).pack(
-            side=tk.LEFT, padx=5
-        )
-        tk.Button(btn_frame, text="Cancel", command=self._on_cancel, width=10).pack(
-            side=tk.LEFT, padx=5
-        )
+        tk.Button(
+            btn_frame, text="Apply", command=self._on_apply, width=10
+        ).pack(side=tk.LEFT, padx=5)
+        tk.Button(
+            btn_frame, text="Cancel", command=self._on_cancel, width=10
+        ).pack(side=tk.LEFT, padx=5)
 
     def _update_orb_preview(self):
         """Update the orb color preview label."""
@@ -148,7 +233,9 @@ class SoulSettingsDialog:
 class SoulContextMenu:
     """Context menu for a soul, running in its own Tkinter root."""
 
-    def __init__(self, soul_name, on_edit, on_toggle_aura, on_dismiss):
+    def __init__(
+        self, soul_name, on_edit, on_toggle_aura, on_dismiss, parent=None
+    ):
         """
         Initialize the context menu.
 
@@ -157,59 +244,86 @@ class SoulContextMenu:
             on_edit (callable): Callback for Edit action.
             on_toggle_aura (callable): Callback for Toggle Aura action.
             on_dismiss (callable): Callback for Dismiss action.
+            parent: Optional parent Tk/Toplevel window.
         """
         self.soul_name = soul_name
         self.on_edit = on_edit
         self.on_toggle_aura = on_toggle_aura
         self.on_dismiss = on_dismiss
-        self.root = None
+        self.parent = parent
+        self.root = None  # Used if we create our own root/toplevel
+        self.menu = None  # Keep reference
 
     def show(self, x, y):
         """
         Show the context menu at the specified screen coordinates.
-        This blocks until the menu is closed.
         """
+        # If we have a parent, attach the menu to it directly
+        if self.parent:
+            self.menu = tk.Menu(self.parent, tearoff=0)
+            self._build_menu(self.menu)
+
+            # Use post() instead of tk_popup().
+            self.menu.post(int(x), int(y))
+            return
+
+        # Legacy/Standalone mode
         self.root = tk.Tk()
-        self.root.withdraw()  # Hide the root window
-        # Ensure the root (and thus the menu) is topmost
+        self.root.withdraw()
         self.root.attributes("-topmost", True)
 
         try:
-            menu = tk.Menu(self.root, tearoff=0)
-            menu.add_command(
-                label=f"Edit {self.soul_name}...",
-                command=lambda: self._handle_choice(self.on_edit),
-            )
-            menu.add_command(
-                label="Toggle Aura",
-                command=lambda: self._handle_choice(self.on_toggle_aura),
-            )
-            menu.add_separator()
-            menu.add_command(
-                label="Dismiss Soul",
-                command=lambda: self._handle_choice(self.on_dismiss),
-            )
-
-            # tk_popup expects int coordinates
-            menu.tk_popup(int(x), int(y))
-
+            self.menu = tk.Menu(self.root, tearoff=0)
+            self._build_menu(self.menu)
+            self.menu.tk_popup(int(x), int(y))
             self.root.mainloop()
         finally:
-            # Ensure cleanup if something goes wrong or mainloop exits
             if self.root:
                 try:
                     self.root.destroy()
                 except tk.TclError:
                     pass
 
+    def _build_menu(self, menu):
+        """Helper to populate menu items."""
+        menu.add_command(
+            label=f"Edit {self.soul_name}...",
+            command=lambda: self._handle_choice(self.on_edit),
+        )
+        menu.add_command(
+            label="Toggle Aura",
+            command=lambda: self._handle_choice(self.on_toggle_aura),
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="Dismiss Soul",
+            command=lambda: self._handle_choice(self.on_dismiss),
+        )
+
     def _handle_choice(self, callback):
         """Handle a menu selection."""
-        # Destroy root mainly to close the menu/app context
+        # 1. Try Unpost
+        if self.menu:
+            try:
+                self.menu.unpost()
+            except Exception:
+                pass
+
+            # 2. Force Destroy (Separate Block)
+            try:
+                self.menu.destroy()
+            except Exception:
+                pass
+            self.menu = None
+
+        # Clean up root if we created one
         if self.root:
-            self.root.destroy()
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
             self.root = None
 
-        # Execute callback
         if callback:
             callback()
 
@@ -252,15 +366,16 @@ class GlobalSettingsDialog:
         self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
 
         # Variables
-        # Variables
         # Map real opacity (15-100) to UI opacity (0-100)
         ui_opacity = self._real_to_ui(current_opacity)
         self.opacity_var = tk.IntVar(value=ui_opacity)
         self.run_on_startup_var = tk.BooleanVar(value=run_on_startup)
 
-        self._create_widgets()
+        self._create_widgets(name=None)  # Corrected internal call
 
-    def _create_widgets(self):
+    def _create_widgets(
+        self, name=None
+    ):  # Accept argument to be safe, though not used here
         """Create the dialog widgets."""
         # Main frame with padding
         frame = tk.Frame(self.root, padx=20, pady=15)
@@ -295,19 +410,17 @@ class GlobalSettingsDialog:
         btn_frame = tk.Frame(frame)
         btn_frame.grid(row=2, column=0, columnspan=2, pady=20)
 
-        tk.Button(btn_frame, text="Apply", command=self._on_apply, width=10).pack(
-            side=tk.LEFT, padx=5
-        )
-        tk.Button(btn_frame, text="Cancel", command=self._on_cancel, width=10).pack(
-            side=tk.LEFT, padx=5
-        )
+        tk.Button(
+            btn_frame, text="Apply", command=self._on_apply, width=10
+        ).pack(side=tk.LEFT, padx=5)
+        tk.Button(
+            btn_frame, text="Cancel", command=self._on_cancel, width=10
+        ).pack(side=tk.LEFT, padx=5)
 
     def _on_apply(self):
         """Handle Apply button click."""
         ui_opacity = self.opacity_var.get()
-        # Convert UI opacity (0-100) back to real opacity (15-100)
         real_opacity = self._ui_to_real(ui_opacity)
-
         run_on_startup = self.run_on_startup_var.get()
 
         self.result = (real_opacity, run_on_startup)
@@ -317,15 +430,11 @@ class GlobalSettingsDialog:
 
     def _real_to_ui(self, real_val):
         """Convert real opacity (15-100) to UI value (0-100)."""
-        # Linear map: 15->0, 100->100
-        # val = (real - 15) / 85 * 100
         real_val = max(15, min(100, real_val))
         return int((real_val - 15) / 85 * 100)
 
     def _ui_to_real(self, ui_val):
         """Convert UI value (0-100) to real opacity (15-100)."""
-        # Linear map: 0->15, 100->100
-        # val = 15 + (ui / 100 * 85)
         ui_val = max(0, min(100, ui_val))
         return int(15 + (ui_val / 100 * 85))
 

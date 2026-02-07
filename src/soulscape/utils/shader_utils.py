@@ -5,10 +5,8 @@ from typing import Callable, Optional
 
 import pyglet
 
-from logger import log
-
-# Import the shader watcher
-from utils.shader_watcher import shader_watcher
+from soulscape.system.logger import log
+from soulscape.utils.shader_watcher import shader_watcher
 
 # Ensure the shader watcher is properly cleaned up on exit
 atexit.register(shader_watcher.stop)
@@ -35,8 +33,12 @@ class ShaderProgram:
                 fragment_source = f.read()
 
             # Create shader objects
-            vertex_shader = pyglet.graphics.shader.Shader(vertex_source, "vertex")
-            fragment_shader = pyglet.graphics.shader.Shader(fragment_source, "fragment")
+            vertex_shader = pyglet.graphics.shader.Shader(
+                vertex_source, "vertex"
+            )
+            fragment_shader = pyglet.graphics.shader.Shader(
+                fragment_source, "fragment"
+            )
 
             # Create new program
             new_program = pyglet.graphics.shader.ShaderProgram(
@@ -51,7 +53,7 @@ class ShaderProgram:
                 )  # Defer deletion
 
             self.program = new_program
-            log.info(
+            log.debug(
                 f"Successfully loaded shader program: {self.vertex_shader_path} + {self.fragment_shader_path}"
             )
 
@@ -74,7 +76,7 @@ class ShaderProgram:
         """Set up file watchers for hot-reloading"""
 
         def reload_shader():
-            log.info(
+            log.debug(
                 f"Shader file changed, reloading: {self.vertex_shader_path} or {self.fragment_shader_path}"
             )
             # Schedule the reload on the main thread
@@ -144,6 +146,3 @@ def create_shader_program(
         A ShaderProgram instance that can be used like a regular Pyglet shader program
     """
     return ShaderProgram(vertex_shader_path, fragment_shader_path)
-
-
-# Ensure the shader watcher is properly cleaned up on exit

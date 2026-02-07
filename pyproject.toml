@@ -1,20 +1,40 @@
 [project]
-name = "reactive-orb"
+name = "soulscape"
 version = "0.1.0"
-description = "Add your description here"
+description = ""
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "google-adk>=1.24.1",
+    "google-genai>=1.62.0",
     "numpy>=2.2.6",
     "pillow>=11.0.0",
     "pyautogui>=0.9.54",
     "pyglet>=2.1.6",
-    "pyinstaller>=6.18.0",
     "pystray>=0.19.5",
     "watchdog>=6.0.0",
 ]
 
 [dependency-groups]
 dev = [
+    "black>=26.1.0",
+    "isort>=7.0.0",
+    "pyinstaller>=6.18.0",
+    "pytest>=9.0.2",
     "ruff>=0.15.0",
 ]
+
+[build-system]
+requires = ["uv_build>=0.8.8,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.black]
+line-length = 80
+target-version = ['py313']
+
+[tool.isort]
+profile = "black"
+known_first_party = ["soulscape"]
+
+[project.scripts]
+soulscape = "soulscape.main:main"

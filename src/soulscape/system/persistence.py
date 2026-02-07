@@ -6,7 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from logger import log
+from soulscape.system.logger import log
 
 
 def get_appdata_dir() -> Path:
@@ -67,7 +67,7 @@ def save_souls(souls: list[dict]) -> bool:
                 os.remove(temp_path)
             raise
 
-        log.info(f"Saved {len(souls)} souls to {souls_file}")
+        log.debug(f"Saved {len(souls)} souls to {souls_file}")
         return True
 
     except Exception as e:
@@ -98,13 +98,17 @@ def load_souls() -> list[dict]:
             souls.append(
                 {
                     "name": soul_data.get("name", "Unnamed Soul"),
-                    "orb_color": tuple(soul_data.get("orb_color", [0.56, 0.93, 0.56])),
-                    "aura_color": tuple(soul_data.get("aura_color", [1.0, 0.5, 0.0])),
+                    "orb_color": tuple(
+                        soul_data.get("orb_color", [0.56, 0.93, 0.56])
+                    ),
+                    "aura_color": tuple(
+                        soul_data.get("aura_color", [1.0, 0.5, 0.0])
+                    ),
                     "position": tuple(soul_data.get("position", [100, 100])),
                 }
             )
 
-        log.info(f"Loaded {len(souls)} souls from {souls_file}")
+        log.debug(f"Loaded {len(souls)} souls from {souls_file}")
         return souls
 
     except json.JSONDecodeError as e:
@@ -121,7 +125,7 @@ def delete_souls_file() -> bool:
         souls_file = get_souls_file()
         if souls_file.exists():
             souls_file.unlink()
-            log.info(f"Deleted {souls_file}")
+            log.debug(f"Deleted {souls_file}")
         return True
     except Exception as e:
         log.error(f"Error deleting souls file: {e}")
@@ -133,31 +137,33 @@ def get_settings_file() -> Path:
     return get_appdata_dir() / "settings.json"
 
 
-def save_settings(opacity: int) -> bool:
+def save_settings(settings_data: dict) -> bool:
     """
     Save global settings to settings.json using atomic write.
 
     Args:
-        opacity: Window opacity (15-100)
+        settings_data: Dictionary of settings to save (e.g. {'opacity': 80})
 
     Returns:
         True if save succeeded, False otherwise
     """
     try:
         settings_file = get_settings_file()
-        settings = {"opacity": opacity}
+
+        # Load existing first to merge? Or just overwrite?
+        # Overwrite is safer for now to ensure clean state.
 
         fd, temp_path = tempfile.mkstemp(dir=settings_file.parent, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=2)
+                json.dump(settings_data, f, indent=2)
             os.replace(temp_path, settings_file)
         except Exception:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             raise
 
-        log.info(f"Settings saved to {settings_file}")
+        log.debug(f"Settings saved to {settings_file}")
         return True
     except Exception as e:
         log.error(f"Error saving settings: {e}")
@@ -167,11 +173,12 @@ def save_settings(opacity: int) -> bool:
 def load_settings() -> dict:
     """
     Load global settings from settings.json.
+    Handles potential corruption/nested dicts.
 
     Returns:
-        Dict with 'opacity' key, or defaults if not found
+        Dict with settings, defaults used for missing keys.
     """
-    defaults = {"opacity": 100}
+    defaults = {"opacity": 100, "spawn_hotkey": "ctrl+shift+s"}
 
     try:
         settings_file = get_settings_file()
@@ -181,7 +188,24 @@ def load_settings() -> dict:
         with open(settings_file, "r", encoding="utf-8") as f:
             settings = json.load(f)
 
-        return {"opacity": settings.get("opacity", defaults["opacity"])}
+        # Sanitize opacity if it's corrupted (nested dict)
+        opacity = settings.get("opacity")
+        if isinstance(opacity, dict):
+            # Try to recover from nested dict
+            opacity = opacity.get("opacity", defaults["opacity"])
+
+        # Ensure opacity is int
+        if not isinstance(opacity, (int, float)):
+            opacity = defaults["opacity"]
+
+        settings["opacity"] = int(opacity)
+
+        # Merge with defaults for any missing keys
+        for key, value in defaults.items():
+            if key not in settings:
+                settings[key] = value
+
+        return settings
     except Exception as e:
         log.error(f"Error loading settings: {e}")
         return defaults

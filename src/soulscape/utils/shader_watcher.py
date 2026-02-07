@@ -6,7 +6,7 @@ from typing import Callable, Dict, Set
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from logger import log
+from soulscape.system.logger import log
 
 
 class ShaderWatcher:
@@ -16,7 +16,9 @@ class ShaderWatcher:
         self.callbacks: Dict[str, Set[Callable[[], None]]] = (
             {}
         )  # path -> set of callbacks
-        self.watched_paths: Set[str] = set()  # Track which directories we're watching
+        self.watched_paths: Set[str] = (
+            set()
+        )  # Track which directories we're watching
 
         # Disable watcher if frozen (packaged) or explicitly disabled via env var
         self.disabled = (
@@ -26,9 +28,9 @@ class ShaderWatcher:
 
         if not self.disabled:
             self.observer.start()
-            log.info("ShaderWatcher started (Dev Mode).")
+            log.debug("ShaderWatcher started (Dev Mode).")
         else:
-            log.info("ShaderWatcher disabled (Production/Frozen Mode).")
+            log.debug("ShaderWatcher disabled (Production/Frozen Mode).")
 
         self.running = True
 
@@ -57,9 +59,11 @@ class ShaderWatcher:
             handler = ShaderFileHandler(self)
             self.observer.schedule(handler, parent, recursive=False)
             self.watched_paths.add(parent)
-            log.info(f"Watching directory for changes: {parent}")
+            log.debug(f"Watching directory for changes: {parent}")
 
-    def remove_watch(self, file_path: str, callback: Callable[[], None]) -> None:
+    def remove_watch(
+        self, file_path: str, callback: Callable[[], None]
+    ) -> None:
         """Stop watching a file"""
         if self.disabled:
             return
@@ -78,7 +82,10 @@ class ShaderWatcher:
             return False
 
         last_modified = path_obj.stat().st_mtime
-        if path in self.watched_files and self.watched_files[path] < last_modified:
+        if (
+            path in self.watched_files
+            and self.watched_files[path] < last_modified
+        ):
             self.watched_files[path] = last_modified
             return True
         return False
@@ -98,7 +105,7 @@ class ShaderFileHandler(FileSystemEventHandler):
     def on_modified(self, event):
         if not event.is_directory and event.src_path in self.watcher.callbacks:
             if self.watcher.check_modified(event.src_path):
-                log.info(f"Reloading shader: {event.src_path}")
+                log.debug(f"Reloading shader: {event.src_path}")
                 for callback in list(self.watcher.callbacks[event.src_path]):
                     try:
                         callback()

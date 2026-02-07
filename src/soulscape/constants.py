@@ -1,24 +1,9 @@
 # constants.py
-import os
-import sys
-
-
-def resource_path(relative_path):
-    """Get absolute path to resource, works for dev and for PyInstaller."""
-    if hasattr(sys, "_MEIPASS"):
-        # PyInstaller path
-        base_path = sys._MEIPASS
-    else:
-        # Resolve path relative to this file's location
-        # This ensures it works even if run from a different CWD
-        base_path = os.path.dirname(os.path.abspath(__file__))
-
-    return os.path.join(base_path, relative_path)
-
+from soulscape.utils.helpers import resource_path
 
 # Window Dimensions
-WINDOW_WIDTH = 50
-WINDOW_HEIGHT = 65
+SOUL_WIDTH = 50
+SOUL_HEIGHT = 80
 WINDOW_OVERSHOOT = 40
 
 # Physics Parameters for Window Movement
@@ -35,7 +20,7 @@ ORB_LAT_SEGMENTS = 32
 ORB_LONG_SEGMENTS = 32
 ORB_BULGE_STRENGTH = 0.15  # Fixed bulge strength for the orb
 ORB_SCALE = 1.0  # Overall scale of the main orb
-ORB_Y_OFFSET = -0.25  # Y position adjustment for the orb
+ORB_Y_OFFSET = -0.28  # Y position adjustment for the orb
 
 # Aura Properties
 AURA_RADIUS = 0.3
@@ -50,7 +35,9 @@ AURA_Y_OFFSET = -0.15  # Y position adjustment for the aura
 
 # Camera and Animation Properties
 # CAMERA_DISTANCE removed from here to be calculated dynamically in soul.py
-CAMERA_FOV = 50.0  # Field of view for the perspective projection (kept constant)
+CAMERA_FOV = (
+    50.0  # Field of view for the perspective projection (kept constant)
+)
 CAMERA_ROTATION_SPEED = 0.2  # Speed of the subtle camera rotation
 
 
