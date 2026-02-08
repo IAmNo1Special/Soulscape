@@ -12,9 +12,11 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from soulscape.system.logger import log
+from soulscape.utils.helpers import get_appdata_dir
 
 if TYPE_CHECKING:
     from soulscape.core.items import Item
@@ -32,7 +34,11 @@ class MarketListing:
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serializes the listing to a dictionary."""
+        """Serializes the listing to a dictionary.
+
+        Returns:
+            A dictionary containing listing details.
+        """
         return {
             "listing_id": self.listing_id,
             "seller_id": self.seller_id,
@@ -44,7 +50,14 @@ class MarketListing:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MarketListing:
-        """Deserializes a listing from a dictionary."""
+        """Deserializes a listing from a dictionary.
+
+        Args:
+            data: Serialization dictionary.
+
+        Returns:
+            A new MarketListing instance.
+        """
         from soulscape.core.items import (
             Item,
         )  # Local import to avoid circular dep
@@ -65,18 +78,21 @@ class Marketplace:
 
     _instance = None
 
-    def __new__(cls):
+    def __new__(cls) -> Marketplace:
+        """Creates or returns the singleton instance."""
         if cls._instance is None:
             cls._instance = super(Marketplace, cls).__new__(cls)
             cls._instance.listings = {}  # type: dict[str, MarketListing]
             cls._instance.essence_fund = 0.0  # Accumulated tax
-            cls._instance.db_path = os.path.join(
-                os.getcwd(), "data", "marketplace.json"
-            )
+            cls._instance.db_path = cls.get_marketplace_file()
             cls._instance._load_data()
         return cls._instance
 
-    def _load_data(self):
+    def get_marketplace_file() -> Path:
+        """Get the path to marketplace.json."""
+        return get_appdata_dir() / "marketplace.json"
+
+    def _load_data(self) -> None:
         """Loads listings and essence fund from JSON file."""
         if not os.path.exists(self.db_path):
             return
@@ -109,7 +125,7 @@ class Marketplace:
         except Exception as e:
             log.error(f"Failed to load marketplace data: {e}")
 
-    def _save_data(self):
+    def _save_data(self) -> None:
         """Saves active listings and essence fund to JSON file."""
         try:
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -124,7 +140,7 @@ class Marketplace:
         except Exception as e:
             log.error(f"Failed to save marketplace data: {e}")
 
-    def add_funds(self, amount: float):
+    def add_funds(self, amount: float) -> None:
         """Adds essence to the market fund (e.g. from taxes)."""
         self.essence_fund += amount
         self._save_data()
@@ -141,7 +157,7 @@ class Marketplace:
             price: The cost in Essence.
 
         Returns:
-            The unique listing_id.
+            The unique listing_id as a string.
         """
         listing_id = str(uuid.uuid4())[
             :8
@@ -158,24 +174,50 @@ class Marketplace:
         return listing_id
 
     def remove_listing(self, listing_id: str) -> MarketListing | None:
-        """Removes a listing from the marketplace (e.g., bought or cancelled)."""
+        """Removes a listing from the marketplace.
+
+        Args:
+            listing_id: The ID of the listing to remove.
+
+        Returns:
+            The removed MarketListing if found, otherwise None.
+        """
         listing = self.listings.pop(listing_id, None)
         if listing:
             self._save_data()
         return listing
 
     def get_listing(self, listing_id: str) -> MarketListing | None:
-        """Retrieves a specific listing by ID."""
+        """Retrieves a specific listing by ID.
+
+        Args:
+            listing_id: The listing ID.
+
+        Returns:
+            The MarketListing if found, otherwise None.
+        """
         return self.listings.get(listing_id)
 
     def get_all_listings(self) -> list[MarketListing]:
-        """Returns all active listings."""
+        """Returns all active listings.
+
+        Returns:
+            A list of all active MarketListing objects.
+        """
         return list(self.listings.values())
 
     def filter_listings(
-        self, item_name: str | None = None, max_price: int | None = None
+        self, item_name: str | None = None, max_price: float | None = None
     ) -> list[MarketListing]:
-        """Returns listings matching specific criteria."""
+        """Returns listings matching specific criteria.
+
+        Args:
+            item_name: Optional substring to match in item name.
+            max_price: Optional maximum price filter.
+
+        Returns:
+            A list of matching MarketListing objects.
+        """
         results = []
         for listing in self.listings.values():
             if item_name and item_name.lower() not in listing.item.name.lower():

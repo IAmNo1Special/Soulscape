@@ -7,11 +7,19 @@ and an Inventory class to manage a collection of items.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from soulscape.core.soul import Soul
 
 
 class Item(ABC):
-    """Abstract base class for all items."""
+    """Abstract base class for all items.
+
+    Attributes:
+        name: Human-readable name of the item.
+        description: Description of the item.
+    """
 
     def __init__(self, name: str, description: str):
         """Initializes an Item.
@@ -25,7 +33,11 @@ class Item(ABC):
 
     @abstractmethod
     def to_dict(self) -> dict[str, Any]:
-        """Serializes the item for persistence."""
+        """Serializes the item for persistence.
+
+        Returns:
+            A dictionary containing item data.
+        """
         pass
 
     @abstractmethod
@@ -61,7 +73,7 @@ class Consumable(Item):
         self.value = value
 
     @abstractmethod
-    def consume(self, soul: Any) -> str:
+    def consume(self, soul: Soul) -> str:
         """Consumes the item and applies its effect to the soul.
 
         Args:
@@ -92,7 +104,7 @@ class Consumable(Item):
 class Food(Consumable):
     """An item that recovers satiety."""
 
-    def consume(self, soul: Any) -> str:
+    def consume(self, soul: Soul) -> str:
         """Consumes the food.
 
         Args:
@@ -110,7 +122,7 @@ class Food(Consumable):
 class Drink(Consumable):
     """An item that recovers hydration."""
 
-    def consume(self, soul: Any) -> str:
+    def consume(self, soul: Soul) -> str:
         """Consumes the drink.
 
         Args:
@@ -154,7 +166,12 @@ def item_from_dict(data: dict[str, Any]) -> Item:
 
 
 class Inventory:
-    """Manages a collection of Items for a Soul."""
+    """Manages a collection of Items for a Soul.
+
+    Attributes:
+        items: List of items currently in inventory.
+        capacity: Maximum number of items allowed.
+    """
 
     def __init__(self, capacity: int = 10):
         """Initializes the inventory.

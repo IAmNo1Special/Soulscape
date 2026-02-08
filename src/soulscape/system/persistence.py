@@ -1,25 +1,15 @@
-# persistence.py
 """Persistence layer for saving and loading soul configurations."""
+
+from __future__ import annotations
 
 import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from soulscape.system.logger import log
-
-
-def get_appdata_dir() -> Path:
-    """Get the Soulscape data directory in %APPDATA%."""
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        soulscape_dir = Path(appdata) / "Soulscape"
-    else:
-        # Fallback to current directory
-        soulscape_dir = Path.cwd() / ".soulscape"
-
-    soulscape_dir.mkdir(parents=True, exist_ok=True)
-    return soulscape_dir
+from soulscape.utils.helpers import get_appdata_dir
 
 
 def get_souls_file() -> Path:
@@ -27,15 +17,14 @@ def get_souls_file() -> Path:
     return get_appdata_dir() / "souls.json"
 
 
-def save_souls(souls: list[dict]) -> bool:
-    """
-    Save soul configurations to souls.json using atomic write.
+def save_souls(souls: list[dict[str, Any]]) -> bool:
+    """Save soul configurations to souls.json using atomic write.
 
     Args:
         souls: List of serialized soul dictionaries.
 
     Returns:
-        True if save succeeded, False otherwise
+        True if save succeeded, False otherwise.
     """
     try:
         souls_file = get_souls_file()
@@ -59,12 +48,11 @@ def save_souls(souls: list[dict]) -> bool:
         return False
 
 
-def load_souls() -> list[dict]:
-    """
-    Load soul configurations from souls.json.
+def load_souls() -> list[dict[str, Any]]:
+    """Load soul configurations from souls.json.
 
     Returns:
-        List of raw soul dictionaries, or empty list if file doesn't exist or is invalid
+        List of raw soul dictionaries, or empty list if file doesn't exist or is invalid.
     """
     try:
         souls_file = get_souls_file()
@@ -109,15 +97,14 @@ def get_settings_file() -> Path:
     return get_appdata_dir() / "settings.json"
 
 
-def save_settings(settings_data: dict) -> bool:
-    """
-    Save global settings to settings.json using atomic write.
+def save_settings(settings_data: dict[str, Any]) -> bool:
+    """Save global settings to settings.json using atomic write.
 
     Args:
-        settings_data: Dictionary of settings to save (e.g. {'opacity': 80})
+        settings_data: Dictionary of settings to save (e.g. {'opacity': 80}).
 
     Returns:
-        True if save succeeded, False otherwise
+        True if save succeeded, False otherwise.
     """
     try:
         settings_file = get_settings_file()
@@ -142,9 +129,9 @@ def save_settings(settings_data: dict) -> bool:
         return False
 
 
-def load_settings() -> dict:
-    """
-    Load global settings from settings.json.
+def load_settings() -> dict[str, Any]:
+    """Load global settings from settings.json.
+
     Handles potential corruption/nested dicts.
 
     Returns:

@@ -1,14 +1,16 @@
+"""GUI Service for handling dialogs and windows in a separate process."""
+
+from __future__ import annotations
+
 import queue
 import sys
 import traceback
 from enum import Enum
+from typing import Any
 
 import ttkbootstrap as ttk
 
 from soulscape.ui.gui.message_board_gui import MessageBoardWindow
-
-# Import dialogs
-# Note: We must ensure these imports don't trigger Pyglet init
 from soulscape.ui.gui.settings_gui import (
     GlobalSettingsDialog,
     SoulContextMenu,
@@ -17,40 +19,52 @@ from soulscape.ui.gui.settings_gui import (
 
 
 class GuiCommand(str, Enum):
+    """Commands for the GUI service."""
+
     SHOW_CONTEXT_MENU = "SHOW_CONTEXT_MENU"
     SHOW_SOUL_SETTINGS = "SHOW_SOUL_SETTINGS"
     SHOW_GLOBAL_SETTINGS = "SHOW_GLOBAL_SETTINGS"
     SHOW_ADD_SOUL = "SHOW_ADD_SOUL"
     SHOW_MESSAGE_BOARD = "SHOW_MESSAGE_BOARD"
+    CREATE_SOCIAL_POST = "CREATE_SOCIAL_POST"
+    CREATE_SOCIAL_REPLY = "CREATE_SOCIAL_REPLY"
     EXIT = "EXIT"
 
 
 class GuiService:
-    def __init__(self, command_queue, result_queue):
+    """Service to manage GUI windows and dialogs."""
+
+    def __init__(self, command_queue: Any, result_queue: Any):
+        """Initializes the GUI service.
+
+        Args:
+            command_queue: Queue for receiving commands.
+            result_queue: Queue for sending results back.
+        """
         self.command_queue = command_queue
         self.result_queue = result_queue
-        self.root = None
-        self.active_dialog = None
-        self.message_board_window = None
+        self.root: ttk.Window | None = None
+        self.active_dialog: Any = None
+        self.message_board_window: MessageBoardWindow | None = None
         print("DEBUG: GuiService Initialized")
 
-    def run(self):
+    def run(self) -> None:
         """Main entry point for the process."""
         # Use ttkbootstrap Window instead of tk.Tk
         self.root = ttk.Window(themename="darkly")
-        self.root.withdraw()  # specific root for the service
+        if self.root:
+            self.root.withdraw()  # specific root for the service
+            # Poll queue
+            self.root.after(10, self._check_queue)
+            print("DEBUG: GuiService Loop Starting")
+            self.root.mainloop()
 
-        # Poll queue
-        self.root.after(10, self._check_queue)
+    def _check_queue(self) -> None:
+        """Checks the command queue for new messages."""
+        if not self.root:
+            return
 
-        print("DEBUG: GuiService Loop Starting")
-        self.root.mainloop()
-
-    def _check_queue(self):
         try:
-            # consuming all available commands? Or just one at a time?
-            # Better one at a time if they are blocking dialogs?
-            # But the queue check shouldn't block.
             while True:
                 msg = self.command_queue.get_nowait()
                 print(f"DEBUG: GuiService received {msg.get('type')}")
@@ -64,10 +78,15 @@ class GuiService:
         # Schedule next check
         self.root.after(50, self._check_queue)
 
-    def _handle_command(self, msg):
+    def _handle_command(self, msg: dict[str, Any]) -> None:
+        """Dispatches commands to handlers.
+
+        Args:
+            msg: Command message dictionary.
+        """
         cmd_type = msg.get("type")
 
-        if cmd_type == GuiCommand.EXIT:
+        if cmd_type == GuiCommand.EXIT and self.root:
             self.root.quit()
             sys.exit(0)
 
@@ -86,14 +105,18 @@ class GuiService:
         elif cmd_type == GuiCommand.SHOW_MESSAGE_BOARD:
             self._show_message_board(msg)
 
-    def _show_context_menu(self, msg):
-        # We need a temporary handler to capture the result
+    def _show_context_menu(self, msg: dict[str, Any]) -> None:
+        """Shows the soul context menu.
+
+        Args:
+            msg: Message data.
+        """
         soul_id = msg.get("soul_id")
         name = msg.get("name")
         x = msg.get("x")
         y = msg.get("y")
 
-        def send_action(action):
+        def send_action(action: str) -> None:
             self.result_queue.put(
                 {
                     "type": GuiCommand.SHOW_CONTEXT_MENU,
@@ -103,33 +126,15 @@ class GuiService:
             )
 
         menu = SoulContextMenu(
-            soul_name=name,
+            soul_name=name,  # type: ignore
             on_edit=lambda: send_action("EDIT"),
             on_toggle_aura=lambda: send_action("TOGGLE_AURA"),
             on_dismiss=lambda: send_action("DISMISS"),
             parent=self.root,
         )
-        # Note: menu.show blocks in the original implementation?
-        # SoulContextMenu.show creates a NEW root and mainloop.
-        # We need to adapt logic to use OUR root if possible, or tolerate the nested loop.
-        # The current implementation of SoulContextMenu DOES create a new Tk() and mainloop().
-        # This is bad for a persistent service. We should refactor SoulContextMenu to use Toplevel if root exists.
-
-        # For now, let's try running it. If it creates a new root, it might conflict or just work as a modal.
-        # Ideally, we refactor SoulContextMenu to NOT create a root if one exists.
-        # But given we want fast response, let's assume valid Toplevel usage.
-
-        # WAIT: SoulContextMenu currently does `self.root = tk.Tk()`. We must change that.
-        # But I can't easily change `settings_gui.py` without risking breaking `launcher.py` if it relies on it?
-        # `launcher.py` spawned a thread, so it was fine making a new root.
-
-        # Actually, if I run `menu.show(x, y)`, it blocks until closed.
-        # Since this is a service process, blocking the service loop is actually FINE for a modal menu!
-        # It just means we won't process other messages until the menu closes. That's expected for a modal.
-        # Store to prevent GC
         self.active_dialog = menu
+        menu.show(x, y)  # type: ignore
 
-        menu.show(x, y)
         self.result_queue.put(
             {
                 "type": GuiCommand.SHOW_CONTEXT_MENU,
@@ -138,10 +143,15 @@ class GuiService:
             }
         )  # Done w/ command processing
 
-    def _show_soul_settings(self, msg):
+    def _show_soul_settings(self, msg: dict[str, Any]) -> None:
+        """Shows the soul settings dialog.
+
+        Args:
+            msg: Message data.
+        """
         soul_id = msg.get("soul_id")
 
-        def on_apply(name, orb, aura):
+        def on_apply(name: str, orb: str, aura: str) -> None:
             self.result_queue.put(
                 {
                     "type": GuiCommand.SHOW_SOUL_SETTINGS,
@@ -156,16 +166,22 @@ class GuiService:
 
         d = SoulSettingsDialog(
             parent=self.root,
-            name=msg.get("name"),
-            orb_color=msg.get("orb_color"),
-            aura_color=msg.get("aura_color"),
-            stats=msg.get("stats"),
+            name=msg.get("name"),  # type: ignore
+            orb_color=msg.get("orb_color"),  # type: ignore
+            aura_color=msg.get("aura_color"),  # type: ignore
+            stats=msg.get("stats"),  # type: ignore
             on_apply=on_apply,
         )
         d.show()
 
-    def _show_global_settings(self, msg):
-        def on_apply(opacity, startup):
+    def _show_global_settings(self, msg: dict[str, Any]) -> None:
+        """Shows the global settings dialog.
+
+        Args:
+            msg: Message data.
+        """
+
+        def on_apply(opacity: float, startup: bool) -> None:
             self.result_queue.put(
                 {
                     "type": GuiCommand.SHOW_GLOBAL_SETTINGS,
@@ -175,14 +191,20 @@ class GuiService:
 
         d = GlobalSettingsDialog(
             parent=self.root,
-            current_opacity=msg.get("current_opacity"),
-            run_on_startup=msg.get("run_on_startup"),
+            current_opacity=msg.get("current_opacity"),  # type: ignore
+            run_on_startup=msg.get("run_on_startup"),  # type: ignore
             on_apply=on_apply,
         )
         d.show()
 
-    def _show_add_soul(self, msg):
-        def on_apply(name, orb, aura):
+    def _show_add_soul(self, msg: dict[str, Any]) -> None:
+        """Shows the dialog to add a new soul.
+
+        Args:
+            msg: Message data.
+        """
+
+        def on_apply(name: str, orb: str, aura: str) -> None:
             self.result_queue.put(
                 {
                     "type": GuiCommand.SHOW_ADD_SOUL,
@@ -194,8 +216,6 @@ class GuiService:
                 }
             )
 
-        # show_add_soul_dialog just instantiates SoulSettingsDialog with on_apply
-        # We can do that manually
         d = SoulSettingsDialog(parent=self.root, on_apply=on_apply)
         d.show()
 
@@ -204,14 +224,52 @@ class GuiService:
             self.message_board_window is None
             or not self.message_board_window.winfo_exists()
         ):
-            self.message_board_window = MessageBoardWindow(self.root)
+            # Define callbacks to route requests back to main process
+            def on_post(author_id: int, author_name: str, content: str) -> None:
+                self.result_queue.put(
+                    {
+                        "type": GuiCommand.CREATE_SOCIAL_POST,
+                        "data": {
+                            "author_id": author_id,
+                            "author_name": author_name,
+                            "content": content,
+                        },
+                    }
+                )
+
+            def on_reply(
+                author_id: int,
+                author_name: str,
+                parent_id: str,
+                content: str,
+            ) -> None:
+                self.result_queue.put(
+                    {
+                        "type": GuiCommand.CREATE_SOCIAL_REPLY,
+                        "data": {
+                            "author_id": author_id,
+                            "author_name": author_name,
+                            "parent_id": parent_id,
+                            "content": content,
+                        },
+                    }
+                )
+
+            self.message_board_window = MessageBoardWindow(
+                self.root, on_post=on_post, on_reply=on_reply
+            )
             # It's a Toplevel, so we don't need to call show() unless we made it that way
             # MessageBoardWindow.__init__ calls super().__init__ which creates the window.
         else:
             self.message_board_window.lift()
 
 
-def run_gui_service(command_queue, result_queue):
-    """Process entry point."""
+def run_gui_service(command_queue: Any, result_queue: Any) -> None:
+    """Process entry point.
+
+    Args:
+        command_queue: Queue for commands.
+        result_queue: Queue for results.
+    """
     service = GuiService(command_queue, result_queue)
     service.run()

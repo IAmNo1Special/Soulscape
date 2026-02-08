@@ -1,10 +1,16 @@
 # logger.py
 """Logging configuration for Soulscape using stdlib logging."""
 
+from __future__ import annotations
+
 import logging
 import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Final
+
+MAX_LOG_SIZE_BYTES: Final[int] = 5 * 1024 * 1024  # 5 MB
+BACKUP_COUNT: Final[int] = 3
 
 
 def get_log_dir() -> Path:
@@ -41,8 +47,8 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     log_file = get_log_dir() / "soulscape.log"
     file_handler = RotatingFileHandler(
         log_file,
-        maxBytes=5 * 1024 * 1024,  # 5 MB
-        backupCount=3,
+        maxBytes=MAX_LOG_SIZE_BYTES,
+        backupCount=BACKUP_COUNT,
         encoding="utf-8",
     )
     file_handler.setLevel(level)
@@ -62,7 +68,7 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-    logger.info(f"Logging initialized. Log file: {log_file}")
+    logger.info("Logging initialized. Log file: %s", log_file)
     return logger
 
 

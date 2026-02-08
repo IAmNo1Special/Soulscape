@@ -1,3 +1,5 @@
+"""Core mechanics definitions for Soulscape."""
+
 from __future__ import annotations
 
 from enum import Enum
@@ -5,6 +7,8 @@ from typing import Any
 
 
 class Nature(str, Enum):
+    """Enumeration of natures affecting stat growth."""
+
     HARDY = "Hardy"
     LONELY = "Lonely"
     BRAVE = "Brave"
@@ -32,10 +36,17 @@ class Nature(str, Enum):
     SERIOUS = "Serious"
 
     @staticmethod
-    def get_modifier(nature: "Nature", stat: str) -> float:
-        """
-        Returns the modifier (0.9, 1.0, 1.1) for a given nature and stat.
+    def get_modifier(nature: Nature, stat: str) -> float:
+        """Returns the modifier (0.9, 1.0, 1.1) for a given nature and stat.
+
         HP is never modified by nature.
+
+        Args:
+            nature: The Nature to check.
+            stat: The name of the stat (e.g., "Attack", "Defense").
+
+        Returns:
+            Review the stat modifier (0.9, 1.0, or 1.1).
         """
         # Note: We use string comparison here to avoid circular dependency with Stat enum
         if stat == "HP":
@@ -79,27 +90,62 @@ class Nature(str, Enum):
 
 
 class Ability:
+    """Represents a special ability or skill."""
+
     def __init__(
-        self, name: str, description: str, learned_by: list[Any | None] = []
+        self,
+        name: str,
+        description: str,
+        learned_by: list[Any | None] | None = None,
     ):
-        self.name = name
-        self.description = description
-        self.learned_by = learned_by
+        """Initializes an Ability.
+
+        Args:
+            name: Name of the ability.
+            description: Description of what it does.
+            learned_by: List of species that can learn this. Defaults to None.
+        """
+        self.name: str = name
+        self.description: str = description
+        self.learned_by: list[Any | None] = learned_by or []
 
 
 class Rarity:
+    """Defines the rarity and spawn rate of an entity."""
+
     def __init__(self, name: str, spawn_rate: float):
-        self.name = name
-        self.spawn_rate = spawn_rate
+        """Initializes Rarity.
+
+        Args:
+            name: Name of the rarity tier (e.g., "Common").
+            spawn_rate: Probability of spawning (0.0-1.0).
+        """
+        self.name: str = name
+        self.spawn_rate: float = spawn_rate
 
 
 class Evolution:
+    """Defines evolutionary paths.
+
+    Attributes:
+        evolves_from: The base form.
+        evolves_to: The evolved form.
+        evolves_at_level: Level requirement for evolution.
+    """
+
     def __init__(
         self,
         evolves_from: Any = None,
         evolves_to: Any = None,
-        evolves_at_level: int = None,
-    ):
-        self.evolves_from = evolves_from
-        self.evolves_to = evolves_to
-        self.evolves_at_level = evolves_at_level
+        evolves_at_level: int | None = None,
+    ) -> None:
+        """Initializes an Evolution definition.
+
+        Args:
+            evolves_from: The base form.
+            evolves_to: The evolved form.
+            evolves_at_level: Level requirement for evolution.
+        """
+        self.evolves_from: Any = evolves_from
+        self.evolves_to: Any = evolves_to
+        self.evolves_at_level: int | None = evolves_at_level

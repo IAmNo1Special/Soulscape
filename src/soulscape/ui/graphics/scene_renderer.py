@@ -1,3 +1,9 @@
+"""Scene rendering logic for Soulscape."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from pyglet import math as pmath
 from pyglet.gl import (
     GL_BACK,
@@ -29,26 +35,29 @@ from soulscape.constants import (
     ORB_SCALE,
     ORB_Y_OFFSET,
 )
-from soulscape.ui.graphics.resources import resource_manager
+from soulscape.ui.graphics.resources import ResourceManager, resource_manager
+
+if TYPE_CHECKING:
+    from soulscape.core.soul import Soul
 
 
 class SceneRenderer:
-    """
-    Handles the rendering of all souls in the scene.
+    """Handles the rendering of all souls in the scene.
+
     Optimizes performance by minimizing state changes (batching by shader).
     """
 
     def __init__(self):
+        """Initializes the scene renderer."""
         # We access resources via the singleton manager
-        self.resources = resource_manager
+        self.resources: ResourceManager = resource_manager
 
-    def render(self, souls, overlay_height):
-        """
-        Render all souls.
+    def render(self, souls: list[Soul], overlay_height: int) -> None:
+        """Render all souls.
 
         Args:
-            souls (list): List of Soul instances.
-            overlay_height (int): Height of the overlay window (needed for glViewport).
+            souls: List of Soul instances.
+            overlay_height: Height of the overlay window (needed for glViewport).
         """
         if not souls:
             return

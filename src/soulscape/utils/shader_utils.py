@@ -1,7 +1,10 @@
-# shader_utils.py
+"""Shader utility classes and functions for hot-reloading."""
+
+from __future__ import annotations
+
 import atexit
 import os
-from typing import Callable, Optional
+from typing import Callable
 
 import pyglet
 
@@ -13,23 +16,42 @@ atexit.register(shader_watcher.stop)
 
 
 class ShaderProgram:
-    """Wrapper around Pyglet's shader program that supports hot-reloading"""
+    """Wrapper around Pyglet's shader program that supports hot-reloading.
 
-    def __init__(self, vertex_shader_path: str, fragment_shader_path: str):
+    Attributes:
+        vertex_shader_path: Absolute path to the vertex shader.
+        fragment_shader_path: Absolute path to the fragment shader.
+        program: The underlying Pyglet shader program.
+        on_reload_callbacks: Set of callbacks to execute after reloading.
+    """
+
+    def __init__(
+        self, vertex_shader_path: str, fragment_shader_path: str
+    ) -> None:
+        """Initializes the ShaderProgram.
+
+        Args:
+            vertex_shader_path: Path to the vertex shader.
+            fragment_shader_path: Path to the fragment shader.
+        """
         self.vertex_shader_path = os.path.abspath(vertex_shader_path)
         self.fragment_shader_path = os.path.abspath(fragment_shader_path)
-        self.program: Optional[pyglet.graphics.shader.ShaderProgram] = None
-        self.on_reload_callbacks = set()
+        self.program: pyglet.graphics.shader.ShaderProgram | None = None
+        self.on_reload_callbacks: set[Callable[[], None]] = set()
         self.load()
         self._setup_watchers()
 
     def load(self) -> bool:
-        """Load or reload the shader program"""
+        """Load or reload the shader program.
+
+        Returns:
+            True if loading succeeded, False otherwise.
+        """
         try:
             # Read shader source files
-            with open(self.vertex_shader_path, "r") as f:
+            with open(self.vertex_shader_path, "r", encoding="utf-8") as f:
                 vertex_source = f.read()
-            with open(self.fragment_shader_path, "r") as f:
+            with open(self.fragment_shader_path, "r", encoding="utf-8") as f:
                 fragment_source = f.read()
 
             # Create shader objects
@@ -54,7 +76,9 @@ class ShaderProgram:
 
             self.program = new_program
             log.debug(
-                f"Successfully loaded shader program: {self.vertex_shader_path} + {self.fragment_shader_path}"
+                "Successfully loaded shader program: %s + %s",
+                self.vertex_shader_path,
+                self.fragment_shader_path,
             )
 
             # Call reload callbacks
@@ -62,22 +86,24 @@ class ShaderProgram:
                 try:
                     callback()
                 except Exception as e:
-                    log.error(f"Error in shader reload callback: {e}")
+                    log.error("Error in shader reload callback: %s", e)
 
             return True
 
         except Exception as e:
-            log.error(f"Error loading shader program: {e}")
+            log.error("Error loading shader program: %s", e)
             if hasattr(e, "log"):
-                log.error(f"Shader compile error: {e.log.decode('utf-8')}")
+                log.error("Shader compile error: %s", e.log.decode("utf-8"))
             return False
 
-    def _setup_watchers(self):
-        """Set up file watchers for hot-reloading"""
+    def _setup_watchers(self) -> None:
+        """Set up file watchers for hot-reloading."""
 
-        def reload_shader():
+        def reload_shader() -> None:
             log.debug(
-                f"Shader file changed, reloading: {self.vertex_shader_path} or {self.fragment_shader_path}"
+                "Shader file changed, reloading: %s or %s",
+                self.vertex_shader_path,
+                self.fragment_shader_path,
             )
             # Schedule the reload on the main thread
             pyglet.clock.schedule_once(lambda dt: self._safe_reload(), 0)
@@ -86,17 +112,21 @@ class ShaderProgram:
         shader_watcher.watch_file(self.vertex_shader_path, reload_shader)
         shader_watcher.watch_file(self.fragment_shader_path, reload_shader)
 
-    def _safe_reload(self):
-        """Safely reload the shader program on the main thread"""
+    def _safe_reload(self) -> None:
+        """Safely reload the shader program on the main thread."""
         try:
             self.load()
         except Exception as e:
-            log.error(f"Error reloading shader: {e}")
+            log.error("Error reloading shader: %s", e)
             if hasattr(e, "log"):
-                log.error(f"Shader compile error: {e.log.decode('utf-8')}")
+                log.error("Shader compile error: %s", e.log.decode("utf-8"))
 
-    def on_reload(self, callback: Callable[[], None]):
-        """Register a callback to be called when the shader is reloaded"""
+    def on_reload(self, callback: Callable[[], None]) -> None:
+        """Register a callback to be called when the shader is reloaded.
+
+        Args:
+            callback: The callback function to register.
+        """
         self.on_reload_callbacks.add(callback)
 
     def __getattr__(self, name):

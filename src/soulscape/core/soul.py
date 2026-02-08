@@ -8,6 +8,7 @@ simulation logic, and AI-driven decision making using the ADK.
 from __future__ import annotations
 
 import asyncio
+import io
 import math
 import os
 import random
@@ -17,14 +18,13 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import pyautogui
-import pyglet
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
-from pyglet.window import key, mouse
+from PIL import Image, ImageDraw
 
 # Import constants
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
@@ -76,10 +76,10 @@ class Soul:
     def from_dict(
         cls,
         data: dict[str, Any],
-        window_instance: Any,
         on_right_click: Any = None,
         on_move_end: Any = None,
         soul_registry: list[Soul] | None = None,
+        **kwargs: Any,
     ) -> Soul:
         """Reconstructs a Soul instance from a dictionary.
 
@@ -102,7 +102,6 @@ class Soul:
         stats = SoulStats.from_dict(stats_data) if stats_data else None
 
         soul = cls(
-            window_instance=window_instance,
             orb_color_rgb=orb_color,
             aura_color_rgb=aura_color,
             name=name,
@@ -111,6 +110,8 @@ class Soul:
             initial_position=position,
             stats=stats,
             soul_registry=soul_registry,
+            screen_width=kwargs.get("screen_width", 1920),
+            screen_height=kwargs.get("screen_height", 1080),
         )
 
         # Restore survival stats if available
@@ -135,9 +136,8 @@ class Soul:
 
     def __init__(
         self,
-        window_instance: Any,
-        orb_color_rgb: tuple[int, int, int],
-        aura_color_rgb: tuple[int, int, int],
+        orb_color_rgb: tuple[float, float, float],
+        aura_color_rgb: tuple[float, float, float],
         name: str | None = None,
         on_right_click: Any = None,
         on_move_end: Any = None,
@@ -150,11 +150,13 @@ class Soul:
         gender: Gender | None = None,
         current_location: str | None = None,
         soul_registry: list[Soul] | None = None,
-    ):
+        screen_width: int = 1920,
+        screen_height: int = 1080,
+    ) -> None:
         """Initializes a Soul instance.
 
         Args:
-            window_instance: The pyglet window instance for rendering.
+            window_instance: REMOVED
             orb_color_rgb: RGB tuple for the soul's main color.
             aura_color_rgb: RGB tuple for the soul's aura color.
             name: Full name of the soul. Defaults to None.
@@ -168,11 +170,13 @@ class Soul:
             gender: The gender of the soul. If None, random choice from species.
             current_location: Initial location string. Defaults to random.
             soul_registry: List of all active souls for environmental awareness.
+            screen_width: Width of the screen.
+            screen_height: Height of the screen.
         """
         Soul._current_soul_id += 1
         self.soul_id: int = Soul._current_soul_id
 
-        self.window = window_instance
+        # self.window = window_instance  # Decoupled
 
         # Initialize position
         self.x, self.y = initial_position
@@ -184,6 +188,8 @@ class Soul:
         self.on_right_click = on_right_click
         self.on_move_end = on_move_end
         self.soul_registry = soul_registry or []
+        self.screen_width = screen_width
+        self.screen_height = screen_height
 
         # --- Simulation Logic Initialization ---
 
@@ -286,15 +292,12 @@ class Soul:
 
         # --- Visual / Physics Initialization ---
 
-        # Only init physics if window is present (headless support).
-        if self.window:
-            self.window_physics = SoulPhysics(self, on_move_end)
-            self.width = SOUL_WIDTH
-            self.height = SOUL_HEIGHT
-        else:
-            self.window_physics = None
-            self.width = 0
-            self.height = 0
+        # Only init physics (assuming always needed now, or strictly logic)
+        self.window_physics = SoulPhysics(
+            self, on_move_end, self.screen_width, self.screen_height
+        )
+        self.width = SOUL_WIDTH
+        self.height = SOUL_HEIGHT
 
         self.time = 0.0
         self.bulge_position = [0.0, 0.0, 0.0]
@@ -309,9 +312,8 @@ class Soul:
         # Sensory System
         self.sensations: list[str] = []
 
-        # Schedule Pyglet update if not headless (or caller handles loop)
-        # We'll assume if window_instance is passed, we hook into pyglet clock
-        pyglet.clock.schedule_interval(self.update, 1 / 60.0)
+        # Schedule Pyglet update: REMOVED for external control
+        # pyglet.clock.schedule_interval(self.update, 1 / 60.0)
 
         # --- ADK Agent Initialization ---
         # Explicitly load dotenv
@@ -394,7 +396,8 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
 
         self.decision_interval = 60.0  # Check for agent decision every 30 sec
         # Initialize last_decision_time to trigger the first decision immediately
-        self.last_decision_time = -self.decision_interval
+        # But add a small delay (e.g. 5s) to allow the app to fully load/render first
+        self.last_decision_time = -self.decision_interval + 5.0
 
     # --- Simulation Methods ---
 
@@ -571,14 +574,11 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         increasing satiety points.
 
         Returns:
-            A dictionary containing:
-                - status (str): 'success' if food was eaten, 'fail' otherwise.
-                - message (str): Descriptive result of the action.
-                - data (dict): Contains 'satiety_value' and 'current_satiety'.
+            A dictionary containing action status and data.
         """
         food_items = self.inventory.get_consumables(Food)
         if not food_items:
-            log.warning(f"{self.name} tried to eat but has no food!")
+            # log.warning(f"{self.name} tried to eat but has no food!")
             return {
                 "status": "fail",
                 "message": "No food in inventory!",
@@ -604,10 +604,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         increasing hydration points.
 
         Returns:
-            A dictionary containing:
-                - status (str): 'success' if water was drunk, 'fail' otherwise.
-                - message (str): Descriptive result of the action.
-                - data (dict): Contains 'hydration_value' and 'current_hydration'.
+            A dictionary containing action status and data.
         """
         drink_items = self.inventory.get_consumables(Drink)
         if not drink_items:
@@ -650,11 +647,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         Success rate is fixed at 10%.
 
         Returns:
-            A dictionary containing:
-                - status (str): 'success' if food was found and added, 'fail' if
-                  nothing found or inventory full.
-                - message (str): Descriptive result of the action.
-                - data (dict): Contains 'satiety_value' and 'current_satiety'.
+            A dictionary containing action status and data.
         """
         success_rate = 0.1  # 10% chance to find food.
         if random.random() > success_rate:
@@ -695,11 +688,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         Success rate is fixed at 10%.
 
         Returns:
-            A dictionary containing:
-                - status (str): 'success' if water was found and added, 'fail' if
-                  nothing found or inventory full.
-                - message (str): Descriptive result of the search.
-                - data (dict): Contains 'hydration_value' and 'current_hydration'.
+            A dictionary containing action status and data.
         """
         success_rate = 0.1  # 10% chance to find water.
         if random.random() > success_rate:
@@ -742,7 +731,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         """Scans the environment for other souls.
 
         Returns:
-            A dictionary containing:
+            A dictionary containing status, message, and a list of visible souls.
         """
         nearby_souls_info = []
 
@@ -753,7 +742,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
 
         # Scale radius: Use a moderate base radius so souls can see nearby but not too far.
         # 150px is a good "awareness" zone on screen (300px diameter).
-        vision_radius = max(50, int(vision_stat * 1.5))
+        vision_radius = max(100, int(vision_stat * 1.5))
 
         for other in self.soul_registry:
             if other.soul_id == self.soul_id:
@@ -841,7 +830,9 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def market_browse(
-        self, item_name: str | None = None, max_price: int | None = None
+        self,
+        item_name: str | None = None,
+        max_price: float | None = None,
     ) -> dict[str, Any]:
         """Browses active marketplace listings.
 
@@ -1021,7 +1012,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             content: The text content of the message.
 
         Returns:
-            Status dictionary.
+            A dictionary containing status, message, and post data.
         """
         cost = 5.00
         if self.essence < cost:
@@ -1055,7 +1046,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             content: The text content of the reply.
 
         Returns:
-            Status dictionary.
+            A dictionary containing status, message, and reply data.
         """
         cost = 2.00
         if self.essence < cost:
@@ -1088,7 +1079,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             limit: Number of recent threads to retrieve.
 
         Returns:
-            A list of threads with their replies.
+            A dictionary containing the list of formatted thread strings.
         """
         posts = self.message_board.get_recent_posts(limit)
 
@@ -1114,6 +1105,9 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
 
         Args:
             message_id: The ID of the message to delete.
+
+        Returns:
+            A dictionary containing status and message.
         """
         success = self.message_board.delete_message(self.soul_id, message_id)
         if success:
@@ -1310,7 +1304,52 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                     )
                     self.last_decision_time = self.time
                     # Run agent decision in a separate thread to avoid blocking the game loop
-                    threading.Thread(target=self._run_agent_step).start()
+                    self.last_decision_time = self.time
+
+                    # --- THREAD SAFETY FIX ---
+                    # 1. Capture State Snapshot (Main Thread)
+                    state_snapshot = {
+                        "name": self.name,
+                        "species": self.species.name,
+                        "gender": self.gender.gender_name,
+                        "location": self.current_location,
+                        "hp": self.current_health,
+                        "max_hp": self.stats.max_hp,
+                        "satiety": self.satiety,
+                        "hydration": self.hydration,
+                        "inventory": self.inventory.to_dict(),
+                        "orb_color": self.orb_color_rgb,
+                        "aura_color": self.aura_color_rgb,
+                        # Geometry for vision
+                        "x": self.x,
+                        "y": self.y,
+                        "width": self.width,
+                        "height": self.height,
+                        "vision_stat": self.stats.vision if self.stats else 0,
+                        "debug_vision": getattr(self, "DEBUG_VISION", True),
+                        "soul_id": self.soul_id,
+                    }
+
+                    # 2. Capture Sensations (Atomic Pop)
+                    current_sensations = list(self.sensations)
+                    self.sensations.clear()
+
+                    # 3. Capture Screen Context (Must be on Main Thread)
+                    try:
+                        screen_context = pyautogui.screenshot()
+                    except Exception as e:
+                        log.error(f"Screenshot failed: {e}")
+                        screen_context = None
+
+                    # 4. Spawn Thread with Immutable Data
+                    threading.Thread(
+                        target=self._run_agent_step,
+                        args=(
+                            state_snapshot,
+                            current_sensations,
+                            screen_context,
+                        ),
+                    ).start()
 
             # Periodic Heartbeat for diagnostics
             if (
@@ -1333,44 +1372,60 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                     f"Soul {self.name} is currently PERISHED and awaiting revival."
                 )
 
-    def _run_agent_step(self) -> None:
-        """Executes a single step of the agent's reasoning loop in a thread."""
-        log.debug(f"Agent thread started for {self.name}")
+    def _run_agent_step(
+        self,
+        state: dict[str, Any],
+        sensations: list[str],
+        screen_context: Any,
+    ) -> None:
+        """Executes a single step of the agent's reasoning loop in a thread.
+
+        Args:
+            state: Snapshot of the soul's state.
+            sensations: List of sensation strings.
+            screen_context: The PIL Image captured on the main thread.
+        """
+        name = state["name"]
+        log.debug(f"Agent thread started for {name}")
 
         async def _run_async_internal():
-            # Capture screenshot
-            import io
 
-            from PIL import Image, ImageDraw
+            local_screen_context = screen_context  # Use passed argument
 
             try:
-                screen_context = pyautogui.screenshot()
-
-                # Debug saving
-                if getattr(self, "DEBUG_VISION", True):
-                    debug_dir = os.path.join(os.getcwd(), "debug_vision")
-                    os.makedirs(debug_dir, exist_ok=True)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    screen_context.save(
-                        os.path.join(
-                            debug_dir, f"{self.name}_{timestamp}_raw.png"
+                if local_screen_context:
+                    # Debug saving
+                    if state["debug_vision"]:
+                        debug_dir = os.path.join(os.getcwd(), "debug_vision")
+                        os.makedirs(debug_dir, exist_ok=True)
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        local_screen_context.save(
+                            os.path.join(
+                                debug_dir, f"{name}_{timestamp}_raw.png"
+                            )
                         )
-                    )
 
                 # --- Visual Fog of War Implementation ---
-                if self.window:
-                    # Calculate Vision Radius
-                    vision_stat = 0
-                    if self.stats:
-                        vision_stat = self.stats.vision
+                if local_screen_context:
+                    # Use snapshot data for vision calculation
+                    vision_stat = state["vision_stat"]
                     # Ensure minimum awareness radius (150px)
-                    vision_radius = max(50, int(vision_stat * 1.5))
+                    vision_radius = max(100, int(vision_stat * 1.5))
 
                     # Calculate Soul Position in Image Coordinates
-                    # Pyglet Y is bottom-up, Image is top-down
-                    img_w, img_h = screen_context.size
-                    soul_x = self.x
-                    soul_y = img_h - self.y  # Flip Y
+                    img_w, img_h = local_screen_context.size
+
+                    # Use Snapshot geometry
+                    sx = state["x"]
+                    sy = state["y"]
+                    sw = state["width"]
+                    sh = state["height"]
+
+                    center_x = sx + (sw / 2)
+                    center_y = sy + (sh * 0.35)  # Offset up to orb center
+
+                    soul_x = center_x
+                    soul_y = center_y
 
                     # Create Mask
                     mask = Image.new("L", (img_w, img_h), 0)  # Black mask
@@ -1391,22 +1446,24 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                     black_bg = Image.new("RGB", (img_w, img_h), (0, 0, 0))
 
                     # Composite: Use mask to show screen, otherwise black
-                    screen_context = Image.composite(
-                        screen_context, black_bg, mask
+                    local_screen_context = Image.composite(
+                        local_screen_context, black_bg, mask
                     )
 
-                    if getattr(self, "DEBUG_VISION", True):
-                        screen_context.save(
+                    if state["debug_vision"]:
+                        local_screen_context.save(
                             os.path.join(
-                                debug_dir, f"{self.name}_{timestamp}_masked.png"
+                                debug_dir, f"{name}_{timestamp}_masked.png"
                             )
                         )
 
                 # Scale for ADK
-                screen_context.thumbnail((800, 600))
-                img_byte_arr = io.BytesIO()
-                screen_context.save(img_byte_arr, format="PNG")
-                img_bytes = img_byte_arr.getvalue()
+                img_bytes = None
+                if local_screen_context:
+                    local_screen_context.thumbnail((800, 600))
+                    img_byte_arr = io.BytesIO()
+                    local_screen_context.save(img_byte_arr, format="PNG")
+                    img_bytes = img_byte_arr.getvalue()
             except Exception as e:
                 log.warning(
                     f"Vision processing failed for {self.name}: {e}",
@@ -1415,19 +1472,18 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                 img_bytes = None
 
             context_str = (
-                f"Name: {self.name}, Status: HP={self.current_health}, "
-                f"Satiety={self.satiety:.1f}, Hydration={self.hydration:.1f}. "
+                f"Name: {name}, Status: HP={state['hp']}, "
+                f"Satiety={state['satiety']:.1f}, Hydration={state['hydration']:.1f}. "
                 "Visual context attached."
             )
 
             # Inject Sensations
-            if self.sensations:
+            if sensations:
                 sensory_input = "\nRecent Physical Sensations:\n" + "\n".join(
-                    f"- {sensation}" for sensation in self.sensations
+                    f"- {sensation}" for sensation in sensations
                 )
                 context_str += sensory_input
-                # Clear buffer after consuming
-                self.sensations.clear()
+                # Buffer is already cleared in main thread
             else:
                 context_str += "\nNo specific physical sensations recently."
 
@@ -1449,8 +1505,8 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             try:
                 async with Aclosing(
                     self.runner.run_async(
-                        user_id=f"user_{self.soul_id}",
-                        session_id=f"session_{self.soul_id}",
+                        user_id=f"user_{state['soul_id']}",
+                        session_id=f"session_{state['soul_id']}",
                         new_message=content,
                     )
                 ) as agen:
@@ -1461,65 +1517,45 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                         for part in event.content.parts:
                             # Log tool calls
                             if part.function_call:
-                                """log.info(
-                                    f"Soul {self.name} calling tool: {part.function_call.name}"
-                                )"""
-                                pass
+                                log.info(
+                                    f"Soul {name} calling tool: {part.function_call.name}"
+                                )
 
                             # Log tool results
                             if part.function_response:
-                                """log.info(
-                                    f"Soul {self.name} tool result: {part.function_response.response}"
-                                )"""
-                                pass
+                                log.info(
+                                    f"Soul {name} tool result: {part.function_response.response}"
+                                )
 
                             # Log final response text
                             if event.is_final_response() and part.text:
-                                log.info(
-                                    f"Soul {self.name} decided: {part.text}"
-                                )
+                                log.info(f"Soul {name} decided: {part.text}")
             except Exception as e:
-                log.error(f"Error during agent turn for {self.name}: {e}")
+                log.error(f"Error during agent turn for {name}: {e}")
 
         try:
             asyncio.run(_run_async_internal())
         except Exception as e:
-            log.error(
-                f"Agent thread failed for {self.name}: {e}", exc_info=True
-            )
-
-    def on_key_press(self, symbol: int, modifiers: int):
-        """Pyglet event handler for key press.
-
-        Args:
-            symbol: The key symbol pressed.
-            modifiers: Key modifiers (shift, ctrl, etc.).
-
-        Returns:
-            pyglet.event.EVENT_HANDLED if handled, None otherwise.
-        """
-        if symbol == key.A:  # Toggle aura visibility when 'A' is pressed
-            self.aura_visible = not self.aura_visible
-            return pyglet.event.EVENT_HANDLED
+            log.error(f"Agent thread failed for {name}: {e}", exc_info=True)
 
     def on_mouse_press(
-        self, x: int, y: int, button: int, modifiers: int
-    ) -> bool:
-        """Pyglet event handler for mouse press.
+        self, x: int, y: int, button: int, modifiers: int, screen_height: int
+    ) -> bool | None:
+        """Event handler for mouse press.
 
         Args:
             x: X coordinate of the mouse.
             y: Y coordinate of the mouse.
             button: Mouse button pressed.
             modifiers: Key modifiers.
+            screen_height: Height of the screen for coordinate conversion.
 
         Returns:
             True if handled, False otherwise.
         """
-        screen_height = self.window.height
         y_top_left = screen_height - y
 
-        if button == mouse.RIGHT and self.on_right_click:
+        if button == 4 and self.on_right_click:  # 4 is RIGHT mouse button
             if (
                 self.x <= x <= self.x + self.width
                 and self.y <= y_top_left <= self.y + self.height
@@ -1528,7 +1564,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                 return True
 
         # Left click (selection/drag start) - Log Sensation
-        if button == mouse.LEFT:
+        if button == 1:  # 1 is LEFT mouse button
             if (
                 self.x <= x <= self.x + self.width
                 and self.y <= y_top_left <= self.y + self.height
@@ -1537,12 +1573,21 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                     "You felt a sudden, powerful touch from above."
                 )
 
-        self.window_physics.on_mouse_press(x, y_top_left, button, modifiers)
+        if self.window_physics:
+            self.window_physics.on_mouse_press(x, y_top_left, button, modifiers)
+        return False
 
     def on_mouse_drag(
-        self, x: int, y: int, dx: int, dy: int, buttons: int, modifiers: int
+        self,
+        x: int,
+        y: int,
+        dx: int,
+        dy: int,
+        buttons: int,
+        modifiers: int,
+        screen_height: int,
     ) -> None:
-        """Pyglet event handler for mouse drag.
+        """Event handler for mouse drag.
 
         Args:
             x: X coordinate.
@@ -1551,25 +1596,26 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             dy: Delta Y.
             buttons: Mouse buttons held.
             modifiers: Key modifiers.
+            screen_height: Height of the screen.
         """
-        screen_height = self.window.height
         y_top_left = screen_height - y
-        self.window_physics.on_mouse_drag(
-            x, y_top_left, dx, -dy, buttons, modifiers
-        )
+        if self.window_physics:
+            self.window_physics.on_mouse_drag(
+                x, y_top_left, dx, -dy, buttons, modifiers
+            )
 
     def on_mouse_release(
-        self, x: int, y: int, button: int, modifiers: int
+        self, x: int, y: int, button: int, modifiers: int, screen_height: int
     ) -> None:
-        """Pyglet event handler for mouse release.
+        """Event handler for mouse release.
 
         Args:
             x: X coordinate.
             y: Y coordinate.
             button: Mouse button.
             modifiers: Key modifiers.
+            screen_height: Height of the screen.
         """
-        screen_height = self.window.height
         y_top_left = screen_height - y
 
         # If we were being dragged (physics would know, but here we can infer or just log the release)
@@ -1578,16 +1624,16 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         # but InputRouter calls soul.on_mouse_release...
         # Let's just log a generic "release" sensation if we were held.
         # Actually input router calls this on the specific soul.
-        if button == mouse.LEFT:
+        if button == 1:  # 1 is LEFT mouse button
             # We might check if we moved significantly, but a simple log is fine.
             self.sensations.append("The powerful force released you.")
 
-        self.window_physics.on_mouse_release(x, y_top_left, button, modifiers)
+        if self.window_physics:
+            self.window_physics.on_mouse_release(
+                x, y_top_left, button, modifiers
+            )
 
     def cleanup(self) -> None:
-        """Cleans up all resources associated with this soul (clock, etc.)."""
-        try:
-            pyglet.clock.unschedule(self.update)
-        except Exception:
-            pass
+        """Cleans up all resources associated with this soul."""
+        log.debug(f"Cleaned up resources for soul: {self.name}")
         log.debug(f"Cleaned up resources for soul: {self.name}")

@@ -1,11 +1,13 @@
-"""
-Separate process runner for Soulscape GUI dialogs.
+"""Separate process runner for Soulscape GUI dialogs.
+
 Avoids threading conflicts between Pyglet and Tkinter.
 """
 
-from enum import Enum
+from __future__ import annotations
 
-# Import the GUI classes (ensure these don't import pyglet/main app)
+from enum import Enum
+from typing import Any
+
 from soulscape.ui.gui.settings_gui import (
     GlobalSettingsDialog,
     SoulContextMenu,
@@ -20,12 +22,22 @@ class MenuAction(str, Enum):
 
 
 def run_global_settings(
-    initial_opacity, run_on_startup, current_hotkey, result_queue
-):
-    """Run Global Settings Dialog in a separate process."""
+    initial_opacity: float,
+    run_on_startup: bool,
+    current_hotkey: str,
+    result_queue: Any,
+) -> None:
+    """Run Global Settings Dialog in a separate process.
+
+    Args:
+        initial_opacity: Current opacity value.
+        run_on_startup: Whether run on startup is enabled.
+        current_hotkey: Current hotkey string.
+        result_queue: Queue to put results in.
+    """
     try:
 
-        def on_apply(opacity, startup):
+        def on_apply(opacity: float, startup: bool) -> None:
             result_queue.put({"opacity": opacity, "startup": startup})
 
         dialog = GlobalSettingsDialog(
@@ -35,16 +47,29 @@ def run_global_settings(
         )
         dialog.show()
     except Exception as e:
+        # Cannot use standard logger in separate process easily without config
         print(f"Error in global settings process: {e}")
     finally:
         result_queue.put(None)  # Signal done
 
 
-def run_soul_settings(name, orb_color, aura_color, result_queue):
-    """Run Soul Settings Dialog in a separate process."""
+def run_soul_settings(
+    name: str,
+    orb_color: str,
+    aura_color: str,
+    result_queue: Any,
+) -> None:
+    """Run Soul Settings Dialog in a separate process.
+
+    Args:
+        name: Current soul name.
+        orb_color: Current orb color hex.
+        aura_color: Current aura color hex.
+        result_queue: Queue to put results in.
+    """
     try:
 
-        def on_apply(new_name, new_orb, new_aura):
+        def on_apply(new_name: str, new_orb: str, new_aura: str) -> None:
             result_queue.put(
                 {"name": new_name, "orb_color": new_orb, "aura_color": new_aura}
             )
@@ -62,31 +87,18 @@ def run_soul_settings(name, orb_color, aura_color, result_queue):
         result_queue.put(None)
 
 
-def run_context_menu(name, x, y, result_queue):
-    """Run Context Menu in a separate process."""
+def run_context_menu(name: str, x: int, y: int, result_queue: Any) -> None:
+    """Run Context Menu in a separate process.
+
+    Args:
+        name: Name of the soul.
+        x: Screen x-coordinate.
+        y: Screen y-coordinate.
+        result_queue: Queue to put results in.
+    """
     try:
-        selected_action = None
 
-        def on_edit():
-            nonlocal selected_action
-            selected_action = MenuAction.EDIT
-
-        def on_toggle():
-            nonlocal selected_action
-            selected_action = MenuAction.TOGGLE_AURA
-
-        def on_dismiss():
-            nonlocal selected_action
-            selected_action = MenuAction.DISMISS
-
-        # We can't return immediately from callbacks, we just store state
-        # But SoulContextMenu.show blocks.
-        # We need to modify SoulContextMenu or wrap it to return action?
-        # The current implementation executes callback immediately.
-        # We can pass wrappers that put to queue.
-
-        # Actually, simpler:
-        def callback_wrapper(action):
+        def callback_wrapper(action: MenuAction) -> None:
             result_queue.put(action)
 
         menu = SoulContextMenu(

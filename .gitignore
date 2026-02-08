@@ -14,4 +14,7 @@ wheels/
 # Debug Vision
 debug_vision/
 
+# Protel
 .protel/
+
+gradex_jsons/

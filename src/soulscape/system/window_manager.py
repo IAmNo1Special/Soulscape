@@ -1,5 +1,7 @@
 """Platform-agnostic window management abstraction."""
 
+from __future__ import annotations
+
 import ctypes
 import sys
 from abc import ABC, abstractmethod
@@ -26,7 +28,7 @@ class WindowManager(ABC):
         batch: The Pyglet graphics batch for drawing.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initializes the WindowManager and sets up the window."""
         self.window = SoulscapeWindow()
         self.hwnd: int | None = self.get_hwnd()
@@ -113,7 +115,7 @@ class WindowManager(ABC):
 class StubWindowManager(WindowManager):
     """Stub implementation for unsupported platforms."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
     def get_hwnd(self) -> int | None:
@@ -173,7 +175,7 @@ class WindowsWindowManager(WindowManager):
     SWP_FRAMECHANGED = 0x0020
     SWP_NOACTIVATE = 0x0010
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initializes the WindowsWindowManager."""
         super().__init__()
         self._current_opacity = 255  # Default to full opacity
@@ -210,7 +212,7 @@ class WindowsWindowManager(WindowManager):
             return hwnd
         return None
 
-    def on_draw(self):
+    def on_draw(self) -> None:
         """Handle the draw event."""
         self.window.clear()
         self.batch.draw()

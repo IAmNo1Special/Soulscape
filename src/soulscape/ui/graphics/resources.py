@@ -1,4 +1,9 @@
+"""Graphics resource management and geometry generation."""
+
+from __future__ import annotations
+
 import math
+from typing import Any
 
 from pyglet.gl import GL_TRIANGLES
 
@@ -17,17 +22,18 @@ from soulscape.constants import (
 from soulscape.utils.shader_utils import create_shader_program
 
 
-def create_sphere(radius, lat_segments, long_segments):
-    """
-    Generates vertex, normal, and index data for a sphere using shared pole vertices.
+def create_sphere(
+    radius: float, lat_segments: int, long_segments: int
+) -> dict[str, list[float] | list[int]]:
+    """Generates vertex, normal, and index data for a sphere using shared pole vertices.
 
     Args:
-        radius (float): The radius of the sphere.
-        lat_segments (int): Number of segments along the latitude.
-        long_segments (int): Number of segments along the longitude.
+        radius: The radius of the sphere.
+        lat_segments: Number of segments along the latitude.
+        long_segments: Number of segments along the longitude.
 
     Returns:
-        dict: A dictionary containing 'vertices', 'normals', and 'indices' arrays.
+        A dictionary containing 'vertices', 'normals', and 'indices' arrays.
     """
     vertices = []
     normals = []
@@ -113,35 +119,38 @@ def create_sphere(radius, lat_segments, long_segments):
 
 
 class ResourceManager:
-    """
-    Singleton manager for shared graphics resources (shaders, meshes).
+    """Singleton manager for shared graphics resources (shaders, meshes).
+
     Ensures that heavy assets are loaded only once.
     """
 
-    _instance = None
+    _instance: ResourceManager | None = None
+    _initialized: bool = False
 
-    def __new__(cls):
+    def __new__(cls) -> ResourceManager:
+        """Creates or returns the singleton instance."""
         if cls._instance is None:
             cls._instance = super(ResourceManager, cls).__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
+        """Initializes the resource manager if not already initialized."""
         if self._initialized:
             return
 
-        self.orb_program = None
-        self.aura_program = None
+        self.orb_program: Any = None
+        self.aura_program: Any = None
 
-        self.orb_mesh_data = None
-        self.aura_mesh_data = None
+        self.orb_mesh_data: dict[str, list[float] | list[int]] | None = None
+        self.aura_mesh_data: dict[str, list[float] | list[int]] | None = None
 
-        self.orb_vertex_list = None
-        self.aura_vertex_list = None
+        self.orb_vertex_list: Any = None
+        self.aura_vertex_list: Any = None
 
         self._initialized = True
 
-    def get_orb_program(self):
+    def get_orb_program(self) -> Any:
         """Returns the compiled shader program for the Orb."""
         if self.orb_program is None:
             self.orb_program = create_shader_program(
@@ -149,7 +158,7 @@ class ResourceManager:
             )
         return self.orb_program
 
-    def get_aura_program(self):
+    def get_aura_program(self) -> Any:
         """Returns the compiled shader program for the Aura."""
         if self.aura_program is None:
             self.aura_program = create_shader_program(
@@ -157,7 +166,7 @@ class ResourceManager:
             )
         return self.aura_program
 
-    def get_orb_mesh_data(self):
+    def get_orb_mesh_data(self) -> dict[str, list[float] | list[int]]:
         """Returns dict(vertices, normals, indices) for the Orb sphere."""
         if self.orb_mesh_data is None:
             self.orb_mesh_data = create_sphere(
@@ -165,7 +174,7 @@ class ResourceManager:
             )
         return self.orb_mesh_data
 
-    def get_aura_mesh_data(self):
+    def get_aura_mesh_data(self) -> dict[str, list[float] | list[int]]:
         """Returns dict(vertices, normals, indices) for the Aura sphere."""
         if self.aura_mesh_data is None:
             self.aura_mesh_data = create_sphere(
@@ -173,8 +182,9 @@ class ResourceManager:
             )
         return self.aura_mesh_data
 
-    def get_orb_vertex_list(self):
+    def get_orb_vertex_list(self) -> Any:
         """Returns the cached VertexList for the orb.
+
         Note: This currently returns an indexed vertex list bound to the shader.
         This vertex list can be drawn multiple times.
         """
@@ -182,23 +192,23 @@ class ResourceManager:
             program = self.get_orb_program()
             data = self.get_orb_mesh_data()
             self.orb_vertex_list = program.vertex_list_indexed(
-                len(data["vertices"]) // 3,
+                len(data["vertices"]) // 3,  # type: ignore
                 GL_TRIANGLES,
-                data["indices"],
+                data["indices"],  # type: ignore
                 position=("f", data["vertices"]),
                 normal=("f", data["normals"]),
             )
         return self.orb_vertex_list
 
-    def get_aura_vertex_list(self):
+    def get_aura_vertex_list(self) -> Any:
         """Returns the cached VertexList for the aura."""
         if self.aura_vertex_list is None:
             program = self.get_aura_program()
             data = self.get_aura_mesh_data()
             self.aura_vertex_list = program.vertex_list_indexed(
-                len(data["vertices"]) // 3,
+                len(data["vertices"]) // 3,  # type: ignore
                 GL_TRIANGLES,
-                data["indices"],
+                data["indices"],  # type: ignore
                 position=("f", data["vertices"]),
                 normal=("f", data["normals"]),
             )

@@ -1,13 +1,14 @@
-# soul.py
+"""Physics and interaction logic for Souls."""
+
+from __future__ import annotations
+
 import math
 import random
-import time  # For double click timing
+import time
+from typing import TYPE_CHECKING, Callable
 
 import pyautogui
-import pyglet
-from pyglet.window import mouse
 
-# Import constants
 from soulscape.constants import (
     HOVER_AMPLITUDE,
     HOVER_FREQUENCY,
@@ -19,38 +20,54 @@ from soulscape.constants import (
 )
 from soulscape.system.logger import log
 
+if TYPE_CHECKING:
+    from soulscape.core.soul import Soul
+
 
 # --- Window Physics and Interaction ---
 class SoulPhysics:
-    """
-    Manages the movement and interaction of a Soul entity.
+    """Manages the movement and interaction of a Soul entity.
+
+    Handles mouse dragging, following, roaming, and collision avoidance.
     """
 
-    def __init__(self, entity, on_move_end=None):
+    def __init__(
+        self,
+        entity: Soul,
+        on_move_end: Callable[[], None] | None = None,
+        screen_width: int = 1920,
+        screen_height: int = 1080,
+    ):
+        """Initializes physics for a Soul.
+
+        Args:
+            entity: The Soul instance to control.
+            on_move_end: Optional callback triggered when movement stops.
+            screen_width: Width of the screen.
+            screen_height: Height of the screen.
+        """
         log.debug(f"Initializing physics for Soul: {entity.name}")
         self.entity = entity
-        self.window = None  # No direct window access, relies on entity.window (which is the overlay)
+        self.window = None  # Decoupled
         self.on_move_end = on_move_end
 
         # Initialize from entity position
-        self.x = float(self.entity.x)
-        self.y = float(self.entity.y)
+        self.x: float = float(self.entity.x)
+        self.y: float = float(self.entity.y)
 
-        self.vx = 0.0
-        self.vy = 0.0
-        self.is_dragging = False
-        self.drag_offset_x = 0
-        self.drag_offset_y = 0
-        self.roaming_target = None
-        self.roaming_pause = 0.0
-        self.roaming_enabled = False  # Souls only move when instructed
-        self.follow_mouse = False
-        self.last_click_time = 0
-        self.mouse_x = 0
-        self.mouse_y = 0
-        self.hover_phase = 0.0  # For hover animation
-        self.mouse_y = 0
-        self.hover_phase = 0.0  # For hover animation
+        self.vx: float = 0.0
+        self.vy: float = 0.0
+        self.is_dragging: bool = False
+        self.drag_offset_x: float = 0
+        self.drag_offset_y: float = 0
+        self.roaming_target: tuple[float, float] | None = None
+        self.roaming_pause: float = 0.0
+        self.roaming_enabled: bool = False  # Souls only move when instructed
+        self.follow_mouse: bool = False
+        self.last_click_time: float = 0
+        self.mouse_x: float = 0
+        self.mouse_y: float = 0
+        self.hover_phase: float = 0.0  # For hover animation
 
         # Calculate speeds based on stats if available
         base_speed_val = 100.0
@@ -62,42 +79,46 @@ class SoulPhysics:
         # Speed modifiers (increased for better responsiveness)
         speed_multiplier = speed_stat / 100.0
 
-        self.follow_speed = 1.5 * speed_multiplier
-        self.max_speed = 5.0 * speed_multiplier
+        self.follow_speed: float = 1.5 * speed_multiplier
+        self.max_speed: float = 5.0 * speed_multiplier
 
         log.debug(
-            f"Physics initialized with max_speed={self.max_speed:.2f} (Stat: {speed_stat})"
+            f"Physics initialized with max_speed={self.max_speed:.2f} "
+            f"(Stat: {speed_stat})"
         )
-        self.follow_delay = 0.0  # Timer for follow delay
-        self.follow_delay_duration = (
-            0.5  # 0.5 second delay before following starts
-        )
-        self.name = entity.name
-        self.is_hovered = False
+        self.follow_delay: float = 0.0  # Timer for follow delay
+        self.follow_delay_duration: float = 0.5
+        self.name: str = entity.name
+        self.is_hovered: bool = False
 
         # Track previous position for smooth movement
-        self.last_x = int(self.x)
-        self.last_y = int(self.y)
+        self.last_x: int = int(self.x)
+        self.last_y: int = int(self.y)
 
-        # Get screen dimensions from pyglet display since we don't have a specific window yet
-        screen = pyglet.display.get_display().get_default_screen()
-        self.screen_width = screen.width
-        self.screen_height = screen.height
+        # Initialize screen dimensions from arguments
+        self.screen_width: int = screen_width
+        self.screen_height: int = screen_height
 
-        self.width = SOUL_WIDTH
-        self.height = SOUL_HEIGHT
+        self.width: int = SOUL_WIDTH
+        self.height: int = SOUL_HEIGHT
         log.debug(
             f"Soul: {self.name} initialized with position ({self.x}, {self.y})"
         )
 
-    def on_mouse_press(self, x, y, button, modifiers):
+    def on_mouse_press(
+        self, x: int, y: int, button: int, modifiers: int
+    ) -> None:
         """Handles mouse press events to initiate dragging.
-        x, y are absolute screen coordinates passed from overlay.
+
+        Args:
+            x: Absolute screen x-coordinate.
+            y: Absolute screen y-coordinate.
+            button: Mouse button pressed.
+            modifiers: Function keys modifiers.
         """
-        if button == mouse.LEFT:
+        if button == 1:  # 1 is LEFT mouse button
             # Check if click is inside this soul's bounds
-            # x, y are absolute coordinates from overlay
-            # soul is at self.x, self.y with size self.width, self.height
+            # x, y are absolute screen coordinates
             if (
                 self.x <= x <= self.x + self.width
                 and self.y <= y <= self.y + self.height
@@ -129,45 +150,71 @@ class SoulPhysics:
                 self.vx = 0.0  # Stop independent movement
                 self.vy = 0.0
 
-    def on_mouse_release(self, x, y, button, modifiers):
+    def on_mouse_release(
+        self, x: int, y: int, button: int, modifiers: int
+    ) -> None:
         """Handles mouse release events to stop dragging."""
-        if button == mouse.LEFT:
+        if button == 1:  # 1 is LEFT mouse button
             was_dragging = self.is_dragging
             self.is_dragging = False
 
             if was_dragging and self.on_move_end:
                 self.on_move_end()
 
-    def on_mouse_enter(self, x, y):
-        """Handles mouse enter event to show the name label."""
+    def on_mouse_enter(self, x: int, y: int) -> None:
+        """Handles mouse enter event to show the name label.
+
+        Args:
+            x: Mouse x-coordinate.
+            y: Mouse y-coordinate.
+        """
         self.is_hovered = True
 
-    def on_mouse_leave(self, x, y):
-        """Handles mouse leave event to hide the name label."""
+    def on_mouse_leave(self, x: int, y: int) -> None:
+        """Handles mouse leave event to hide the name label.
+
+        Args:
+            x: Mouse x-coordinate.
+            y: Mouse y-coordinate.
+        """
         self.is_hovered = False
 
-    def on_mouse_motion(self, x, y, dx, dy):
-        """Tracks mouse motion to update follow target."""
-        # Update mouse position for following
-        self.mouse_x = x
-        self.mouse_y = y
+    def on_mouse_motion(self, x: int, y: int, dx: int, dy: int) -> None:
+        """Tracks mouse motion to update follow target.
 
-    def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
+        Args:
+            x: Mouse x-coordinate.
+            y: Mouse y-coordinate.
+            dx: Change in x.
+            dy: Change in y.
         """
-        Handles mouse drag events. Directly updates soul position.
-        x, y are absolute screen coordinates.
+        self.mouse_x = float(x)
+        self.mouse_y = float(y)
+
+    def on_mouse_drag(
+        self, x: int, y: int, dx: int, dy: int, buttons: int, modifiers: int
+    ) -> None:
+        """Handles mouse drag events. Directly updates soul position.
+
+        Args:
+            x: Mouse x-coordinate.
+            y: Mouse y-coordinate.
+            dx: Change in x.
+            dy: Change in y.
+            buttons: Buttons pressed.
+            modifiers: Modifier keys.
         """
-        if self.is_dragging and (buttons & mouse.LEFT):
+        if self.is_dragging and (buttons & 1):  # 1 is LEFT mouse button bitmask
             # Calculate new top-left position based on drag offset
-            new_soul_x = x - self.drag_offset_x
-            new_soul_y = y - self.drag_offset_y
+            new_soul_x = float(x - self.drag_offset_x)
+            new_soul_y = float(y - self.drag_offset_y)
 
             self.x = new_soul_x
             self.y = new_soul_y
 
             # Update mouse position for following if enabled
-            self.mouse_x = x
-            self.mouse_y = y
+            self.mouse_x = float(x)
+            self.mouse_y = float(y)
 
             # Clamp to screen edges immediately during drag
             self.x = max(
@@ -186,8 +233,12 @@ class SoulPhysics:
             self.entity.y = self.y
             self.entity.draw_y = self.y
 
-    def update(self, dt):
-        """Updates the soul's position and physics."""
+    def update(self, dt: float) -> None:
+        """Updates the soul's position and physics.
+
+        Args:
+            dt: Delta time since last frame.
+        """
 
         if self.is_dragging:
             self.vx = 0.0
@@ -254,8 +305,12 @@ class SoulPhysics:
             # Apply separation force (Personal Space) to avoid stacking
             self._apply_separation(dt)
 
-    def _apply_separation(self, dt):
-        """Applies a repulsive force to separate overlapping souls."""
+    def _apply_separation(self, dt: float) -> None:
+        """Applies a repulsive force to separate overlapping souls.
+
+        Args:
+            dt: Delta time.
+        """
         separation_radius = self.width * 1.2  # Personal space bubble
         separation_force = 200.0  # Strength of push
 
@@ -315,10 +370,18 @@ class SoulPhysics:
             self.entity.x = self.x
             self.entity.y = self.y
 
-    def _move_towards_target(self, target_x, target_y, dt):
-        """
-        Moves the soul towards a target position with smooth deceleration.
-        Returns True if the target has been reached (within dead zone).
+    def _move_towards_target(
+        self, target_x: float, target_y: float, dt: float
+    ) -> bool:
+        """Moves the soul towards a target position with smooth deceleration.
+
+        Args:
+            target_x: Target x-coordinate.
+            target_y: Target y-coordinate.
+            dt: Delta time.
+
+        Returns:
+            True if the target has been reached (within dead zone), False otherwise.
         """
         # Calculate direction vector and distance
         dx = target_x - self.x
@@ -385,10 +448,14 @@ class SoulPhysics:
 
         return False  # Still moving
 
-    def _update_follow_mouse(self, dt):
-        """Update the soul position to follow the mouse."""
+    def _update_follow_mouse(self, dt: float) -> None:
+        """Update the soul position to follow the mouse.
+
+        Args:
+            dt: Delta time.
+        """
         mouse_x, mouse_y = pyautogui.position()
-        target_x = mouse_x - (self.width // 2)
-        target_y = mouse_y - (self.height // 2)
+        target_x = float(mouse_x) - (self.width // 2)
+        target_y = float(mouse_y) - (self.height // 2)
         # Note: -20 offset removed, centering on soul center which is clearer
         self._move_towards_target(target_x, target_y, dt)

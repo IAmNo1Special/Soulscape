@@ -1,7 +1,11 @@
+"""Shader file watcher for hot-reloading."""
+
+from __future__ import annotations
+
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Dict, Set
+from typing import Any, Callable
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -10,13 +14,25 @@ from soulscape.system.logger import log
 
 
 class ShaderWatcher:
-    def __init__(self):
+    """Manages file system watching for shader files to support hot-reloading.
+
+    Attributes:
+        observer: The watchdog observer instance.
+        watched_files: Dictionary mapping file paths to their last modified time.
+        callbacks: Dictionary mapping file paths to sets of reload callback functions.
+        watched_paths: Set of directory paths currently being watched.
+        disabled: Whether the watcher is currently disabled (e.g. in production).
+        running: Whether the watcher is currently running.
+    """
+
+    def __init__(self) -> None:
+        """Initializes the ShaderWatcher."""
         self.observer = Observer()
-        self.watched_files: Dict[str, float] = {}  # path -> last modified time
-        self.callbacks: Dict[str, Set[Callable[[], None]]] = (
+        self.watched_files: dict[str, float] = {}  # path -> last modified time
+        self.callbacks: dict[str, set[Callable[[], None]]] = (
             {}
         )  # path -> set of callbacks
-        self.watched_paths: Set[str] = (
+        self.watched_paths: set[str] = (
             set()
         )  # Track which directories we're watching
 
@@ -35,13 +51,18 @@ class ShaderWatcher:
         self.running = True
 
     def watch_file(self, file_path: str, callback: Callable[[], None]) -> None:
-        """Start watching a shader file and call callback when it changes"""
+        """Start watching a shader file and call callback when it changes.
+
+        Args:
+            file_path: The path to the shader file to watch.
+            callback: The callback function to execute on change.
+        """
         if self.disabled:
             return
 
         path = Path(file_path).absolute()
         if not path.exists():
-            log.warning(f"Warning: Shader file {path} does not exist")
+            log.warning("Warning: Shader file %s does not exist", path)
             return
 
         # Add to watched files
@@ -59,12 +80,17 @@ class ShaderWatcher:
             handler = ShaderFileHandler(self)
             self.observer.schedule(handler, parent, recursive=False)
             self.watched_paths.add(parent)
-            log.debug(f"Watching directory for changes: {parent}")
+            log.debug("Watching directory for changes: %s", parent)
 
     def remove_watch(
         self, file_path: str, callback: Callable[[], None]
     ) -> None:
-        """Stop watching a file"""
+        """Stop watching a file.
+
+        Args:
+            file_path: The path to the shader file.
+            callback: The callback function to unregister.
+        """
         if self.disabled:
             return
 
@@ -76,7 +102,14 @@ class ShaderWatcher:
                 self.watched_files.pop(str_path, None)
 
     def check_modified(self, path: str) -> bool:
-        """Check if a file has been modified since last check"""
+        """Check if a file has been modified since last check.
+
+        Args:
+            path: The path to the file to check.
+
+        Returns:
+            True if modified, False otherwise.
+        """
         path_obj = Path(path)
         if not path_obj.exists():
             return False
@@ -90,8 +123,8 @@ class ShaderWatcher:
             return True
         return False
 
-    def stop(self):
-        """Stop the file watcher"""
+    def stop(self) -> None:
+        """Stop the file watcher."""
         if self.running and not self.disabled:
             self.observer.stop()
             self.observer.join()
@@ -99,18 +132,26 @@ class ShaderWatcher:
 
 
 class ShaderFileHandler(FileSystemEventHandler):
-    def __init__(self, watcher: ShaderWatcher):
+    """Event handler for shader file changes.
+
+    Attributes:
+        watcher: The ShaderWatcher instance associated with this handler.
+    """
+
+    def __init__(self, watcher: ShaderWatcher) -> None:
+        """Initializes the ShaderFileHandler with a watcher."""
         self.watcher = watcher
 
-    def on_modified(self, event):
+    def on_modified(self, event: Any) -> None:
+        """Handles the file modified event."""
         if not event.is_directory and event.src_path in self.watcher.callbacks:
             if self.watcher.check_modified(event.src_path):
-                log.debug(f"Reloading shader: {event.src_path}")
+                log.debug("Reloading shader: %s", event.src_path)
                 for callback in list(self.watcher.callbacks[event.src_path]):
                     try:
                         callback()
                     except Exception as e:
-                        log.error(f"Error in shader reload callback: {e}")
+                        log.error("Error in shader reload callback: %s", e)
 
 
 # Global shader watcher instance

@@ -1,34 +1,59 @@
+"""Message Board GUI components."""
+
+from __future__ import annotations
+
 import time
+from typing import Any, Callable
 
 import ttkbootstrap as ttk
-from ttkbootstrap.constants import *
+from ttkbootstrap.constants import (
+    BOTH,
+    END,
+    LEFT,
+    RIGHT,
+    VERTICAL,
+    YES,
+    E,
+    W,
+    X,
+    Y,
+)
 from ttkbootstrap.scrolled import ScrolledText
 
-from soulscape.core.social import MessageBoard
+from soulscape.core.social import Message, MessageBoard, Operator
 
 
 class MessageBoardWindow(ttk.Toplevel):
-    def __init__(self, parent):
+    """Window for displaying the message board."""
+
+    def __init__(
+        self,
+        parent: ttk.Window,
+        on_post: Callable[[int, str, str], None] | None = None,
+        on_reply: Callable[[int, str, str, str], None] | None = None,
+    ):
+        """Initializes the message board window.
+
+        Args:
+            parent: The parent window.
+            on_post: Callback for creating a post.
+            on_reply: Callback for creating a reply.
+        """
         super().__init__(title="Soulscape Message Board", master=parent)
         self.geometry("800x600")
-
-        # Apply theme only if we were the root, but we are Toplevel.
-        # However, ttkbootstrap styles are global to the app usually.
-        # We assume the main app might not be ttkbootstrap aware,
-        # so we might need to style manually or hope it applies.
-        # Note: If parent isn't ttkbootstrap, this might look odd,
-        # but style is usually global in Tkinter.
-
         self.board = MessageBoard()
-        self.current_thread_id = None
+        self.on_post = on_post
+        self.on_reply = on_reply
+        self.current_thread_id: str | None = None
 
         self._setup_ui()
         self._refresh_data()
 
-        # Auto-refresh every 5 seconds
-        self.after(5000, self._auto_refresh)
+        # Auto-refresh every 0.5 second
+        self.after(500, self._auto_refresh)
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
+        """Sets up the user interface."""
         # Main Container with padding
         main_container = ttk.Frame(self, padding=20)
         main_container.pack(fill=BOTH, expand=YES)
@@ -105,7 +130,8 @@ class MessageBoardWindow(ttk.Toplevel):
         # Bindings
         self.tree.bind("<Double-1>", self._on_item_double_click)
 
-    def _refresh_data(self):
+    def _refresh_data(self) -> None:
+        """Refreshes the message data from the board."""
         self.board._load_data()
 
         # Clear existing
@@ -125,15 +151,27 @@ class MessageBoardWindow(ttk.Toplevel):
                 values=(post.author_name, post.content, ts_str),
             )
 
-    def _auto_refresh(self):
+    def _auto_refresh(self) -> None:
+        """Automatically refreshes data if the window is open."""
         if self.winfo_exists():
             self._refresh_data()
-            self.after(5000, self._auto_refresh)
+            self.after(500, self._auto_refresh)
 
-    def _show_post_dialog(self):
-        PostDialog(self, self.board, on_success=self._refresh_data)
+    def _show_post_dialog(self) -> None:
+        """Shows the dialog to create a new post."""
+        PostDialog(
+            self,
+            self.board,
+            on_success=self._refresh_data,
+            on_post=self.on_post,
+        )
 
-    def _on_item_double_click(self, event):
+    def _on_item_double_click(self, event: Any) -> None:
+        """Handles double-click events on tree items.
+
+        Args:
+            event: The click event.
+        """
         selection = self.tree.selection()
         if not selection:
             return
@@ -141,19 +179,36 @@ class MessageBoardWindow(ttk.Toplevel):
         item_id = selection[0]
         post = self.board.posts.get(item_id)
         if post:
-            ThreadViewDialog(self, self.board, post)
+            ThreadViewDialog(self, self.board, post, on_reply=self.on_reply)
 
 
 class PostDialog(ttk.Toplevel):
-    def __init__(self, parent, board, on_success):
+    """Dialog for creating a new post."""
+
+    def __init__(
+        self,
+        parent: ttk.Window,
+        board: MessageBoard,
+        on_success: Callable[[], None],
+        on_post: Callable[[int, str, str], None] | None = None,
+    ):
+        """Initializes the post dialog.
+
+        Args:
+            parent: Parent window.
+            board: MessageBoard instance.
+            on_success: Callback to run on successful post creation.
+        """
         super().__init__(title="New Transmission", master=parent)
         self.geometry("500x300")
         self.board = board
         self.on_success = on_success
+        self.on_post = on_post
 
         self._setup_ui()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
+        """Sets up the dialog UI."""
         container = ttk.Frame(self, padding=20)
         container.pack(fill=BOTH, expand=YES)
 
@@ -183,27 +238,73 @@ class PostDialog(ttk.Toplevel):
             btn_frame, text="Broadcast", bootstyle="success", command=self._send
         ).pack(side=RIGHT)
 
-    def _send(self):
+    def _send(self) -> None:
+        """Sends the message and closes the dialog."""
         content = self.text_area.text.get("1.0", END).strip()
         if content:
-            # TODO: Get actual user ID/Name if available contextually
-            self.board.create_post(999, "Operator", content)
+            # contextually using the Operator class for now
+            if self.on_post:
+                self.on_post(Operator.ID, Operator.NAME, content)
+            else:
+                self.board.create_post(Operator.ID, Operator.NAME, content)
+
+            # Allow time for main process to save and us to reload?
+            # Ideally we'd wait for confirmation but async...
+            # For now, let's just close. The auto-refresh will pick it up.
             self.on_success()
             self.destroy()
 
 
 class ThreadViewDialog(ttk.Toplevel):
-    def __init__(self, parent, board, post):
+    """Dialog for viewing a message thread."""
+
+    def __init__(
+        self,
+        parent: ttk.Window,
+        board: MessageBoard,
+        post: Message,
+        on_reply: Callable[[int, str, str, str], None] | None = None,
+    ):
+        """Initializes the thread view dialog.
+
+        Args:
+            parent: Parent window.
+            board: MessageBoard instance.
+            post: The root post or focused message.
+            on_reply: Callback for creating a reply.
+        """
         super().__init__(
             title=f"Secure Channel: {post.author_name}", master=parent
         )
         self.geometry("600x700")
         self.board = board
         self.post = post
+        self.on_reply = on_reply
 
         self._setup_ui()
 
-    def _setup_ui(self):
+        # Start auto-refresh
+        self.after(500, self._auto_refresh)
+
+    def _auto_refresh(self) -> None:
+        """Automatically refreshes the thread data."""
+        if not self.winfo_exists():
+            return
+
+        # Reload from disk/memory source
+        self.board._load_data()
+
+        # Check if our post still exists or has updates
+        updated_post = self.board.posts.get(self.post.message_id)
+
+        if updated_post:
+            self.post = updated_post
+            self._render_thread()
+
+        self.after(500, self._auto_refresh)
+
+    def _setup_ui(self) -> None:
+        """Sets up the thread view UI."""
         container = ttk.Frame(self, padding=20)
         container.pack(fill=BOTH, expand=YES)
 
@@ -245,7 +346,8 @@ class ThreadViewDialog(ttk.Toplevel):
             command=self._reply,
         ).pack(side=RIGHT)
 
-    def _render_thread(self):
+    def _render_thread(self) -> None:
+        """Renders the entire thread."""
         self.text_area.text.config(state="normal")
         self.text_area.text.delete("1.0", END)
 
@@ -260,12 +362,16 @@ class ThreadViewDialog(ttk.Toplevel):
         self.text_area.text.config(state="disabled")
         self.text_area.text.see(END)
 
-    def _render_replies(self, parent, level):
+    def _render_replies(self, parent: Message, level: int) -> None:
+        """Recursively renders replies."""
         for reply in parent.replies:
             self._insert_post(reply, level=level)
             self._render_replies(reply, level + 1)
 
-    def _insert_post(self, post, is_root=False, level=0):
+    def _insert_post(
+        self, post: Message, is_root: bool = False, level: int = 0
+    ) -> None:
+        """Inserts a single post into the text area."""
         indent_tag = f"indent_{level}"
         self.text_area.text.tag_config(
             indent_tag, lmargin1=20 * level, lmargin2=20 * level
@@ -284,13 +390,19 @@ class ThreadViewDialog(ttk.Toplevel):
             END, f"{post.content}\n\n", ("content", indent_tag)
         )
 
-    def _reply(self):
+    def _reply(self) -> None:
+        """Sends a reply."""
         content = self.reply_entry.get().strip()
         if content:
-            self.board.create_reply(
-                999, "Operator", self.post.message_id, content
-            )
-            self.board._load_data()
-            self.post = self.board.posts.get(self.post.message_id)
-            self._render_thread()
+            if self.on_reply:
+                self.on_reply(
+                    Operator.ID, Operator.NAME, self.post.message_id, content
+                )
+            else:
+                self.board.create_reply(
+                    self.post.message_id, Operator.ID, Operator.NAME, content
+                )
+
+            # self.board._load_data() # Main process handles save
+            # We rely on auto-refresh or manual refresh to see it back
             self.reply_entry.delete(0, END)

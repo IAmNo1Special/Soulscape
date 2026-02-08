@@ -1,14 +1,22 @@
+"""Module defining the statistics system for Souls.
+
+This module includes the core Stat enum, the StatSet data structure, and the
+SoulStats class for managing base stats, IVs, EVs, and leveling logic.
+"""
+
 from __future__ import annotations
 
 import random
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Dict
+from typing import Any
 
 from soulscape.core.mechanics import Nature
 
 
 class Stat(str, Enum):
+    """Enumeration of core stats."""
+
     HP = "HP"
     ATTACK = "Attack"
     DEFENSE = "Defense"
@@ -20,7 +28,17 @@ class Stat(str, Enum):
 
 @dataclass
 class StatSet:
-    """Holds a set of 6 core stats."""
+    """Holds a set of 6 core stats + Vision.
+
+    Attributes:
+        hp: Hit Points.
+        attack: Physical Attack.
+        defense: Physical Defense.
+        sp_atk: Special Attack.
+        sp_def: Special Defense.
+        speed: Speed.
+        vision: Sensory Range.
+    """
 
     hp: int = 0
     attack: int = 0
@@ -31,6 +49,14 @@ class StatSet:
     vision: int = 0
 
     def get(self, stat: Stat) -> int:
+        """Retrieves the value of a specific stat.
+
+        Args:
+            stat: The Stat enum to retrieve.
+
+        Returns:
+            The integer value of the stat.
+        """
         if stat == Stat.HP:
             return self.hp
         elif stat == Stat.ATTACK:
@@ -47,18 +73,37 @@ class StatSet:
             return self.vision
         return 0
 
-    def to_dict(self) -> Dict[str, int]:
+    def to_dict(self) -> dict[str, int]:
+        """Serializes the StatSet to a dictionary.
+
+        Returns:
+            A dictionary mapping stat attributes to values.
+        """
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, int]) -> "StatSet":
+    def from_dict(cls, data: dict[str, int]) -> StatSet:
+        """Creates a StatSet from a dictionary.
+
+        Args:
+            data: Dictionary of stat values.
+
+        Returns:
+            A new StatSet instance.
+        """
         return cls(**data) if data else cls()
 
 
 @dataclass
 class SoulStats:
-    """
-    Manages the stats of a Soul using the Base/IV/EV system.
+    """Manages the stats of a Soul using the Base/IV/EV system.
+
+    Attributes:
+        base: Base stats (species specific).
+        ivs: Individual Values (0-31).
+        evs: Effort Values (trained).
+        nature: Determining nature for stat modifiers.
+        level: Current level (1-100).
     """
 
     base: StatSet
@@ -68,8 +113,15 @@ class SoulStats:
     level: int = 1
 
     @classmethod
-    def create_random(cls, level: int = 5) -> "SoulStats":
-        """Creates a SoulStats instance with random IVs and Nature, and default Base stats."""
+    def create_random(cls, level: int = 5) -> SoulStats:
+        """Creates a SoulStats instance with random IVs/Nature and default Base stats.
+
+        Args:
+            level: The starting level for the stats.
+
+        Returns:
+            A new SoulStats instance.
+        """
         # Default Base Stats (Mew-like 100s for now)
         base = StatSet(
             hp=100,
@@ -101,10 +153,17 @@ class SoulStats:
         return cls(base=base, ivs=ivs, evs=evs, level=level, nature=nature)
 
     def calculate_value(self, stat: Stat) -> int:
-        """
-        Calculates the final effective value of a stat using the Gen 3+ formula.
+        """Calculates the final effective value of a stat.
+
+        Uses the Gen 3+ formula:
         HP: ((2 * Base + IV + (EV/4)) * Level / 100) + Level + 10
         Other: (((2 * Base + IV + (EV/4)) * Level / 100) + 5) * Nature
+
+        Args:
+            stat: The Stat enum to calculate.
+
+        Returns:
+            The calculated integer value of the stat.
         """
         base = self.base.get(stat)
         iv = self.ivs.get(stat)
@@ -125,33 +184,45 @@ class SoulStats:
 
     @property
     def max_hp(self) -> int:
+        """Calculated Maximum HP."""
         return self.calculate_value(Stat.HP)
 
     @property
     def attack(self) -> int:
+        """Calculated Attack stat."""
         return self.calculate_value(Stat.ATTACK)
 
     @property
     def defense(self) -> int:
+        """Calculated Defense stat."""
         return self.calculate_value(Stat.DEFENSE)
 
     @property
     def sp_atk(self) -> int:
+        """Calculated Special Attack stat."""
         return self.calculate_value(Stat.SP_ATK)
 
     @property
     def sp_def(self) -> int:
+        """Calculated Special Defense stat."""
         return self.calculate_value(Stat.SP_DEF)
 
     @property
     def speed(self) -> int:
+        """Calculated Speed stat."""
         return self.calculate_value(Stat.SPEED)
 
     @property
     def vision(self) -> int:
+        """Calculated Vision stat."""
         return self.calculate_value(Stat.VISION)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
+        """Serializes SoulStats to a dictionary.
+
+        Returns:
+            A dictionary containing all stat components.
+        """
         return {
             "base": self.base.to_dict(),
             "ivs": self.ivs.to_dict(),
@@ -161,7 +232,15 @@ class SoulStats:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict) -> "SoulStats":
+    def from_dict(cls, data: dict[str, Any]) -> SoulStats:
+        """Reconstructs SoulStats from a dictionary.
+
+        Args:
+            data: The dictionary containing stat data.
+
+        Returns:
+            A new SoulStats instance.
+        """
         return cls(
             base=StatSet.from_dict(data.get("base", {})),
             ivs=StatSet.from_dict(data.get("ivs", {})),
