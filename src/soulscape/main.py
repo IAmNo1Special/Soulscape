@@ -447,11 +447,12 @@ class SoulscapeApp:
                         MessageBoard().create_post(
                             data["author_id"],
                             data["author_name"],
+                            data["title"],
                             data["content"],
                         )
                         log.info(
                             "Created operator post via GUI: %s",
-                            data["content"][:20],
+                            data["title"],
                         )
 
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_REPLY:
@@ -467,6 +468,40 @@ class SoulscapeApp:
                             "Created operator reply via GUI: %s",
                             data["content"][:20],
                         )
+
+                elif cmd_type == GuiCommand.DELETE_SOCIAL_MESSAGE:
+                    data = msg.get("data")
+                    if data:
+                        success = MessageBoard().delete_message(
+                            data["requester_id"], data["message_id"]
+                        )
+                        if success:
+                            log.info(
+                                "Deleted social message: %s", data["message_id"]
+                            )
+                        else:
+                            log.warning(
+                                "Failed to delete social message: %s",
+                                data["message_id"],
+                            )
+
+                elif cmd_type == GuiCommand.EDIT_SOCIAL_MESSAGE:
+                    data = msg.get("data")
+                    if data:
+                        success = MessageBoard().edit_message(
+                            data["requester_id"],
+                            data["message_id"],
+                            data["content"],
+                        )
+                        if success:
+                            log.info(
+                                "Edited social message: %s", data["message_id"]
+                            )
+                        else:
+                            log.warning(
+                                "Failed to edit social message: %s",
+                                data["message_id"],
+                            )
 
                 elif cmd_type == GuiCommand.SHOW_SOUL_SETTINGS:
                     data = msg.get("data")

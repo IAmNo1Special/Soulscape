@@ -28,6 +28,8 @@ class GuiCommand(str, Enum):
     SHOW_MESSAGE_BOARD = "SHOW_MESSAGE_BOARD"
     CREATE_SOCIAL_POST = "CREATE_SOCIAL_POST"
     CREATE_SOCIAL_REPLY = "CREATE_SOCIAL_REPLY"
+    DELETE_SOCIAL_MESSAGE = "DELETE_SOCIAL_MESSAGE"
+    EDIT_SOCIAL_MESSAGE = "EDIT_SOCIAL_MESSAGE"
     EXIT = "EXIT"
 
 
@@ -225,13 +227,16 @@ class GuiService:
             or not self.message_board_window.winfo_exists()
         ):
             # Define callbacks to route requests back to main process
-            def on_post(author_id: int, author_name: str, content: str) -> None:
+            def on_post(
+                author_id: int, author_name: str, title: str, content: str
+            ) -> None:
                 self.result_queue.put(
                     {
                         "type": GuiCommand.CREATE_SOCIAL_POST,
                         "data": {
                             "author_id": author_id,
                             "author_name": author_name,
+                            "title": title,
                             "content": content,
                         },
                     }
@@ -255,8 +260,37 @@ class GuiService:
                     }
                 )
 
+            def on_delete(requester_id: int, message_id: str) -> None:
+                self.result_queue.put(
+                    {
+                        "type": GuiCommand.DELETE_SOCIAL_MESSAGE,
+                        "data": {
+                            "requester_id": requester_id,
+                            "message_id": message_id,
+                        },
+                    }
+                )
+
+            def on_edit(
+                requester_id: int, message_id: str, content: str
+            ) -> None:
+                self.result_queue.put(
+                    {
+                        "type": GuiCommand.EDIT_SOCIAL_MESSAGE,
+                        "data": {
+                            "requester_id": requester_id,
+                            "message_id": message_id,
+                            "content": content,
+                        },
+                    }
+                )
+
             self.message_board_window = MessageBoardWindow(
-                self.root, on_post=on_post, on_reply=on_reply
+                self.root,
+                on_post=on_post,
+                on_reply=on_reply,
+                on_delete=on_delete,
+                on_edit=on_edit,
             )
             # It's a Toplevel, so we don't need to call show() unless we made it that way
             # MessageBoardWindow.__init__ calls super().__init__ which creates the window.

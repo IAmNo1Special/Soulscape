@@ -25,6 +25,7 @@ class Message:
     message_id: str
     author_id: int
     author_name: str
+    title: str
     content: str
     timestamp: float = field(default_factory=time.time)
     parent_id: str | None = None
@@ -40,6 +41,7 @@ class Message:
             "message_id": self.message_id,
             "author_id": self.author_id,
             "author_name": self.author_name,
+            "title": self.title,
             "content": self.content,
             "timestamp": self.timestamp,
             "parent_id": self.parent_id,
@@ -60,6 +62,7 @@ class Message:
             message_id=data["message_id"],
             author_id=data["author_id"],
             author_name=data["author_name"],
+            title=data["title"],
             content=data["content"],
             timestamp=data["timestamp"],
             parent_id=data.get("parent_id"),
@@ -128,13 +131,14 @@ class MessageBoard:
             log.error(f"Failed to save message board data: {e}")
 
     def create_post(
-        self, author_id: int, author_name: str, content: str
+        self, author_id: int, author_name: str, title: str, content: str
     ) -> Message:
         """Creates and saves a new root post.
 
         Args:
             author_id: ID of the author.
             author_name: Name of the author.
+            title: Title of the thread.
             content: Content of the message.
 
         Returns:
@@ -145,6 +149,7 @@ class MessageBoard:
             message_id=message_id,
             author_id=author_id,
             author_name=author_name,
+            title=title,
             content=content,
         )
         self.posts[message_id] = post
@@ -175,6 +180,7 @@ class MessageBoard:
             message_id=reply_id,
             author_id=author_id,
             author_name=author_name,
+            title="",  # Replies don't have titles
             content=content,
             parent_id=parent_id,
         )
@@ -186,6 +192,51 @@ class MessageBoard:
             self._save_data()
             return reply
         return None
+
+    def edit_message(
+        self, author_id: int, message_id: str, new_content: str
+    ) -> bool:
+        """Edits an existing message if the author matches.
+
+        Args:
+            author_id: ID of the requester.
+            message_id: ID of the message to edit.
+            new_content: The new text content.
+
+        Returns:
+            True if edited, False otherwise.
+        """
+        # Check top-level posts
+        if message_id in self.posts:
+            if (
+                self.posts[message_id].author_id == author_id
+                or author_id == Operator.ID
+            ):
+                self.posts[message_id].content = new_content
+                self._save_data()
+                return True
+            return False
+
+        # Recursive search
+        for post in self.posts.values():
+            if self._edit_recursive(post, author_id, message_id, new_content):
+                self._save_data()
+                return True
+        return False
+
+    def _edit_recursive(
+        self, parent: Message, author_id: int, target_id: str, new_content: str
+    ) -> bool:
+        """Helper to find and edit valid reply."""
+        for reply in parent.replies:
+            if reply.message_id == target_id:
+                if reply.author_id == author_id or author_id == Operator.ID:
+                    reply.content = new_content
+                    return True
+                return False
+            if self._edit_recursive(reply, author_id, target_id, new_content):
+                return True
+        return False
 
     def delete_message(self, author_id: int, message_id: str) -> bool:
         """Deletes a message if the author matches.
@@ -199,7 +250,10 @@ class MessageBoard:
         """
         # Check top-level posts first
         if message_id in self.posts:
-            if self.posts[message_id].author_id == author_id:
+            if (
+                self.posts[message_id].author_id == author_id
+                or author_id == Operator.ID
+            ):
                 del self.posts[message_id]
                 self._save_data()
                 return True
@@ -227,7 +281,7 @@ class MessageBoard:
         """
         for i, reply in enumerate(parent.replies):
             if reply.message_id == target_id:
-                if reply.author_id == author_id:
+                if reply.author_id == author_id or author_id == Operator.ID:
                     parent.replies.pop(i)
                     return True
                 return False
@@ -296,13 +350,14 @@ class Operator:
     NAME = "Operator"
 
     @staticmethod
-    def post(content: str) -> None:
+    def post(title: str, content: str) -> None:
         """Creates a new post as the Operator.
 
         Args:
+            title: The thread title.
             content: The message content.
         """
-        MessageBoard().create_post(Operator.ID, Operator.NAME, content)
+        MessageBoard().create_post(Operator.ID, Operator.NAME, title, content)
 
     @staticmethod
     def reply(parent_id: str, content: str) -> None:

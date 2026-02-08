@@ -1,10 +1,7 @@
-"""Logical entity representing a soul in the Soulscape universe.
-
-This module defines the Soul class, which manages soul state, needs,
-simulation logic, and AI-driven decision making using the ADK.
+"""This module defines the Soul class, which manages soul state, biology,
+physics-based movement, and AI-driven decision-making using the ADK.
 """
 
-# soul.py
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +25,7 @@ from PIL import Image, ImageDraw
 
 # Import constants
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
-from soulscape.core.gender import Gender
+from soulscape.core.gender import Gender, all_genders
 from soulscape.core.items import Drink, Food, Inventory
 from soulscape.core.marketplace import Marketplace
 from soulscape.core.social import MessageBoard
@@ -53,21 +50,22 @@ if TYPE_CHECKING:
 
 # --- Main Application Class ---
 class Soul:
-    """Logical entity representing a soul.
+    """An autonomous entity within the Soulscape simulation.
 
-    Manages its own state, biology, physics, and AI-driven decision making.
-    Optimized for overlay rendering without an internal window.
+    The Soul class is the core actor in the ecosystem. It possesses
+    needs (satiety, hydration, etc...), digital presence in the window environment,
+    and an AI 'brain' (LlmAgent) that allows it to perceive its surroundings
+    and take meaningful actions via available tools.
 
     Attributes:
-        soul_id: Unique identifier for this soul.
-        name: Full name of the soul.
-        satiety: Current satiety level (0-100).
-        hydration: Current hydration level (0-100).
-        current_health: Current health points.
-        stats: SoulStats object containing base attributes.
-        species: The species of the soul.
-        gender: The gender of the soul.
-        current_location: The soul's current location in the world.
+        soul_id: A unique integer identifier for the soul instance.
+        name: The display name of the soul.
+        species: The Species object defining biological defaults.
+        gender: The Gender object defining reproductive capabilities.
+        stats: SoulStats containing HP, attack, defense, and vision.
+        inventory: An Inventory instance for holding items.
+        essence: The currency used for social and magical actions.
+        window_physics: A SoulPhysics instance handling screen movement.
     """
 
     _current_soul_id: int = 0
@@ -81,17 +79,19 @@ class Soul:
         soul_registry: list[Soul] | None = None,
         **kwargs: Any,
     ) -> Soul:
-        """Reconstructs a Soul instance from a dictionary.
+        """Reconstructs a Soul instance from its serialized representation.
 
         Args:
-            data: Serialization dictionary.
-            window_instance: The pyglet window instance.
-            on_right_click: Callback for right-click.
-            on_move_end: Callback for move end.
-            soul_registry: List of all active souls.
+            data: A dictionary containing the soul's serialized state.
+            on_right_click: An optional callback invoked when the soul is
+                right-clicked.
+            on_move_end: An optional callback invoked when the soul finishes a
+                movement action.
+            soul_registry: A list of all active souls in the simulation.
+            **kwargs: Additional configuration parameters like screen_width.
 
         Returns:
-            A new Soul instance with state restored.
+            A new Soul instance with its state fully restored.
         """
         name = data.get("name")
         orb_color = tuple(data.get("orb_color", (0.56, 0.93, 0.56)))
@@ -153,25 +153,27 @@ class Soul:
         screen_width: int = 1920,
         screen_height: int = 1080,
     ) -> None:
-        """Initializes a Soul instance.
+        """Initializes a new Soul entity.
 
         Args:
-            window_instance: REMOVED
-            orb_color_rgb: RGB tuple for the soul's main color.
-            aura_color_rgb: RGB tuple for the soul's aura color.
-            name: Full name of the soul. Defaults to None.
-            on_right_click: Callback for right-click events. Defaults to None.
-            on_move_end: Callback triggered when movement stops. Defaults to None.
-            initial_position: Starting (x, y) coordinates. Defaults to (0, 0).
-            stats: Initial SoulStats. If None, random stats are generated.
-            species: The species of the soul. If None, defaults to Human.
-            birth_mother: Reference to the mother Soul. Defaults to None.
-            birth_father: Reference to the father Soul. Defaults to None.
-            gender: The gender of the soul. If None, random choice from species.
-            current_location: Initial location string. Defaults to random.
-            soul_registry: List of all active souls for environmental awareness.
-            screen_width: Width of the screen.
-            screen_height: Height of the screen.
+            orb_color_rgb: A tuple of (red, green, blue) floats (0.0-1.0)
+                representing the soul's central orb color.
+            aura_color_rgb: A tuple of (red, green, blue) floats (0.0-1.0)
+                representing the soul's surrounding aura color.
+            name: The soul's full name. If None, a default name will be assigned.
+            on_right_click: Callback triggered on right-click.
+            on_move_end: Callback triggered when a movement target is reached.
+            initial_position: The starting (x, y) screen coordinates.
+            stats: Pre-defined SoulStats. If None, random stats are generated.
+            species: The biological species. Defaults to Human if None.
+            birth_mother: The soul's mother instance, if applicable.
+            birth_father: The soul's father instance, if applicable.
+            gender: The soul's gender. If None, a random gender from its species
+                definition is selected.
+            current_location: The initial location name for the soul.
+            soul_registry: A reference to the global list of active souls.
+            screen_width: The width of the desktop in pixels.
+            screen_height: The height of the desktop in pixels.
         """
         Soul._current_soul_id += 1
         self.soul_id: int = Soul._current_soul_id
@@ -179,17 +181,18 @@ class Soul:
         # self.window = window_instance  # Decoupled
 
         # Initialize position
-        self.x, self.y = initial_position
-        self.draw_y = self.y  # Y position for drawing (includes hover)
+        self.x: float = float(initial_position[0])
+        self.y: float = float(initial_position[1])
+        self.draw_y: float = self.y  # Y position for drawing (includes hover)
 
         self.orb_color_rgb = orb_color_rgb
         self.aura_color_rgb = aura_color_rgb
 
-        self.on_right_click = on_right_click
-        self.on_move_end = on_move_end
-        self.soul_registry = soul_registry or []
-        self.screen_width = screen_width
-        self.screen_height = screen_height
+        self.on_right_click: Any = on_right_click
+        self.on_move_end: Any = on_move_end
+        self.soul_registry: list[Soul] = soul_registry or []
+        self.screen_width: int = screen_width
+        self.screen_height: int = screen_height
 
         # --- Simulation Logic Initialization ---
 
@@ -208,9 +211,9 @@ class Soul:
             self.species = species
 
         if gender is None:
-            self.gender: Gender = random.choice(self.species.genders)
+            self.gender: Gender = random.choice(all_genders)
         else:
-            self.gender = gender
+            self.gender: Gender = gender
 
         # Name Handling
         self.first_name: str | None = None
@@ -252,14 +255,14 @@ class Soul:
         self.citizenship: list[str] = []
 
         # Known Names (Simple lists for now, logic from Isekai.py used constant lists)
-        self.known_male_first_names = [
+        self.known_male_first_names: list[str] = [
             "Jackson",
             "John",
             "Jack",
             "Malcom",
             "Fatin",
         ]
-        self.known_female_first_names = [
+        self.known_female_first_names: list[str] = [
             "Jane",
             "Lily",
             "Mallory",
@@ -268,21 +271,21 @@ class Soul:
         ]
 
         # Needs (Values drain every 1.0s update interval)
-        self.satiety = 100
-        self.hydration = 100
-        self.satiety_drain_rate = (
+        self.satiety: float = 100.0
+        self.hydration: float = 100.0
+        self.satiety_drain_rate: float = (
             0.2  # Takes ~8.3 mins to drain from 100 to 0 (1 point every 5s)
         )
-        self.hydration_drain_rate = (
+        self.hydration_drain_rate: float = (
             0.2  # Takes ~8.3 mins to drain from 100 to 0 (1 point every 5s)
         )
-        self.activity_level = (
+        self.activity_level: str = (
             "resting"  # Can be 'resting', 'active', 'fighting'.
         )
 
         # Initialize Inventory
-        self.inventory = Inventory(capacity=10)
-        self.essence = 100.00  # Default starting currency
+        self.inventory: Inventory = Inventory(capacity=10)
+        self.essence: float = 100.00  # Default starting currency
 
         # Initialize Marketplace Connection
         self.marketplace = Marketplace()
@@ -299,15 +302,15 @@ class Soul:
         self.width = SOUL_WIDTH
         self.height = SOUL_HEIGHT
 
-        self.time = 0.0
-        self.bulge_position = [0.0, 0.0, 0.0]
-        self.aura_visible = True
-        self.camera_distance = 1.0
+        self.time: float = 0.0
+        self.bulge_position: list[float] = [0.0, 0.0, 0.0]
+        self.aura_visible: bool = True
+        self.camera_distance: float = 1.0
 
         # Updates
-        self.last_update_time = time.time()
-        self.update_interval = 1.0  # seconds for simulation tick
-        self._simulation_time_accumulator = 0.0
+        self.last_update_time: float = time.time()
+        self.update_interval: float = 1.0  # seconds for simulation tick
+        self._simulation_time_accumulator: float = 0.0
 
         # Sensory System
         self.sensations: list[str] = []
@@ -345,6 +348,7 @@ HINTS:
   * Posting a new thread costs 5.00 Essence.
   * Replying to a thread costs 2.00 Essence.
   * Reading is free. Check it often (`social_read`) to find friends, trade partners, or share knowledge.
+Make sure you only ever use tools sequentially. NEVER use one or more tools in parallel.
 
 YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD! 
 """,
@@ -362,6 +366,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                         self.social_post,
                         self.social_read,
                         self.social_reply,
+                        self.social_edit,
                         self.social_delete,
                     ],
                 )
@@ -394,18 +399,20 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             log.warning("GOOGLE_API_KEY not found. Agent disabled.")
             self.agent = None
 
-        self.decision_interval = 60.0  # Check for agent decision every 30 sec
+        self.decision_interval: float = (
+            60.0  # Check for agent decision every 30 sec
+        )
         # Initialize last_decision_time to trigger the first decision immediately
         # But add a small delay (e.g. 5s) to allow the app to fully load/render first
-        self.last_decision_time = -self.decision_interval + 5.0
+        self.last_decision_time: float = -self.decision_interval + 5.0
 
     # --- Simulation Methods ---
 
     def get_full_name(self) -> str:
-        """Constructs the full name from first name and family name.
+        """Assembles the first and family names into a readable format.
 
         Returns:
-            The full name as a string.
+            The combined full name, or a generic placeholder if not named.
         """
         if self.first_name and self.family_name:
             return f"{self.first_name} {self.family_name}"
@@ -414,121 +421,84 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         return f"Soul #{self.soul_id}"
 
     def _set_birth_datetime(self) -> None:
-        """Sets the birth datetime to the current system time."""
+        """Records the soul's precise birth time."""
         self.birth_datetime = datetime.now()
 
     def _set_hometown(self) -> None:
-        """Sets the hometown to the current location."""
+        """Sets the hometown to current location for reference."""
         self.hometown = self.current_location
 
     def get_id(self) -> int:
-        """Returns the soul's unique ID.
-
-        Returns:
-            The soul_id as an integer.
-        """
+        """Returns the unique numeric ID of the soul."""
         return self.soul_id
 
     def get_species(self) -> Species:
-        """Returns the soul's species.
-
-        Returns:
-            A Species instance.
-        """
+        """Returns the species object associated with this soul."""
         return self.species
 
     def get_gender(self) -> str:
-        """Returns the name of the soul's gender.
-
-        Returns:
-            A string representing the gender name.
-        """
+        """Returns the string name of the soul's gender."""
         return self.gender.gender_name if self.gender else "Unknown"
 
     def get_current_health(self) -> int:
-        """Returns the current health points.
-
-        Returns:
-            Current health as an integer.
-        """
+        """Returns the current HP level."""
         return self.current_health
 
     def get_max_health(self) -> int:
-        """Returns the maximum health points from stats.
-
-        Returns:
-            Maximum health as an integer.
-        """
+        """Returns the maximum HP level from biological stats."""
         return self.stats.max_hp
 
     def get_birth_datetime(self) -> datetime:
-        """Returns the birth datetime recorded at creation.
-
-        Returns:
-            A datetime object.
-        """
+        """Returns the timestamp of when this soul was created."""
         return self.birth_datetime
 
     def get_hometown(self) -> str:
-        """Returns the recorded hometown.
-
-        Returns:
-            The hometown location as a string.
-        """
+        """Returns the name of the place where the soul was born."""
         return self.hometown
 
     def stop(self) -> None:
-        """Stops the soul simulation and cleans up resources."""
+        """Gracefully halts the soul simulation and releases resources."""
         self.cleanup()
 
     def get_age(self) -> int:
-        """Calculates the age of the soul in seconds since birth.
-
-        Returns:
-            Age in seconds as an integer.
-        """
+        """Calculates time elapsed since birth in seconds."""
         if hasattr(self, "birth_datetime"):
-            current_datetime = datetime.now()
+            current_datetime: datetime = datetime.now()
             time_since_birth = current_datetime - self.birth_datetime
-            return (time_since_birth).seconds
+            return int(time_since_birth.total_seconds())
         return 0
 
     def is_alive(self) -> bool:
-        """Checks if the soul is currently alive (health > 0).
-
-        Returns:
-            True if alive, False otherwise.
-        """
+        """Checks if the soul's vitality is above zero."""
         return self.current_health > 0
 
     def is_dead(self) -> bool:
-        """Checks if the soul is currently dead (health <= 0).
-
-        Returns:
-            True if dead, False otherwise.
-        """
+        """Checks if the soul's vitality has reached zero."""
         return self.current_health <= 0
 
     def decrease_satiety(self) -> None:
-        """Decreases satiety based on activity level."""
+        """Naturally drains satiety over time based on current activity.
+
+        This simulates biological energy consumption. More active souls burn
+        energy faster.
+        """
         rate = self.satiety_drain_rate * self.get_activity_multiplier()
         self.satiety = round(self.satiety - rate, 2)
         if self.satiety < 0:
             self.satiety = 0
 
     def decrease_hydration(self) -> None:
-        """Decreases hydration points."""
+        """Naturally drains hydration over time.
+
+        Simulates the constant need for fluids.
+        """
         rate = self.hydration_drain_rate  # No environment factor
         self.hydration = round(self.hydration - rate, 2)
         if self.hydration < 0:
             self.hydration = 0
 
     def get_activity_multiplier(self) -> float:
-        """Returns a multiplier for satiety decrease based on activity level.
-
-        Returns:
-            Float multiplier (1.0, 1.5, or 2.0).
-        """
+        """Returns the energy consumption scale for current behavior."""
         if self.activity_level == "active":
             return 1.5
         elif self.activity_level == "fighting":
@@ -536,7 +506,10 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         return 1.0
 
     def check_status(self) -> None:
-        """Checks satiety and hydration levels and applies penalties if needed."""
+        """Evaluates biological needs and applies starvation/dehydration damage.
+
+        If needs are critically low, the soul's health will begin to wither.
+        """
         if self.is_dead():
             return
 
@@ -554,7 +527,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             print(f"{self.name} is thirsty.")
 
     def apply_health_penalty(self) -> None:
-        """Applies a random health penalty for starvation or dehydration."""
+        """Reduces current HP as a penalty for neglected biological needs."""
         if self.current_health > 0:
             health_penalty = random.randint(1, 5)
             self.current_health -= health_penalty
@@ -568,13 +541,13 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             pass
 
     def eat(self) -> dict[str, Any]:
-        """Consumes a food item from the inventory.
+        """Consumes a food item from the inventory to sate hunger.
 
-        Retrieves the first available Food item from the backpack and consumes it,
-        increasing satiety points.
+        This tool searches the backpack for any available food source. If found,
+        it replenishes the soul's energy and removes the item from inventory.
 
         Returns:
-            A dictionary containing action status and data.
+            A dictionary containing the success status and current satiety data.
         """
         food_items = self.inventory.get_consumables(Food)
         if not food_items:
@@ -598,13 +571,13 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def drink(self) -> dict[str, Any]:
-        """Consumes a drink item from the inventory.
+        """Consumes a drink from the inventory to quench thirst.
 
-        Retrieves the first available Drink item from the backpack and consumes it,
-        increasing hydration points.
+        The soul searches for a liquid refreshment in its backpack. Drinking
+        instantly restores hydration levels and clears the inventory slot.
 
         Returns:
-            A dictionary containing action status and data.
+            A dictionary with status feedback and new hydration levels.
         """
         drink_items = self.inventory.get_consumables(Drink)
         if not drink_items:
@@ -631,23 +604,19 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def set_activity_level(self, level: str) -> None:
-        """Sets the current activity level.
-
-        Args:
-            level: A string, one of 'resting', 'active', or 'fighting'.
-        """
+        """Sets the current physical activity intensity."""
         if level in ["resting", "active", "fighting"]:
             self.activity_level = level
             print(f"{self.name} is now {self.activity_level}.")
 
     def find_food(self) -> dict[str, Any]:
-        """Searches for food in the environment with a chance of success.
+        """Scours the immediate surroundings for sustenance.
 
-        If successful, a Food item is created and added to the soul's inventory.
-        Success rate is fixed at 10%.
+        There is a 10% chance to find edibles. If found, the soul secures the
+        bounty in its backpack for later consumption.
 
         Returns:
-            A dictionary containing action status and data.
+            A dictionary detailing the search outcome and any items found.
         """
         success_rate = 0.1  # 10% chance to find food.
         if random.random() > success_rate:
@@ -682,13 +651,13 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def find_water(self) -> dict[str, Any]:
-        """Searches for water in the environment with a chance of success.
+        """Searches for a clean source of water to fill a bottle.
 
-        If successful, a Drink item is created and added to the soul's inventory.
-        Success rate is fixed at 10%.
+        There is a 10% chance to find water. If found, the soul secures the
+        bounty in its backpack for later consumption.
 
         Returns:
-            A dictionary containing action status and data.
+            A dictionary detailing the search results.
         """
         success_rate = 0.1  # 10% chance to find water.
         if random.random() > success_rate:
@@ -728,7 +697,11 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def look_around(self) -> dict[str, Any]:
-        """Scans the environment for other souls.
+        """Utilizes the soul's sensory organs to perceive other nearby entities.
+
+        Scans the immediate vicinity for other souls. Provides relative
+        directions and distances to any detected presence within its vision
+        radius.
 
         Returns:
             A dictionary containing status, message, and a list of visible souls.
@@ -736,13 +709,13 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         nearby_souls_info = []
 
         # Calculate vision radius (must match _run_agent_step logic)
-        vision_stat = 0
+        vision_stat: float = 0.0
         if self.stats:
-            vision_stat = self.stats.vision
+            vision_stat = float(self.stats.vision)
 
         # Scale radius: Use a moderate base radius so souls can see nearby but not too far.
         # 150px is a good "awareness" zone on screen (300px diameter).
-        vision_radius = max(100, int(vision_stat * 1.5))
+        vision_radius: int = max(100, int(vision_stat * 1.5))
 
         for other in self.soul_registry:
             if other.soul_id == self.soul_id:
@@ -758,12 +731,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
 
             # Simple relative description
             dir_x = "East" if dx > 0 else "West"
-            dir_y = (
-                "South" if dy > 0 else "North"
-            )  # Pyglet Y is up, but overlay might be reversed?
-            # Actually our physics uses screen coords (Top-Left = 0,0?)
-            # Let's check soul_physics.py: y_top_left = screen_height - y
-            # Physics uses y increases downwards. So dy > 0 IS South.
+            dir_y = "South" if dy > 0 else "North"
 
             nearby_souls_info.append(
                 {
@@ -794,14 +762,18 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def market_sell(self, item_index: int, price: float) -> dict[str, Any]:
-        """Lists an item from inventory on the marketplace.
+        """Lists an item from the backpack on the global marketplace.
+
+        The soul places an item up for sale, setting a fixed Essence price.
+        The item is physically removed from the inventory and held by the
+        marketplace until sold or cancelled.
 
         Args:
-            item_index: The index of the item in the backpack (0-based).
-            price: The price in Essence to sell the item for.
+            item_index: The 0-based position of the item in the backpack list.
+            price: The amount of Essence requested for the item.
 
         Returns:
-            A dictionary with status and message.
+            A dictionary confirming the listing details.
         """
         # Ensure price is float and rounded
         price = round(float(price), 2)
@@ -834,14 +806,17 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         item_name: str | None = None,
         max_price: float | None = None,
     ) -> dict[str, Any]:
-        """Browses active marketplace listings.
+        """searches the global marketplace for items listed by others.
+
+        Allows the soul to search for specific goods or filter by price to find
+        the best deals in the local economy.
 
         Args:
-            item_name: Optional filter for item name.
-            max_price: Optional maximum price filter.
+            item_name: An optional part of the item name to search for.
+            max_price: An optional maximum Essence price cap for the search.
 
         Returns:
-            A dictionary with the list of matching listings.
+            A dictionary containing a list of matching market listings.
         """
         listings = self.marketplace.filter_listings(item_name, max_price)
 
@@ -871,13 +846,17 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def market_buy(self, listing_id: str) -> dict[str, Any]:
-        """Purchases an item from the marketplace.
+        """Buys an item from the marketplace using Essence.
+
+        The soul exchanges hard-earned Essence for desired goods. This action
+        instantly transfers the item to the soul's backpack and compensates
+        the seller (minus a 2% marketplace tax(from seller to marketplace)).
 
         Args:
-            listing_id: The ID of the listing to buy.
+            listing_id: The unique ID of the market listing to purchase.
 
         Returns:
-            A dictionary with status and message.
+            A dictionary confirming the transaction and item delivery.
         """
         listing = self.marketplace.get_listing(listing_id)
         if not listing:
@@ -956,13 +935,16 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def market_cancel(self, listing_id: str) -> dict[str, Any]:
-        """Cancels a market listing and retrieves the item.
+        """Removes a personal listing from the marketplace.
+
+        Allows the soul to reclaim an item that hasn't been sold yet, returning
+        it from the market stall back into its own inventory.
 
         Args:
-            listing_id: The ID of the listing to cancel.
+            listing_id: The unique ID of the listing to reclaim.
 
         Returns:
-            A dictionary with status and message.
+            A dictionary status regarding the retrieval.
         """
         listing = self.marketplace.get_listing(listing_id)
         if not listing:
@@ -1003,17 +985,24 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             "data": {"item": removed_listing.item.to_dict()},
         }
 
-    def social_post(self, content: str) -> dict[str, Any]:
-        """Posts a new message to the global message board.
+    def social_post(self, title: str, content: str) -> dict[str, Any]:
+        """Posts a new thread to the global message board.
 
-        Cost: 5.00 Essence.
+        Allows the soul to share thoughts, ask questions, or interact with
+        the world. This action consumes 5 Essence.
 
         Args:
-            content: The text content of the message.
+            title: A brief, catchy header for the new thread.
+            content: The detailed body text of the message.
 
         Returns:
-            A dictionary containing status, message, and post data.
+            A dictionary confirming the success of the broadcast.
         """
+        if not title.strip():
+            return {
+                "status": "fail",
+                "message": "Title cannot be empty.",
+            }
         cost = 5.00
         if self.essence < cost:
             log.info(
@@ -1026,10 +1015,10 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             }
 
         self.essence -= cost
-        post = self.message_board.create_post(self.soul_id, self.name, content)
-        log.info(
-            f"{self.name} posted to message board: {content[:20]}... (Cost: {cost})"
+        post = self.message_board.create_post(
+            self.soul_id, self.name, title, content
         )
+        log.info(f"{self.name} posted to message board: {title} (Cost: {cost})")
         return {
             "status": "success",
             "message": "Message posted successfully.",
@@ -1037,16 +1026,16 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def social_reply(self, message_id: str, content: str) -> dict[str, Any]:
-        """Replies to an existing message on the board.
+        """Contributes a reply to an existing discussion thread.
 
-        Cost: 2.00 Essence.
+        Adds the soul's voice to an ongoing conversation. This action consumes 2 Essence.
 
         Args:
-            message_id: The ID of the message to reply to.
-            content: The text content of the reply.
+            message_id: The unique ID of the post being replied to.
+            content: The detailed body text of the reply.
 
         Returns:
-            A dictionary containing status, message, and reply data.
+            A dictionary with feedback on the interaction.
         """
         cost = 2.00
         if self.essence < cost:
@@ -1072,42 +1061,127 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             "data": {"reply": reply.to_dict(), "current_essence": self.essence},
         }
 
-    def social_read(self, limit: int = 10) -> dict[str, Any]:
-        """Reads recent topics from the message board.
+    def social_read(
+        self, limit: int = 10, message_id: str | None = None
+    ) -> dict[str, Any]:
+        """Browses or reads specific threads on the global message board.
+
+        If message_id is omitted, this tool provides a high-level summary of the
+        most recent topics, including thread IDs, titles, and author names.
+        If a message_id is provided, it retrieves the complete details of that
+        specific thread, including all historical content and nested replies.
 
         Args:
-            limit: Number of recent threads to retrieve.
+            limit: The maximum number of recent thread summaries to list.
+            message_id: The unique ID of a thread to read in detail. Omit this
+                to browse the general list of topics.
 
         Returns:
-            A dictionary containing the list of formatted thread strings.
+            A dictionary containing either 'threads' (for browsing) or
+            'thread_details' (for deep reading).
         """
+        if message_id:
+            # Read specific thread
+            self.message_board._load_data()
+            thread = self.message_board.posts.get(message_id)
+            if not thread:
+                return {
+                    "status": "fail",
+                    "message": f"Thread with ID {message_id} not found.",
+                }
+
+            formatted_thread = (
+                f"THREAD: {thread.title}\n"
+                f"Author: {thread.author_name} [ID: {thread.message_id}]\n"
+                f"Content: {thread.content}\n"
+                "--- REPLIES ---"
+            )
+
+            def format_replies(replies, level=1):
+                res = ""
+                for r in replies:
+                    indent = "  " * level
+                    res += f"\n{indent}- [{r.author_name}]: {r.content} [ID: {r.message_id}]"
+                    res += format_replies(r.replies, level + 1)
+                return res
+
+            formatted_thread += format_replies(thread.replies)
+
+            return {
+                "status": "success",
+                "message": f"Read thread {message_id}.",
+                "data": {"thread_details": formatted_thread},
+            }
+
+        # Otherwise, list recent threads
         posts = self.message_board.get_recent_posts(limit)
 
-        # Format for agent readability
+        # Format for agent readability (List View)
         formatted_posts = []
         for post in posts:
-            thread_text = (
-                f"[ID: {post.message_id}] {post.author_name}: {post.content}"
+            thread_summary = (
+                f"[ID: {post.message_id}] Title: {post.title} | Author: {post.author_name}"
+                f" ({len(post.replies)} replies)"
             )
-            if post.replies:
-                for reply in post.replies:
-                    thread_text += f"\n    - [ID: {reply.message_id}] {reply.author_name}: {reply.content}"
-            formatted_posts.append(thread_text)
+            formatted_posts.append(thread_summary)
 
         return {
             "status": "success",
-            "message": f"Read {len(posts)} recent threads.",
+            "message": f"Listed {len(posts)} recent threads.",
             "data": {"threads": formatted_posts},
         }
 
-    def social_delete(self, message_id: str) -> dict[str, Any]:
-        """Deletes one of your own messages.
+    def social_edit(self, message_id: str, new_content: str) -> dict[str, Any]:
+        """Updates the content of a previously sent message.
+
+        Allows the soul to correct mistakes or provide updates to their
+        existing transmissions. This action consumes 2 Essence.
 
         Args:
-            message_id: The ID of the message to delete.
+            message_id: The unique ID of the message to modify.
+            new_content: The updated text body.
 
         Returns:
-            A dictionary containing status and message.
+            A dictionary status regarding the edit attempt.
+        """
+        cost = 2.00
+        if self.essence < cost:
+            log.info(
+                f"{self.name} tried to edit but has insufficient essence ({self.essence:.2f} < {cost})"
+            )
+            return {
+                "status": "fail",
+                "message": f"Insufficient essence to edit. Cost: {cost}, You have: {self.essence:.2f}",
+                "data": {"current_essence": self.essence},
+            }
+
+        self.essence -= cost
+        success = self.message_board.edit_message(
+            self.soul_id, message_id, new_content
+        )
+        if success:
+            log.info(f"{self.name} edited message {message_id} (Cost: {cost})")
+            return {
+                "status": "success",
+                "message": "Message edited.",
+                "data": {"current_essence": self.essence},
+            }
+
+        # Refund if failed (e.g. not yours)
+        self.essence += cost
+        return {
+            "status": "fail",
+            "message": "Failed to edit. Message not found or not yours.",
+        }
+
+    def social_delete(self, message_id: str) -> dict[str, Any]:
+        """Removes one of the soul's own messages from existence.
+
+        Args:
+            message_id: The unique ID of the message to erase.
+
+        Returns:
+            A dictionary confirming the removal.
         """
         success = self.message_board.delete_message(self.soul_id, message_id)
         if success:
@@ -1118,14 +1192,17 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def move_to(self, x: int, y: int) -> dict[str, Any]:
-        """Moves the soul to a specific coordinate on the screen.
+        """Initiates a physical journey to a specific screen coordinate.
+
+        The soul will begin traveling across the user's desktop towards the
+        target (x, y) point at its current movement speed.
 
         Args:
-            x: Target X coordinate (0 to screen width).
-            y: Target Y coordinate (0 to screen height).
+            x: The horizontal pixel coordinate target (0 to screen width).
+            y: The vertical pixel coordinate target (0 to screen height).
 
         Returns:
-            A dictionary containing status and message.
+            A dictionary acknowledging the start of the journey.
         """
         # Clamp to screen dimensions
         sw = self.window_physics.screen_width
@@ -1144,7 +1221,11 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def random_event(self) -> None:
-        """Triggers random events based on the soul's level of needs."""
+        """Triggers random events based on the soul's level of needs.
+
+        Simulates psychological effects of physical neglect, such as
+        hallucinations or fatigue when satiety or hydration is critically low.
+        """
         if self.satiety < 20 or self.hydration < 20:
             event = random.choice(["hallucination", "fatigue"])
             print(f"Due to low levels, {self.name} experiences {event}!")
@@ -1245,10 +1326,12 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
     # --- Main Update ---
 
     def to_dict(self) -> dict[str, Any]:
-        """Serializes the soul's state to a dictionary for persistence.
+        """Serializes the soul's current state to a portable dictionary format.
+
+        Captures vital signs, position, and possessions for persistence.
 
         Returns:
-            A dictionary containing name, colors, position, and stats.
+            A dictionary containing the soul's serialized representation.
         """
         x, y = int(self.window_physics.x), int(self.window_physics.y)
 
@@ -1265,10 +1348,13 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         }
 
     def update(self, dt: float) -> None:
-        """Main update loop for this soul.
+        """Drives the soul's simulation and AI logic for a single frame.
+
+        Handles physics interpolation, visual animations, biological decay,
+        and triggers the periodic AI decision-making loop.
 
         Args:
-            dt: Delta time (time elapsed since last frame) in seconds.
+            dt: The time elapsed since the last update frame in seconds.
         """
         self.time += dt
 
@@ -1276,8 +1362,8 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         self.window_physics.update(dt)
 
         # Visual Update
-        angle = self.time * 0.5
-        self.bulge_position = [
+        angle: float = self.time * 0.5
+        self.bulge_position: list[float] = [
             math.cos(angle) * 0.5,
             math.sin(angle * 0.7) * 0.35,
             math.sin(angle) * 0.5,
@@ -1325,7 +1411,9 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                         "y": self.y,
                         "width": self.width,
                         "height": self.height,
-                        "vision_stat": self.stats.vision if self.stats else 0,
+                        "vision_stat": (
+                            float(self.stats.vision) if self.stats else 0.0
+                        ),
                         "debug_vision": getattr(self, "DEBUG_VISION", True),
                         "soul_id": self.soul_id,
                     }
@@ -1376,7 +1464,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         self,
         state: dict[str, Any],
         sensations: list[str],
-        screen_context: Any,
+        screen_context: Image.Image | None,
     ) -> None:
         """Executes a single step of the agent's reasoning loop in a thread.
 
@@ -1416,16 +1504,18 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                     img_w, img_h = local_screen_context.size
 
                     # Use Snapshot geometry
-                    sx = state["x"]
-                    sy = state["y"]
-                    sw = state["width"]
-                    sh = state["height"]
+                    sx: float = float(state["x"])
+                    sy: float = float(state["y"])
+                    sw: float = float(state["width"])
+                    sh: float = float(state["height"])
 
-                    center_x = sx + (sw / 2)
-                    center_y = sy + (sh * 0.35)  # Offset up to orb center
+                    center_x: float = sx + (sw / 2)
+                    center_y: float = sy + (
+                        sh * 0.35
+                    )  # Offset up to orb center
 
-                    soul_x = center_x
-                    soul_y = center_y
+                    soul_x: float = center_x
+                    soul_y: float = center_y
 
                     # Create Mask
                     mask = Image.new("L", (img_w, img_h), 0)  # Black mask
@@ -1634,6 +1724,5 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             )
 
     def cleanup(self) -> None:
-        """Cleans up all resources associated with this soul."""
-        log.debug(f"Cleaned up resources for soul: {self.name}")
+        """Gracefully releases all system resources held by this soul."""
         log.debug(f"Cleaned up resources for soul: {self.name}")

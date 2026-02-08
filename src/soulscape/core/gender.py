@@ -31,3 +31,9 @@ class Gender:
         if isinstance(other, str):
             return self.gender_name == other
         return super().__eq__(other)
+
+
+male = Gender(gender_name="male", can_give_birth=False)
+female = Gender(gender_name="female", can_give_birth=True)
+
+all_genders = [male, female]
