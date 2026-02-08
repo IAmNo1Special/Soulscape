@@ -16,7 +16,6 @@ from pyglet.window import key
 
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
 from soulscape.core.soul import Soul
-from soulscape.core.stats import SoulStats
 from soulscape.system.input_router import InputRouter
 from soulscape.system.logger import log
 from soulscape.system.persistence import (
@@ -90,6 +89,7 @@ def create_soul(name=None, position=None, load_saved=False):
         on_right_click=handle_soul_right_click,
         on_move_end=persist_souls_state,
         initial_position=position,
+        soul_registry=active_souls,
     )
 
     active_souls.append(soul)
@@ -215,28 +215,13 @@ def load_initial_souls():
     saved_souls = load_souls()
     if saved_souls:
         for soul_data in saved_souls:
-            # Create soul with saved data
-            # ... need to adapt create_soul to accept dict or specific args
-            # simplified:
-            position = soul_data.get("position", (0, 0))
-            name = soul_data.get("name")
-            orb = soul_data.get("orb_color")
-            aura = soul_data.get("aura_color")
-
-            stats_data = soul_data.get("stats")
-            stats = SoulStats.from_dict(stats_data) if stats_data else None
-
-            soul = Soul(
+            soul = Soul.from_dict(
+                data=soul_data,
                 window_instance=overlay_window,
-                orb_color_rgb=orb,
-                aura_color_rgb=aura,
-                name=name,
                 on_right_click=handle_soul_right_click,
                 on_move_end=persist_souls_state,
-                initial_position=position,
-                stats=stats,
+                soul_registry=active_souls,
             )
-            # Override colors since create_soul (if we used it) would randomize them if not passed
             active_souls.append(soul)
     else:
         # Create default soul
@@ -267,10 +252,6 @@ def main():
     # 1. Setup Window Manager (Creates Overlay Window)
     window_manager = get_window_manager()
     overlay_window = window_manager.window
-
-    # window_manager_v2 init calls setup_window() automatically.
-
-    # window_manager_v2 init calls setup_window() automatically.
 
     # Apply initial opacity
     window_manager.set_opacity(_global_opacity)
@@ -342,6 +323,15 @@ def main():
     def on_tray_settings():
         show_global_settings()
 
+    def on_tray_message_board():
+        global gui_command_queue
+        if gui_command_queue:
+            gui_command_queue.put(
+                {
+                    "type": GuiCommand.SHOW_MESSAGE_BOARD,
+                }
+            )
+
     def on_tray_exit():
         # This runs in tray thread usually, need to signal main thread
         # Or tray controller calls quit_app
@@ -351,6 +341,7 @@ def main():
         on_add_soul=on_tray_spawn,
         on_toggle_auras=on_tray_toggle_auras,
         on_settings=on_tray_settings,
+        on_message_board=on_tray_message_board,
         on_exit=on_tray_exit,
     )
     tray_controller.start()

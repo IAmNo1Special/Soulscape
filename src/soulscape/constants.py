@@ -36,7 +36,7 @@ AURA_Y_OFFSET = -0.15  # Y position adjustment for the aura
 # Camera and Animation Properties
 # CAMERA_DISTANCE removed from here to be calculated dynamically in soul.py
 CAMERA_FOV = (
-    50.0  # Field of view for the perspective projection (kept constant)
+    60.0  # Field of view for the perspective projection (kept constant)
 )
 CAMERA_ROTATION_SPEED = 0.2  # Speed of the subtle camera rotation
 

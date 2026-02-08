@@ -12,6 +12,7 @@ dependencies = [
     "pyautogui>=0.9.54",
     "pyglet>=2.1.6",
     "pystray>=0.19.5",
+    "ttkbootstrap>=1.20.1",
     "watchdog>=6.0.0",
 ]
 

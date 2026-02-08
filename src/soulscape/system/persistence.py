@@ -32,11 +32,7 @@ def save_souls(souls: list[dict]) -> bool:
     Save soul configurations to souls.json using atomic write.
 
     Args:
-        souls: List of soul dictionaries with keys:
-            - name: str
-            - orb_color: tuple[float, float, float]
-            - aura_color: tuple[float, float, float]
-            - position: tuple[int, int]
+        souls: List of serialized soul dictionaries.
 
     Returns:
         True if save succeeded, False otherwise
@@ -44,23 +40,11 @@ def save_souls(souls: list[dict]) -> bool:
     try:
         souls_file = get_souls_file()
 
-        # Convert tuples to lists for JSON serialization
-        serializable_souls = []
-        for soul in souls:
-            serializable_souls.append(
-                {
-                    "name": soul["name"],
-                    "orb_color": list(soul["orb_color"]),
-                    "aura_color": list(soul["aura_color"]),
-                    "position": list(soul["position"]),
-                }
-            )
-
         # Atomic write: write to temp, then replace
         fd, temp_path = tempfile.mkstemp(dir=souls_file.parent, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(serializable_souls, f, indent=2)
+                json.dump(souls, f, indent=2)
             os.replace(temp_path, souls_file)
         except Exception:
             if os.path.exists(temp_path):
@@ -80,7 +64,7 @@ def load_souls() -> list[dict]:
     Load soul configurations from souls.json.
 
     Returns:
-        List of soul dictionaries, or empty list if file doesn't exist or is invalid
+        List of raw soul dictionaries, or empty list if file doesn't exist or is invalid
     """
     try:
         souls_file = get_souls_file()
@@ -92,24 +76,12 @@ def load_souls() -> list[dict]:
         with open(souls_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        # Convert lists back to tuples
-        souls = []
-        for soul_data in data:
-            souls.append(
-                {
-                    "name": soul_data.get("name", "Unnamed Soul"),
-                    "orb_color": tuple(
-                        soul_data.get("orb_color", [0.56, 0.93, 0.56])
-                    ),
-                    "aura_color": tuple(
-                        soul_data.get("aura_color", [1.0, 0.5, 0.0])
-                    ),
-                    "position": tuple(soul_data.get("position", [100, 100])),
-                }
-            )
+        if not isinstance(data, list):
+            log.warning(f"Invalid data format in {souls_file}")
+            return []
 
-        log.debug(f"Loaded {len(souls)} souls from {souls_file}")
-        return souls
+        log.debug(f"Loaded {len(data)} raw souls from {souls_file}")
+        return data
 
     except json.JSONDecodeError as e:
         log.error(f"Error parsing souls.json: {e}")

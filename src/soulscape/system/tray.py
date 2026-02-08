@@ -11,7 +11,14 @@ from pystray import MenuItem as Item
 class TrayController:
     """Manages the system tray icon and menu for Soulscape."""
 
-    def __init__(self, on_add_soul, on_toggle_auras, on_settings, on_exit):
+    def __init__(
+        self,
+        on_add_soul,
+        on_toggle_auras,
+        on_settings,
+        on_message_board,
+        on_exit,
+    ):
         """
         Initialize the tray controller.
 
@@ -19,11 +26,13 @@ class TrayController:
             on_add_soul: Callback when "Add Soul" is clicked
             on_toggle_auras: Callback when "Toggle All Auras" is clicked
             on_settings: Callback when "Settings..." is clicked
+            on_message_board: Callback when "Message Board" is clicked
             on_exit: Callback when "Exit" is clicked
         """
         self.on_add_soul = on_add_soul
         self.on_toggle_auras = on_toggle_auras
         self.on_settings = on_settings
+        self.on_message_board = on_message_board
         self.on_exit = on_exit
         self.icon = None
         self._thread = None
@@ -74,6 +83,7 @@ class TrayController:
             Item("Add Soul", self._on_add_soul),
             Item("Toggle All Auras", self._on_toggle_auras),
             pystray.Menu.SEPARATOR,
+            Item("Message Board", self._on_message_board),
             Item("Settings...", self._on_settings),
             pystray.Menu.SEPARATOR,
             Item("Exit Soulscape", self._on_exit),
@@ -93,6 +103,11 @@ class TrayController:
         """Handle Settings menu click."""
         if self.on_settings:
             self.on_settings()
+
+    def _on_message_board(self, icon, item):
+        """Handle Message Board menu click."""
+        if self.on_message_board:
+            self.on_message_board()
 
     def _on_exit(self, icon, item):
         """Handle Exit menu click."""

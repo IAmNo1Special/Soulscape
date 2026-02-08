@@ -33,6 +33,18 @@ class Item(ABC):
         """String representation of the item."""
         pass
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Item:
+        """Deserializes an item from a dictionary.
+
+        Args:
+            data: Serialization dictionary.
+
+        Returns:
+            An instance of the specific Item subclass.
+        """
+        return item_from_dict(data)
+
 
 class Consumable(Item):
     """Abstract base class for items that can be consumed (food, drink)."""
@@ -111,8 +123,34 @@ class Drink(Consumable):
         if soul.hydration > 100:
             soul.hydration = 100
         return (
-            f"{soul.name} drank {self.name} and is now " f"{soul.hydration}% hydrated."
+            f"{soul.name} drank {self.name} and is now "
+            f"{soul.hydration}% hydrated."
         )
+
+
+def item_from_dict(data: dict[str, Any]) -> Item:
+    """Factory function to create an Item from a dictionary.
+
+    Args:
+        data: Serialization dictionary with 'type', 'name', 'description', 'value'.
+
+    Returns:
+        An instance of Food or Drink.
+
+    Raises:
+        ValueError: If 'type' is unknown.
+    """
+    item_type = data.get("type")
+    name = data.get("name", "Unknown Item")
+    desc = data.get("description", "")
+    val = data.get("value", 0)
+
+    if item_type == "Food":
+        return Food(name, desc, val)
+    elif item_type == "Drink":
+        return Drink(name, desc, val)
+    else:
+        raise ValueError(f"Unknown item type: {item_type}")
 
 
 class Inventory:
@@ -155,7 +193,9 @@ class Inventory:
             return True
         return False
 
-    def get_consumables(self, consumable_type: type[Consumable]) -> list[Consumable]:
+    def get_consumables(
+        self, consumable_type: type[Consumable]
+    ) -> list[Consumable]:
         """Returns a list of consumables of a specific type.
 
         Args:
@@ -176,6 +216,27 @@ class Inventory:
             "capacity": self.capacity,
             "items": [item.to_dict() for item in self.items],
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Inventory:
+        """Reconstructs an inventory from a dictionary.
+
+        Args:
+            data: Serialization dictionary.
+
+        Returns:
+            A new Inventory instance.
+        """
+        capacity = data.get("capacity", 10)
+        inventory = cls(capacity=capacity)
+        for item_data in data.get("items", []):
+            try:
+                item = item_from_dict(item_data)
+                inventory.add_item(item)
+            except ValueError:
+                # Skip unknown item types
+                continue
+        return inventory
 
     def __repr__(self) -> str:
         return f"Inventory ({len(self.items)}/{self.capacity}): {self.items}"

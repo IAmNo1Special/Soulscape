@@ -15,6 +15,7 @@ class Stat(str, Enum):
     SP_ATK = "Sp. Atk"
     SP_DEF = "Sp. Def"
     SPEED = "Speed"
+    VISION = "Vision"
 
 
 @dataclass
@@ -27,6 +28,7 @@ class StatSet:
     sp_atk: int = 0
     sp_def: int = 0
     speed: int = 0
+    vision: int = 0
 
     def get(self, stat: Stat) -> int:
         if stat == Stat.HP:
@@ -41,6 +43,8 @@ class StatSet:
             return self.sp_def
         elif stat == Stat.SPEED:
             return self.speed
+        elif stat == Stat.VISION:
+            return self.vision
         return 0
 
     def to_dict(self) -> Dict[str, int]:
@@ -68,7 +72,13 @@ class SoulStats:
         """Creates a SoulStats instance with random IVs and Nature, and default Base stats."""
         # Default Base Stats (Mew-like 100s for now)
         base = StatSet(
-            hp=100, attack=100, defense=100, sp_atk=100, sp_def=100, speed=100
+            hp=100,
+            attack=100,
+            defense=100,
+            sp_atk=100,
+            sp_def=100,
+            speed=100,
+            vision=100,
         )
 
         # Random IVs (0-31)
@@ -79,6 +89,7 @@ class SoulStats:
             sp_atk=random.randint(0, 31),
             sp_def=random.randint(0, 31),
             speed=random.randint(0, 31),
+            vision=random.randint(0, 31),
         )
 
         # Empty EVs
@@ -135,6 +146,10 @@ class SoulStats:
     @property
     def speed(self) -> int:
         return self.calculate_value(Stat.SPEED)
+
+    @property
+    def vision(self) -> int:
+        return self.calculate_value(Stat.VISION)
 
     def to_dict(self) -> Dict:
         return {

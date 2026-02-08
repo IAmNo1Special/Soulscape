@@ -2281,6 +2281,7 @@ dependencies = [
     { name = "pyautogui" },
     { name = "pyglet" },
     { name = "pystray" },
+    { name = "ttkbootstrap" },
     { name = "watchdog" },
 ]
 
@@ -2302,6 +2303,7 @@ requires-dist = [
     { name = "pyautogui", specifier = ">=0.9.54" },
     { name = "pyglet", specifier = ">=2.1.6" },
     { name = "pystray", specifier = ">=0.19.5" },
+    { name = "ttkbootstrap", specifier = ">=1.20.1" },
     { name = "watchdog", specifier = ">=6.0.0" },
 ]
 
@@ -2404,6 +2406,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413, upload-time = "2026-02-07T10:45:33.841Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926, upload-time = "2026-02-07T10:45:32.24Z" },
+]
+
+[[package]]
+name = "ttkbootstrap"
+version = "1.20.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e8/b0/1107a9abe1f4886bffee7b3a6d33654402238cb4571ed14ac8466456b5cb/ttkbootstrap-1.20.1.tar.gz", hash = "sha256:78cde59bba669e6836d13e53ab22e80caaf0236316d47c22ff14f9ea2179c145", size = 175158, upload-time = "2026-01-24T00:12:02.623Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/a5/c5952be4ee2cbbf3267be91a5968f7ed1e6da371181eebb776a4633a3215/ttkbootstrap-1.20.1-py3-none-any.whl", hash = "sha256:f7419801fa169108ed7dce52a6004e9f34a4b6706802c8e70c0d23f157ffb868", size = 190317, upload-time = "2026-01-24T00:12:00.334Z" },
 ]
 
 [[package]]

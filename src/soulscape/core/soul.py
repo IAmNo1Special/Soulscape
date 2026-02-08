@@ -16,11 +16,13 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+import pyautogui
 import pyglet
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.adk.utils.context_utils import Aclosing
 from google.genai import types
 from pyglet.window import key, mouse
 
@@ -28,6 +30,8 @@ from pyglet.window import key, mouse
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
 from soulscape.core.gender import Gender
 from soulscape.core.items import Drink, Food, Inventory
+from soulscape.core.marketplace import Marketplace
+from soulscape.core.social import MessageBoard
 from soulscape.core.soul_physics import SoulPhysics
 from soulscape.core.species import Species
 from soulscape.core.stats import SoulStats
@@ -68,6 +72,67 @@ class Soul:
 
     _current_soul_id: int = 0
 
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        window_instance: Any,
+        on_right_click: Any = None,
+        on_move_end: Any = None,
+        soul_registry: list[Soul] | None = None,
+    ) -> Soul:
+        """Reconstructs a Soul instance from a dictionary.
+
+        Args:
+            data: Serialization dictionary.
+            window_instance: The pyglet window instance.
+            on_right_click: Callback for right-click.
+            on_move_end: Callback for move end.
+            soul_registry: List of all active souls.
+
+        Returns:
+            A new Soul instance with state restored.
+        """
+        name = data.get("name")
+        orb_color = tuple(data.get("orb_color", (0.56, 0.93, 0.56)))
+        aura_color = tuple(data.get("aura_color", (1.0, 0.5, 0.0)))
+        position = tuple(data.get("position", (100, 100)))
+
+        stats_data = data.get("stats")
+        stats = SoulStats.from_dict(stats_data) if stats_data else None
+
+        soul = cls(
+            window_instance=window_instance,
+            orb_color_rgb=orb_color,
+            aura_color_rgb=aura_color,
+            name=name,
+            on_right_click=on_right_click,
+            on_move_end=on_move_end,
+            initial_position=position,
+            stats=stats,
+            soul_registry=soul_registry,
+        )
+
+        # Restore survival stats if available
+        if "satiety" in data:
+            soul.satiety = data["satiety"]
+        if "hydration" in data:
+            soul.hydration = data["hydration"]
+
+        # Restore inventory if available
+        inventory_data = data.get("inventory")
+        if inventory_data:
+            soul.inventory = Inventory.from_dict(inventory_data)
+
+        soul.essence = float(data.get("essence", 100.00))
+
+        return soul
+
+    DEBUG_VISION: bool = True  # Saved processed screenshots to debug_vision/
+
+    # Needs constants
+    MAX_NEEDS = 100
+
     def __init__(
         self,
         window_instance: Any,
@@ -84,6 +149,7 @@ class Soul:
         birth_father: Soul | None = None,
         gender: Gender | None = None,
         current_location: str | None = None,
+        soul_registry: list[Soul] | None = None,
     ):
         """Initializes a Soul instance.
 
@@ -101,6 +167,7 @@ class Soul:
             birth_father: Reference to the father Soul. Defaults to None.
             gender: The gender of the soul. If None, random choice from species.
             current_location: Initial location string. Defaults to random.
+            soul_registry: List of all active souls for environmental awareness.
         """
         Soul._current_soul_id += 1
         self.soul_id: int = Soul._current_soul_id
@@ -116,6 +183,7 @@ class Soul:
 
         self.on_right_click = on_right_click
         self.on_move_end = on_move_end
+        self.soul_registry = soul_registry or []
 
         # --- Simulation Logic Initialization ---
 
@@ -156,7 +224,9 @@ class Soul:
 
         # Location
         self.current_location: str = (
-            current_location if current_location else random.choice(POSSIBLE_LOCATIONS)
+            current_location
+            if current_location
+            else random.choice(POSSIBLE_LOCATIONS)
         )
         self._set_hometown()
         self._set_birth_datetime()
@@ -191,12 +261,28 @@ class Soul:
             "Fatinah",
         ]
 
-        # Needs
+        # Needs (Values drain every 1.0s update interval)
         self.satiety = 100
         self.hydration = 100
-        self.satiety_drain_rate = 1
-        self.hydration_drain_rate = 1
-        self.activity_level = "resting"  # Can be 'resting', 'active', 'fighting'.
+        self.satiety_drain_rate = (
+            0.2  # Takes ~8.3 mins to drain from 100 to 0 (1 point every 5s)
+        )
+        self.hydration_drain_rate = (
+            0.2  # Takes ~8.3 mins to drain from 100 to 0 (1 point every 5s)
+        )
+        self.activity_level = (
+            "resting"  # Can be 'resting', 'active', 'fighting'.
+        )
+
+        # Initialize Inventory
+        self.inventory = Inventory(capacity=10)
+        self.essence = 100.00  # Default starting currency
+
+        # Initialize Marketplace Connection
+        self.marketplace = Marketplace()
+
+        # Initialize Social Connection
+        self.message_board = MessageBoard()
 
         # --- Visual / Physics Initialization ---
 
@@ -220,6 +306,9 @@ class Soul:
         self.update_interval = 1.0  # seconds for simulation tick
         self._simulation_time_accumulator = 0.0
 
+        # Sensory System
+        self.sensations: list[str] = []
+
         # Schedule Pyglet update if not headless (or caller handles loop)
         # We'll assume if window_instance is passed, we hook into pyglet clock
         pyglet.clock.schedule_interval(self.update, 1 / 60.0)
@@ -238,19 +327,40 @@ class Soul:
             )
             try:
                 self.agent = LlmAgent(
-                    model="gemini-2.0-flash",  # Using a fast model for game loops
+                    model="gemini-3-flash-preview",  # Using a fast model for game loops
                     name=f"soul_{self.soul_id}_agent",
                     description=f"AI brain for Soul {self.name}",
                     instruction=f"""You are {self.name}, a {self.gender.gender_name} {self.species.name}.
-Current Location: {self.current_location}.
-Stats: HP {self.current_health}/{self.stats.max_hp}, Satiety {self.satiety}/100, Hydration {self.hydration}/100.
-Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize finding food/water.
+Your appearance: Orb Color {self.orb_color_rgb}, Aura Color {self.aura_color_rgb}.
+Your current location: {self.current_location}.
+Your stats: HP {self.current_health}/{self.stats.max_hp}, Satiety {self.satiety:.2f}/100, Hydration {self.hydration:.2f}/100.
+HINTS:
+- Satiety/Hydration < 20: You will suffer random health (HP) penalties due to starvation or dehydration.
+- HP <= 0: You will PERISH.
+- Movement: You can travel to any screen coordinates via tools.
+- Inventory: You have a capacity of 10 items.
+- Social: You can communicate with other souls via the Message Board.
+  * Posting a new thread costs 5.00 Essence.
+  * Replying to a thread costs 2.00 Essence.
+  * Reading is free. Check it often (`social_read`) to find friends, trade partners, or share knowledge.
+
+YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD! 
 """,
                     tools=[
                         self.eat,
                         self.drink,
                         self.find_food,
                         self.find_water,
+                        self.move_to,
+                        self.look_around,
+                        self.market_sell,
+                        self.market_browse,
+                        self.market_buy,
+                        self.market_cancel,
+                        self.social_post,
+                        self.social_read,
+                        self.social_reply,
+                        self.social_delete,
                     ],
                 )
                 self.session_service = InMemorySessionService()
@@ -265,7 +375,9 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
                     )
                 except RuntimeError:
                     # Handle running in existing loop if necessary
-                    self.session = None  # Requires async handling if in existing loop
+                    self.session = (
+                        None  # Requires async handling if in existing loop
+                    )
 
                 self.runner = Runner(
                     agent=self.agent,
@@ -280,11 +392,9 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
             log.warning("GOOGLE_API_KEY not found. Agent disabled.")
             self.agent = None
 
-        self.last_decision_time = 0.0  # Reset to 0.0 to match simulation time
-        self.decision_interval = 30.0  # Check for agent decision every 10 sec
-
-        # Inventory
-        self.inventory = Inventory(capacity=10)
+        self.decision_interval = 60.0  # Check for agent decision every 30 sec
+        # Initialize last_decision_time to trigger the first decision immediately
+        self.last_decision_time = -self.decision_interval
 
     # --- Simulation Methods ---
 
@@ -399,14 +509,14 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
     def decrease_satiety(self) -> None:
         """Decreases satiety based on activity level."""
         rate = self.satiety_drain_rate * self.get_activity_multiplier()
-        self.satiety -= rate
+        self.satiety = round(self.satiety - rate, 2)
         if self.satiety < 0:
             self.satiety = 0
 
     def decrease_hydration(self) -> None:
         """Decreases hydration points."""
         rate = self.hydration_drain_rate  # No environment factor
-        self.hydration -= rate
+        self.hydration = round(self.hydration - rate, 2)
         if self.hydration < 0:
             self.hydration = 0
 
@@ -446,8 +556,13 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
             health_penalty = random.randint(1, 5)
             self.current_health -= health_penalty
             print(f"{self.name} suffers a health penalty of {health_penalty}!")
+            if self.current_health <= 0:
+                self.current_health = 0
+                log.info(f"--- {self.name} HAS PERISHED ---")
+                print(f"--- {self.name} HAS PERISHED ---")
         else:
-            print(f"{self.name} is already dead.")
+            # Soul is already dead, no further penalties
+            pass
 
     def eat(self) -> dict[str, Any]:
         """Consumes a food item from the inventory.
@@ -512,7 +627,10 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
         return {
             "status": "success",
             "message": result_msg,
-            "data": {"hydration_value": value, "current_hydration": self.hydration},
+            "data": {
+                "hydration_value": value,
+                "current_hydration": self.hydration,
+            },
         }
 
     def set_activity_level(self, level: str) -> None:
@@ -529,16 +647,16 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
         """Searches for food in the environment with a chance of success.
 
         If successful, a Food item is created and added to the soul's inventory.
-        Success rate is fixed at 70%.
+        Success rate is fixed at 10%.
 
         Returns:
             A dictionary containing:
                 - status (str): 'success' if food was found and added, 'fail' if
                   nothing found or inventory full.
-                - message (str): Descriptive result of the search.
+                - message (str): Descriptive result of the action.
                 - data (dict): Contains 'satiety_value' and 'current_satiety'.
         """
-        success_rate = 0.7  # 70% chance to find food.
+        success_rate = 0.1  # 10% chance to find food.
         if random.random() > success_rate:
             log.info(f"{self.name} searched for food but found nothing.")
             return {
@@ -551,11 +669,16 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
         new_food = Food("Wild Berries", "Found in the wild.", food_value)
 
         if self.inventory.add_item(new_food):
-            log.info(f"{self.name} found {new_food.name} ({food_value} food value)!")
+            log.info(
+                f"{self.name} found {new_food.name} ({food_value} food value)!"
+            )
             return {
                 "status": "success",
                 "message": f"You found {new_food.name} ({food_value} food value)!",
-                "data": {"satiety_value": food_value, "current_satiety": self.satiety},
+                "data": {
+                    "satiety_value": food_value,
+                    "current_satiety": self.satiety,
+                },
             }
 
         log.info("You found food but inventory is full!")
@@ -569,7 +692,7 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
         """Searches for water in the environment with a chance of success.
 
         If successful, a Drink item is created and added to the soul's inventory.
-        Success rate is fixed at 70%.
+        Success rate is fixed at 10%.
 
         Returns:
             A dictionary containing:
@@ -578,20 +701,27 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
                 - message (str): Descriptive result of the search.
                 - data (dict): Contains 'hydration_value' and 'current_hydration'.
         """
-        success_rate = 0.7  # 70% chance to find water.
+        success_rate = 0.1  # 10% chance to find water.
         if random.random() > success_rate:
             log.info(f"{self.name} searched for water but found nothing.")
             return {
                 "status": "fail",
                 "message": "You searched for water but found nothing.",
-                "data": {"hydration_value": 0, "current_hydration": self.hydration},
+                "data": {
+                    "hydration_value": 0,
+                    "current_hydration": self.hydration,
+                },
             }
 
         water_value = random.randint(10, 30)
-        new_drink = Drink("Water Bottle", "Collected from a stream.", water_value)
+        new_drink = Drink(
+            "Water Bottle", "Collected from a stream.", water_value
+        )
 
         if self.inventory.add_item(new_drink):
-            log.info(f"{self.name} found {new_drink.name} ({water_value} water value)!")
+            log.info(
+                f"{self.name} found {new_drink.name} ({water_value} water value)!"
+            )
             return {
                 "status": "success",
                 "message": f"You found {new_drink.name} ({water_value} water value)!",
@@ -606,6 +736,417 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
             "status": "fail",
             "message": "You found water but inventory is full!",
             "data": {"hydration_value": 0, "current_hydration": self.hydration},
+        }
+
+    def look_around(self) -> dict[str, Any]:
+        """Scans the environment for other souls.
+
+        Returns:
+            A dictionary containing:
+        """
+        nearby_souls_info = []
+
+        # Calculate vision radius (must match _run_agent_step logic)
+        vision_stat = 0
+        if self.stats:
+            vision_stat = self.stats.vision
+
+        # Scale radius: Use a moderate base radius so souls can see nearby but not too far.
+        # 150px is a good "awareness" zone on screen (300px diameter).
+        vision_radius = max(50, int(vision_stat * 1.5))
+
+        for other in self.soul_registry:
+            if other.soul_id == self.soul_id:
+                continue
+
+            dx = other.x - self.x
+            dy = other.y - self.y
+            dist = math.sqrt(dx * dx + dy * dy)
+
+            # Skip souls outside of vision range
+            if dist > vision_radius:
+                continue
+
+            # Simple relative description
+            dir_x = "East" if dx > 0 else "West"
+            dir_y = (
+                "South" if dy > 0 else "North"
+            )  # Pyglet Y is up, but overlay might be reversed?
+            # Actually our physics uses screen coords (Top-Left = 0,0?)
+            # Let's check soul_physics.py: y_top_left = screen_height - y
+            # Physics uses y increases downwards. So dy > 0 IS South.
+
+            nearby_souls_info.append(
+                {
+                    "name": other.name,
+                    "distance": round(dist, 1),
+                    "direction": f"{abs(dx):.1f}px {dir_x}, {abs(dy):.1f}px {dir_y}",
+                    "status": "Alive" if other.is_alive() else "Perished",
+                }
+            )
+
+        if not nearby_souls_info:
+            return {
+                "status": "success",
+                "message": "You look around but see no other souls nearby.",
+                "data": {"souls": []},
+            }
+
+        summary = "You see other souls: " + ", ".join(
+            [
+                f"{s['name']} is {s['direction']} away ({s['status']})"
+                for s in nearby_souls_info
+            ]
+        )
+        return {
+            "status": "success",
+            "message": summary,
+            "data": {"souls": nearby_souls_info},
+        }
+
+    def market_sell(self, item_index: int, price: float) -> dict[str, Any]:
+        """Lists an item from inventory on the marketplace.
+
+        Args:
+            item_index: The index of the item in the backpack (0-based).
+            price: The price in Essence to sell the item for.
+
+        Returns:
+            A dictionary with status and message.
+        """
+        # Ensure price is float and rounded
+        price = round(float(price), 2)
+
+        if not 0 <= item_index < len(self.inventory.items):
+            return {
+                "status": "fail",
+                "message": f"Invalid item index {item_index}. Backpack has {len(self.inventory.items)} items.",
+            }
+
+        if price < 0:
+            return {"status": "fail", "message": "Price cannot be negative."}
+
+        # Remove item from inventory
+        item = self.inventory.items.pop(item_index)
+
+        # List on marketplace
+        listing_id = self.marketplace.add_listing(
+            self.soul_id, self.name, item, price
+        )
+
+        return {
+            "status": "success",
+            "message": f"Listed {item.name} for {price:.2f} Essence. Listing ID: {listing_id}",
+            "data": {"listing_id": listing_id},
+        }
+
+    def market_browse(
+        self, item_name: str | None = None, max_price: int | None = None
+    ) -> dict[str, Any]:
+        """Browses active marketplace listings.
+
+        Args:
+            item_name: Optional filter for item name.
+            max_price: Optional maximum price filter.
+
+        Returns:
+            A dictionary with the list of matching listings.
+        """
+        listings = self.marketplace.filter_listings(item_name, max_price)
+
+        # Format for agent
+        listing_data = []
+        for listing in listings:
+            listing_data.append(
+                {
+                    "id": listing.listing_id,
+                    "item": listing.item.name,
+                    "price": listing.price,
+                    "seller": listing.seller_name,
+                }
+            )
+
+        if not listing_data:
+            return {
+                "status": "success",
+                "message": "No listings found matching your criteria.",
+                "data": [],
+            }
+
+        return {
+            "status": "success",
+            "message": f"Found {len(listing_data)} listings.",
+            "data": listing_data,
+        }
+
+    def market_buy(self, listing_id: str) -> dict[str, Any]:
+        """Purchases an item from the marketplace.
+
+        Args:
+            listing_id: The ID of the listing to buy.
+
+        Returns:
+            A dictionary with status and message.
+        """
+        listing = self.marketplace.get_listing(listing_id)
+        if not listing:
+            return {
+                "status": "fail",
+                "message": "Listing not found or already sold.",
+            }
+
+        # Validate Buyer != Seller (Self-Purchase Prevention)
+        if listing.seller_id == self.soul_id:
+            return {
+                "status": "fail",
+                "message": "You cannot buy your own listing.",
+            }
+
+        # Check funds
+        if self.essence < listing.price:
+            return {
+                "status": "fail",
+                "message": f"Insufficient Essence. You have {self.essence:.2f}, need {listing.price:.2f}.",
+            }
+
+        # Check inventory space
+        if len(self.inventory.items) >= self.inventory.capacity:
+            return {"status": "fail", "message": "Inventory full."}
+
+        # Execute Trade
+        # 1. Remove listing (atomic-ish)
+        if not self.marketplace.remove_listing(listing_id):
+            return {
+                "status": "fail",
+                "message": "Listing was just sold to someone else.",
+            }
+
+        # 2. Calculate Fee and Net
+        tax_rate = 0.02
+        tax_amount = round(listing.price * tax_rate, 2)
+        seller_net = round(listing.price - tax_amount, 2)
+
+        # 3. Transfer Essence
+        self.essence -= listing.price
+        self.essence = round(self.essence, 2)
+
+        # Add tax to marketplace fund
+        self.marketplace.add_funds(tax_amount)
+
+        # 4. Transfer Item
+        self.inventory.add_item(listing.item)
+
+        # 5. Pay Seller
+        seller = None
+        if self.soul_registry:
+            for s in self.soul_registry:
+                if s.soul_id == listing.seller_id:
+                    seller = s
+                    break
+
+        if seller:
+            seller.essence += seller_net
+            seller.essence = round(seller.essence, 2)
+            log.info(
+                f"{self.name} bought {listing.item.name} from {seller.name} for {listing.price} Essence. Tax: {tax_amount}. Seller Net: {seller_net}"
+            )
+        else:
+            log.warning(
+                f"Seller {listing.seller_id} not found for payment. Essence burned."
+            )
+
+        return {
+            "status": "success",
+            "message": f"Bought {listing.item.name} for {listing.price} Essence. (Tax paid: {tax_amount:.2f})",
+            "data": {
+                "item": listing.item.to_dict(),
+                "essence_left": self.essence,
+            },
+        }
+
+    def market_cancel(self, listing_id: str) -> dict[str, Any]:
+        """Cancels a market listing and retrieves the item.
+
+        Args:
+            listing_id: The ID of the listing to cancel.
+
+        Returns:
+            A dictionary with status and message.
+        """
+        listing = self.marketplace.get_listing(listing_id)
+        if not listing:
+            return {"status": "fail", "message": "Listing not found."}
+
+        # Validate Ownership
+        if listing.seller_id != self.soul_id:
+            return {
+                "status": "fail",
+                "message": "You can only cancel your own listings.",
+            }
+
+        # Check inventory space
+        if len(self.inventory.items) >= self.inventory.capacity:
+            return {
+                "status": "fail",
+                "message": "Inventory full. Cannot retrieve item.",
+            }
+
+        # Remove listing
+        removed_listing = self.marketplace.remove_listing(listing_id)
+        if not removed_listing:
+            return {
+                "status": "fail",
+                "message": "Listing was just sold or removed.",
+            }
+
+        # Return item to inventory
+        self.inventory.add_item(removed_listing.item)
+
+        log.info(
+            f"{self.name} cancelled listing {listing_id} and retrieved {removed_listing.item.name}."
+        )
+
+        return {
+            "status": "success",
+            "message": f"Cancelled listing for {removed_listing.item.name} and retrieved item.",
+            "data": {"item": removed_listing.item.to_dict()},
+        }
+
+    def social_post(self, content: str) -> dict[str, Any]:
+        """Posts a new message to the global message board.
+
+        Cost: 5.00 Essence.
+
+        Args:
+            content: The text content of the message.
+
+        Returns:
+            Status dictionary.
+        """
+        cost = 5.00
+        if self.essence < cost:
+            log.info(
+                f"{self.name} tried to post but has insufficient essence ({self.essence:.2f} < {cost})"
+            )
+            return {
+                "status": "fail",
+                "message": f"Insufficient essence to post. Cost: {cost}, You have: {self.essence:.2f}",
+                "data": {"current_essence": self.essence},
+            }
+
+        self.essence -= cost
+        post = self.message_board.create_post(self.soul_id, self.name, content)
+        log.info(
+            f"{self.name} posted to message board: {content[:20]}... (Cost: {cost})"
+        )
+        return {
+            "status": "success",
+            "message": "Message posted successfully.",
+            "data": {"post": post.to_dict(), "current_essence": self.essence},
+        }
+
+    def social_reply(self, message_id: str, content: str) -> dict[str, Any]:
+        """Replies to an existing message on the board.
+
+        Cost: 2.00 Essence.
+
+        Args:
+            message_id: The ID of the message to reply to.
+            content: The text content of the reply.
+
+        Returns:
+            Status dictionary.
+        """
+        cost = 2.00
+        if self.essence < cost:
+            log.info(
+                f"{self.name} tried to reply but has insufficient essence ({self.essence:.2f} < {cost})"
+            )
+            return {
+                "status": "fail",
+                "message": f"Insufficient essence to reply. Cost: {cost}, You have: {self.essence:.2f}",
+                "data": {"current_essence": self.essence},
+            }
+
+        self.essence -= cost
+        reply = self.message_board.create_reply(
+            self.soul_id, self.name, message_id, content
+        )
+        log.info(
+            f"{self.name} replied to {message_id}: {content[:30]}... (Cost: {cost})"
+        )
+        return {
+            "status": "success",
+            "message": f"Replied to message {message_id}.",
+            "data": {"reply": reply.to_dict(), "current_essence": self.essence},
+        }
+
+    def social_read(self, limit: int = 10) -> dict[str, Any]:
+        """Reads recent topics from the message board.
+
+        Args:
+            limit: Number of recent threads to retrieve.
+
+        Returns:
+            A list of threads with their replies.
+        """
+        posts = self.message_board.get_recent_posts(limit)
+
+        # Format for agent readability
+        formatted_posts = []
+        for post in posts:
+            thread_text = (
+                f"[ID: {post.message_id}] {post.author_name}: {post.content}"
+            )
+            if post.replies:
+                for reply in post.replies:
+                    thread_text += f"\n    - [ID: {reply.message_id}] {reply.author_name}: {reply.content}"
+            formatted_posts.append(thread_text)
+
+        return {
+            "status": "success",
+            "message": f"Read {len(posts)} recent threads.",
+            "data": {"threads": formatted_posts},
+        }
+
+    def social_delete(self, message_id: str) -> dict[str, Any]:
+        """Deletes one of your own messages.
+
+        Args:
+            message_id: The ID of the message to delete.
+        """
+        success = self.message_board.delete_message(self.soul_id, message_id)
+        if success:
+            return {"status": "success", "message": "Message deleted."}
+        return {
+            "status": "fail",
+            "message": "Failed to delete. message not found or not yours.",
+        }
+
+    def move_to(self, x: int, y: int) -> dict[str, Any]:
+        """Moves the soul to a specific coordinate on the screen.
+
+        Args:
+            x: Target X coordinate (0 to screen width).
+            y: Target Y coordinate (0 to screen height).
+
+        Returns:
+            A dictionary containing status and message.
+        """
+        # Clamp to screen dimensions
+        sw = self.window_physics.screen_width
+        sh = self.window_physics.screen_height
+
+        x = max(0, min(x, sw))
+        y = max(0, min(y, sh))
+
+        self.window_physics.roaming_target = (float(x), float(y))
+        log.info(f"{self.name} is moving to ({x}, {y})")
+
+        return {
+            "status": "success",
+            "message": f"Moving to coordinates ({x}, {y}).",
+            "data": {"target": (x, y)},
         }
 
     def random_event(self) -> None:
@@ -641,7 +1182,9 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
 
         gender_str = "boy" if child.gender.gender_name == "male" else "girl"
         pronoun = "him" if child.gender.gender_name == "male" else "her"
-        print(f"{self.name} had a baby {gender_str} and named {pronoun} {child.name}")
+        print(
+            f"{self.name} had a baby {gender_str} and named {pronoun} {child.name}"
+        )
 
     def claim_child(self, child: Soul) -> None:
         """Sets the parent-child relationship based on this soul's gender.
@@ -720,10 +1263,11 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
             "orb_color": self.orb_color_rgb,
             "aura_color": self.aura_color_rgb,
             "position": (x, y),
-            "stats": self.stats.to_dict(),
-            "satiety": self.satiety,
-            "hydration": self.hydration,
+            "stats": self.stats.to_dict() if self.stats else None,
+            "satiety": round(self.satiety, 2),
+            "hydration": round(self.hydration, 2),
             "inventory": self.inventory.to_dict(),
+            "essence": self.essence,
         }
 
     def update(self, dt: float) -> None:
@@ -759,54 +1303,190 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
                 time_since = self.time - self.last_decision_time
                 if time_since > self.decision_interval:
                     log.info(
-                        "Triggering agent decision for %s (time_since=%.2f)",
+                        "Triggering agent decision for %s (time_since=%.2f, HP=%d)",
                         self.name,
                         time_since,
+                        self.current_health,
                     )
                     self.last_decision_time = self.time
                     # Run agent decision in a separate thread to avoid blocking the game loop
                     threading.Thread(target=self._run_agent_step).start()
 
+            # Periodic Heartbeat for diagnostics
+            if (
+                int(self.time) % 60 == 0
+                and self.time - getattr(self, "_last_heartbeat", 0) > 1.0
+            ):
+                self._last_heartbeat = self.time
+                log.debug(
+                    f"Heartbeat for {self.name}: HP={self.current_health}, Satiety={self.satiety}"
+                )
+        else:
+            # If dead, handle a small visual fade or stop
+            self.aura_visible = False
+            if (
+                int(self.time) % 60 == 0
+                and self.time - getattr(self, "_last_death_log", 0) > 60.0
+            ):
+                self._last_death_log = self.time
+                log.info(
+                    f"Soul {self.name} is currently PERISHED and awaiting revival."
+                )
+
     def _run_agent_step(self) -> None:
         """Executes a single step of the agent's reasoning loop in a thread."""
         log.debug(f"Agent thread started for {self.name}")
-        try:
-            # Construct a query based on state
-            query = f"Status: Satiety={self.satiety}, Hydration={self.hydration}. What should I do?"
 
-            content = types.Content(role="user", parts=[types.Part(text=query)])
+        async def _run_async_internal():
+            # Capture screenshot
+            import io
 
-            # This call blocks until the agent completes its turn
-            events = self.runner.run(
-                user_id=f"user_{self.soul_id}",
-                session_id=f"session_{self.soul_id}",
-                new_message=content,
+            from PIL import Image, ImageDraw
+
+            try:
+                screen_context = pyautogui.screenshot()
+
+                # Debug saving
+                if getattr(self, "DEBUG_VISION", True):
+                    debug_dir = os.path.join(os.getcwd(), "debug_vision")
+                    os.makedirs(debug_dir, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    screen_context.save(
+                        os.path.join(
+                            debug_dir, f"{self.name}_{timestamp}_raw.png"
+                        )
+                    )
+
+                # --- Visual Fog of War Implementation ---
+                if self.window:
+                    # Calculate Vision Radius
+                    vision_stat = 0
+                    if self.stats:
+                        vision_stat = self.stats.vision
+                    # Ensure minimum awareness radius (150px)
+                    vision_radius = max(50, int(vision_stat * 1.5))
+
+                    # Calculate Soul Position in Image Coordinates
+                    # Pyglet Y is bottom-up, Image is top-down
+                    img_w, img_h = screen_context.size
+                    soul_x = self.x
+                    soul_y = img_h - self.y  # Flip Y
+
+                    # Create Mask
+                    mask = Image.new("L", (img_w, img_h), 0)  # Black mask
+                    draw = ImageDraw.Draw(mask)
+
+                    # Draw visible circle (White)
+                    draw.ellipse(
+                        (
+                            soul_x - vision_radius,
+                            soul_y - vision_radius,
+                            soul_x + vision_radius,
+                            soul_y + vision_radius,
+                        ),
+                        fill=255,
+                    )
+
+                    # Create black background
+                    black_bg = Image.new("RGB", (img_w, img_h), (0, 0, 0))
+
+                    # Composite: Use mask to show screen, otherwise black
+                    screen_context = Image.composite(
+                        screen_context, black_bg, mask
+                    )
+
+                    if getattr(self, "DEBUG_VISION", True):
+                        screen_context.save(
+                            os.path.join(
+                                debug_dir, f"{self.name}_{timestamp}_masked.png"
+                            )
+                        )
+
+                # Scale for ADK
+                screen_context.thumbnail((800, 600))
+                img_byte_arr = io.BytesIO()
+                screen_context.save(img_byte_arr, format="PNG")
+                img_bytes = img_byte_arr.getvalue()
+            except Exception as e:
+                log.warning(
+                    f"Vision processing failed for {self.name}: {e}",
+                    exc_info=True,
+                )
+                img_bytes = None
+
+            context_str = (
+                f"Name: {self.name}, Status: HP={self.current_health}, "
+                f"Satiety={self.satiety:.1f}, Hydration={self.hydration:.1f}. "
+                "Visual context attached."
             )
 
-            for event in events:
-                if event.content and event.content.parts:
-                    for part in event.content.parts:
-                        # Log tool calls.
-                        if part.function_call:
-                            log.info(
-                                "Soul %s calling tool: %s",
-                                self.name,
-                                part.function_call.name,
-                            )
+            # Inject Sensations
+            if self.sensations:
+                sensory_input = "\nRecent Physical Sensations:\n" + "\n".join(
+                    f"- {sensation}" for sensation in self.sensations
+                )
+                context_str += sensory_input
+                # Clear buffer after consuming
+                self.sensations.clear()
+            else:
+                context_str += "\nNo specific physical sensations recently."
 
-                        # Log tool results.
-                        if part.function_response:
-                            log.info(
-                                "Soul %s tool result: %s",
-                                self.name,
-                                part.function_response.response,
-                            )
+            query = context_str
 
-                        # Log final response text.
-                        if event.is_final_response() and part.text:
-                            log.info("Soul %s decided: %s", self.name, part.text)
+            parts = [types.Part(text=query)]
+            if img_bytes:
+                parts.append(
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type="image/png", data=img_bytes
+                        )
+                    )
+                )
+
+            content = types.Content(role="user", parts=parts)
+
+            # Use the production-recommended run_async API
+            try:
+                async with Aclosing(
+                    self.runner.run_async(
+                        user_id=f"user_{self.soul_id}",
+                        session_id=f"session_{self.soul_id}",
+                        new_message=content,
+                    )
+                ) as agen:
+                    async for event in agen:
+                        if not event.content or not event.content.parts:
+                            continue
+
+                        for part in event.content.parts:
+                            # Log tool calls
+                            if part.function_call:
+                                """log.info(
+                                    f"Soul {self.name} calling tool: {part.function_call.name}"
+                                )"""
+                                pass
+
+                            # Log tool results
+                            if part.function_response:
+                                """log.info(
+                                    f"Soul {self.name} tool result: {part.function_response.response}"
+                                )"""
+                                pass
+
+                            # Log final response text
+                            if event.is_final_response() and part.text:
+                                log.info(
+                                    f"Soul {self.name} decided: {part.text}"
+                                )
+            except Exception as e:
+                log.error(f"Error during agent turn for {self.name}: {e}")
+
+        try:
+            asyncio.run(_run_async_internal())
         except Exception as e:
-            log.error(f"Agent error in thread: {e}")
+            log.error(
+                f"Agent thread failed for {self.name}: {e}", exc_info=True
+            )
 
     def on_key_press(self, symbol: int, modifiers: int):
         """Pyglet event handler for key press.
@@ -822,7 +1502,9 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
             self.aura_visible = not self.aura_visible
             return pyglet.event.EVENT_HANDLED
 
-    def on_mouse_press(self, x: int, y: int, button: int, modifiers: int) -> bool:
+    def on_mouse_press(
+        self, x: int, y: int, button: int, modifiers: int
+    ) -> bool:
         """Pyglet event handler for mouse press.
 
         Args:
@@ -845,6 +1527,16 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
                 self.on_right_click(self, x, y_top_left)
                 return True
 
+        # Left click (selection/drag start) - Log Sensation
+        if button == mouse.LEFT:
+            if (
+                self.x <= x <= self.x + self.width
+                and self.y <= y_top_left <= self.y + self.height
+            ):
+                self.sensations.append(
+                    "You felt a sudden, powerful touch from above."
+                )
+
         self.window_physics.on_mouse_press(x, y_top_left, button, modifiers)
 
     def on_mouse_drag(
@@ -862,9 +1554,13 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
         """
         screen_height = self.window.height
         y_top_left = screen_height - y
-        self.window_physics.on_mouse_drag(x, y_top_left, dx, -dy, buttons, modifiers)
+        self.window_physics.on_mouse_drag(
+            x, y_top_left, dx, -dy, buttons, modifiers
+        )
 
-    def on_mouse_release(self, x: int, y: int, button: int, modifiers: int) -> None:
+    def on_mouse_release(
+        self, x: int, y: int, button: int, modifiers: int
+    ) -> None:
         """Pyglet event handler for mouse release.
 
         Args:
@@ -875,6 +1571,17 @@ Goal: Survive, explore, and thrive. If satiety or hydration is low, prioritize f
         """
         screen_height = self.window.height
         y_top_left = screen_height - y
+
+        # If we were being dragged (physics would know, but here we can infer or just log the release)
+        # We can just check bounds or if we were the target.
+        # For simplicity, if this event fires on us (handled by input router usually),
+        # but InputRouter calls soul.on_mouse_release...
+        # Let's just log a generic "release" sensation if we were held.
+        # Actually input router calls this on the specific soul.
+        if button == mouse.LEFT:
+            # We might check if we moved significantly, but a simple log is fine.
+            self.sensations.append("The powerful force released you.")
+
         self.window_physics.on_mouse_release(x, y_top_left, button, modifiers)
 
     def cleanup(self) -> None:

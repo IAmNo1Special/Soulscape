@@ -43,6 +43,7 @@ class SoulPhysics:
         self.drag_offset_y = 0
         self.roaming_target = None
         self.roaming_pause = 0.0
+        self.roaming_enabled = False  # Souls only move when instructed
         self.follow_mouse = False
         self.last_click_time = 0
         self.mouse_x = 0
@@ -58,11 +59,11 @@ class SoulPhysics:
         else:
             speed_stat = base_speed_val
 
-        # Speed modifiers (baseline 0.5 max speed at 100 stat)
+        # Speed modifiers (increased for better responsiveness)
         speed_multiplier = speed_stat / 100.0
 
-        self.follow_speed = 0.15 * speed_multiplier
-        self.max_speed = 0.5 * speed_multiplier
+        self.follow_speed = 1.5 * speed_multiplier
+        self.max_speed = 5.0 * speed_multiplier
 
         log.debug(
             f"Physics initialized with max_speed={self.max_speed:.2f} (Stat: {speed_stat})"
@@ -226,9 +227,11 @@ class SoulPhysics:
             self.entity.draw_y = self.y  # No hover
 
             # Pick target if needed
-            if self.roaming_target is None or random.random() < 0.005:
+            # Pick target if needed (only if autonomous roaming is enabled)
+            if self.roaming_enabled and (
+                self.roaming_target is None or random.random() < 0.005
+            ):
                 padding = min(self.screen_width, self.screen_height) * 0.1
-
                 tx = random.uniform(
                     padding, self.screen_width - self.width - padding
                 )
@@ -247,6 +250,70 @@ class SoulPhysics:
                     self.roaming_pause = random.uniform(
                         ROAM_PAUSE_MIN, ROAM_PAUSE_MAX
                     )
+
+            # Apply separation force (Personal Space) to avoid stacking
+            self._apply_separation(dt)
+
+    def _apply_separation(self, dt):
+        """Applies a repulsive force to separate overlapping souls."""
+        separation_radius = self.width * 1.2  # Personal space bubble
+        separation_force = 200.0  # Strength of push
+
+        my_center_x = self.x + self.width / 2
+        my_center_y = self.y + self.height / 2
+
+        push_x = 0.0
+        push_y = 0.0
+        count = 0
+
+        # Access registry from entity if available
+        if hasattr(self.entity, "soul_registry") and self.entity.soul_registry:
+            for other in self.entity.soul_registry:
+                if other is self.entity:
+                    continue
+
+                # Check rough bounds first
+                if abs(other.x - self.x) > separation_radius:
+                    continue
+                if abs(other.y - self.y) > separation_radius:
+                    continue
+
+                other_center_x = other.x + other.width / 2
+                other_center_y = other.y + other.height / 2
+
+                dx = my_center_x - other_center_x
+                dy = my_center_y - other_center_y
+                dist_sq = dx * dx + dy * dy
+
+                min_dist_sq = separation_radius * separation_radius
+
+                if 0 < dist_sq < min_dist_sq:
+                    dist = math.sqrt(dist_sq)
+                    # Calculate vector pointing away from neighbor
+                    # Weight by how close they are (closer = stronger push)
+                    force = (separation_radius - dist) / separation_radius
+                    push_x += (dx / dist) * force
+                    push_y += (dy / dist) * force
+                    count += 1
+                elif dist_sq == 0:
+                    # Exact overlap, pick random direction
+                    angle = random.random() * 2 * math.pi
+                    push_x += math.cos(angle)
+                    push_y += math.sin(angle)
+                    count += 1
+
+        if count > 0:
+            # Apply offset
+            # Normalize? No, we weighted by force.
+            move_x = push_x * separation_force * dt
+            move_y = push_y * separation_force * dt
+
+            self.x += move_x
+            self.y += move_y
+
+            # Sync to entity
+            self.entity.x = self.x
+            self.entity.y = self.y
 
     def _move_towards_target(self, target_x, target_y, dt):
         """

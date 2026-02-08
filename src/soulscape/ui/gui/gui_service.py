@@ -1,8 +1,11 @@
 import queue
 import sys
-import tkinter as tk
 import traceback
 from enum import Enum
+
+import ttkbootstrap as ttk
+
+from soulscape.ui.gui.message_board_gui import MessageBoardWindow
 
 # Import dialogs
 # Note: We must ensure these imports don't trigger Pyglet init
@@ -18,6 +21,7 @@ class GuiCommand(str, Enum):
     SHOW_SOUL_SETTINGS = "SHOW_SOUL_SETTINGS"
     SHOW_GLOBAL_SETTINGS = "SHOW_GLOBAL_SETTINGS"
     SHOW_ADD_SOUL = "SHOW_ADD_SOUL"
+    SHOW_MESSAGE_BOARD = "SHOW_MESSAGE_BOARD"
     EXIT = "EXIT"
 
 
@@ -27,11 +31,13 @@ class GuiService:
         self.result_queue = result_queue
         self.root = None
         self.active_dialog = None
+        self.message_board_window = None
         print("DEBUG: GuiService Initialized")
 
     def run(self):
         """Main entry point for the process."""
-        self.root = tk.Tk()
+        # Use ttkbootstrap Window instead of tk.Tk
+        self.root = ttk.Window(themename="darkly")
         self.root.withdraw()  # specific root for the service
 
         # Poll queue
@@ -76,6 +82,9 @@ class GuiService:
 
         elif cmd_type == GuiCommand.SHOW_ADD_SOUL:
             self._show_add_soul(msg)
+
+        elif cmd_type == GuiCommand.SHOW_MESSAGE_BOARD:
+            self._show_message_board(msg)
 
     def _show_context_menu(self, msg):
         # We need a temporary handler to capture the result
@@ -189,6 +198,17 @@ class GuiService:
         # We can do that manually
         d = SoulSettingsDialog(parent=self.root, on_apply=on_apply)
         d.show()
+
+    def _show_message_board(self, msg):
+        if (
+            self.message_board_window is None
+            or not self.message_board_window.winfo_exists()
+        ):
+            self.message_board_window = MessageBoardWindow(self.root)
+            # It's a Toplevel, so we don't need to call show() unless we made it that way
+            # MessageBoardWindow.__init__ calls super().__init__ which creates the window.
+        else:
+            self.message_board_window.lift()
 
 
 def run_gui_service(command_queue, result_queue):
