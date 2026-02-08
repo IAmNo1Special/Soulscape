@@ -13,3 +13,5 @@ wheels/
 
 # Debug Vision
 debug_vision/
+
+.protel/
