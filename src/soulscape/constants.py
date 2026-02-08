@@ -1,4 +1,9 @@
-# constants.py
+"""Global constants for the Soulscape application.
+
+This module defines configuration parameters, visual settings, and file paths
+used throughout the application.
+"""
+
 from soulscape.utils.helpers import resource_path
 
 # Window Dimensions
@@ -35,9 +40,7 @@ AURA_Y_OFFSET = -0.15  # Y position adjustment for the aura
 
 # Camera and Animation Properties
 # CAMERA_DISTANCE removed from here to be calculated dynamically in soul.py
-CAMERA_FOV = (
-    60.0  # Field of view for the perspective projection (kept constant)
-)
+CAMERA_FOV = 60.0  # Field of view for the perspective projection (kept constant)
 CAMERA_ROTATION_SPEED = 0.2  # Speed of the subtle camera rotation
 
 

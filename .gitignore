@@ -10,3 +10,6 @@ wheels/
 .venv
 
 .env
+
+# Debug Vision
+debug_vision/

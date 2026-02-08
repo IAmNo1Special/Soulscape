@@ -4,11 +4,14 @@ Unified Overlay Application for Soulscape.
 Manages a single transparent full-screen window and renders multiple souls within it.
 """
 
+from __future__ import annotations
+
 import multiprocessing
 import os
 import random
 import sys
 import winreg
+from typing import Any, Optional
 
 import pyglet
 from dotenv import load_dotenv
@@ -44,14 +47,27 @@ gui_command_queue = None
 gui_result_queue = None
 
 
-def persist_souls_state():
+def persist_souls_state() -> None:
     """Saves current souls to disk."""
     data = [soul.to_dict() for soul in active_souls]
     save_souls(data)
 
 
-def create_soul(name=None, position=None, load_saved=False):
-    """Creates a new soul and adds it to the overlay."""
+def create_soul(
+    name: Optional[str] = None,
+    position: Optional[tuple[int, int]] = None,
+    load_saved: bool = False,
+) -> Soul:
+    """Creates a new soul and adds it to the overlay.
+
+    Args:
+        name: Name of the soul. Defaults to "Soul {id}".
+        position: Initial (x, y) position. Defaults to center.
+        load_saved: Whether this creation represents loading a saved state.
+
+    Returns:
+        The created Soul instance.
+    """
     global _next_soul_id
 
     if name is None:
@@ -97,8 +113,14 @@ def create_soul(name=None, position=None, load_saved=False):
     return soul
 
 
-def handle_soul_right_click(soul, screen_x, screen_y):
-    """Callback for soul right-click events."""
+def handle_soul_right_click(soul: Soul, screen_x: int, screen_y: int) -> None:
+    """Callback for soul right-click events.
+
+    Args:
+        soul: The soul that was clicked.
+        screen_x: Screen X coordinate of click.
+        screen_y: Screen Y coordinate of click.
+    """
     log.debug(f"Right-click on soul {soul.name} at {screen_x}, {screen_y}")
 
     if gui_command_queue:
@@ -113,8 +135,12 @@ def handle_soul_right_click(soul, screen_x, screen_y):
         )
 
 
-def show_soul_settings(soul):
-    """Shows settings dialog for a soul."""
+def show_soul_settings(soul: Soul) -> None:
+    """Shows settings dialog for a soul.
+
+    Args:
+        soul: The soul to show settings for.
+    """
 
     gui_command_queue.put(
         {
@@ -128,8 +154,12 @@ def show_soul_settings(soul):
     )
 
 
-def _check_startup_registry():
-    """Check Windows registry to see if Soulscape is set to run on startup."""
+def _check_startup_registry() -> bool:
+    """Check Windows registry to see if Soulscape is set to run on startup.
+
+    Returns:
+        True if startup entry exists, False otherwise.
+    """
     global _run_on_startup
     if sys.platform != "win32":
         return False
@@ -138,9 +168,7 @@ def _check_startup_registry():
     app_name = "Soulscape"
 
     try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ
-        )
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
         try:
             winreg.QueryValueEx(key, app_name)
             _run_on_startup = True
@@ -153,8 +181,12 @@ def _check_startup_registry():
     return _run_on_startup
 
 
-def _set_windows_startup(enabled):
-    """Add or remove Soulscape from Windows startup registry."""
+def _set_windows_startup(enabled: bool) -> None:
+    """Add or remove Soulscape from Windows startup registry.
+
+    Args:
+        enabled: True to add to startup, False to remove.
+    """
 
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
     app_name = "Soulscape"
@@ -192,7 +224,7 @@ def _set_windows_startup(enabled):
 _check_startup_registry()
 
 
-def show_global_settings():
+def show_global_settings() -> None:
     """Shows global settings dialog."""
     # Use GUI service instead of direct multiprocessing
     global gui_command_queue, _global_opacity
@@ -210,8 +242,8 @@ def show_global_settings():
         )
 
 
-def load_initial_souls():
-    """Loads souls from disk."""
+def load_initial_souls() -> None:
+    """Loads souls from disk or creates default if none exist."""
     saved_souls = load_souls()
     if saved_souls:
         for soul_data in saved_souls:
@@ -228,7 +260,8 @@ def load_initial_souls():
         create_soul(name="Genesis Soul")
 
 
-def main():
+def main() -> None:
+    """Main entry point for the overlay application."""
     global overlay_window, window_manager, tray_controller, gui_command_queue, gui_result_queue, scene_renderer, input_router
 
     # Load environment variables
@@ -286,9 +319,7 @@ def main():
     @overlay_window.event
     def on_mouse_drag(x, y, dx, dy, buttons, modifiers):
         if input_router.dragged_soul:
-            input_router.dragged_soul.on_mouse_drag(
-                x, y, dx, dy, buttons, modifiers
-            )
+            input_router.dragged_soul.on_mouse_drag(x, y, dx, dy, buttons, modifiers)
 
     @overlay_window.event
     def on_mouse_release(x, y, button, modifiers):
@@ -355,8 +386,8 @@ def main():
     pyglet.app.run()
 
 
-def check_gui_results():
-    """Polls the GUI result queue for messages."""
+def check_gui_results() -> None:
+    """Polls the GUI result queue for messages and processes them."""
     global _global_opacity
 
     if not gui_result_queue:
@@ -401,9 +432,7 @@ def check_gui_results():
                         if action == "EDIT":
                             show_soul_settings(target_soul)
                         elif action == "TOGGLE_AURA":
-                            target_soul.aura_visible = (
-                                not target_soul.aura_visible
-                            )
+                            target_soul.aura_visible = not target_soul.aura_visible
                         elif action == "DISMISS":
                             active_souls.remove(target_soul)
                             target_soul.cleanup()
@@ -451,7 +480,8 @@ def check_gui_results():
         log.error(f"Error processing GUI results: {e}")
 
 
-def quit_app():
+def quit_app() -> None:
+    """Cleans up resources and exits the application."""
     log.debug("Shutting down...")
     persist_souls_state()
     if tray_controller:
