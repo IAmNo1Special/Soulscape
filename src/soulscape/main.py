@@ -13,6 +13,7 @@ import winreg
 from typing import Any
 
 import pyglet
+from dotenv import load_dotenv
 from pyglet.window import key
 
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
@@ -33,6 +34,9 @@ from soulscape.ui.gui.gui_service import GuiCommand, run_gui_service
 
 # Globals - now encapsulated in SoulscapeApp, but kept for type hinting if needed
 # active_souls: list[Soul] = []
+# Explicitly load dotenv
+env_path = os.path.join(os.getcwd(), ".env")
+load_dotenv(dotenv_path=env_path, override=True)
 
 
 class SoulscapeApp:

@@ -4,24 +4,11 @@ physics-based movement, and AI-driven decision-making using the ADK.
 
 from __future__ import annotations
 
-import asyncio
-import io
 import math
-import os
 import random
-import threading
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
-
-import pyautogui
-from dotenv import load_dotenv
-from google.adk.agents import LlmAgent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.adk.utils.context_utils import Aclosing
-from google.genai import types
-from PIL import Image, ImageDraw
 
 # Import constants
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
@@ -29,12 +16,11 @@ from soulscape.core.gender import Gender, all_genders
 from soulscape.core.items import Drink, Food, Inventory
 from soulscape.core.marketplace import Marketplace
 from soulscape.core.social import MessageBoard
-from soulscape.core.soul_physics import SoulPhysics
+from soulscape.core.soul_components.agent import SoulAgent
+from soulscape.core.soul_components.physics import SoulPhysics
 from soulscape.core.species import Species
 from soulscape.core.stats import SoulStats
 from soulscape.system.logger import log
-
-load_dotenv()
 
 # Global list of locations (moved from Isekai.py)
 POSSIBLE_LOCATIONS = [
@@ -43,9 +29,6 @@ POSSIBLE_LOCATIONS = [
     "Forest Cabin",
     "Mountain Fortress",
 ]
-
-if TYPE_CHECKING:
-    from soulscape.core.soul import Soul
 
 
 # --- Main Application Class ---
@@ -131,9 +114,6 @@ class Soul:
 
     DEBUG_VISION: bool = True  # Saved processed screenshots to debug_vision/
 
-    # Needs constants
-    MAX_NEEDS = 100
-
     def __init__(
         self,
         orb_color_rgb: tuple[float, float, float],
@@ -177,8 +157,6 @@ class Soul:
         """
         Soul._current_soul_id += 1
         self.soul_id: int = Soul._current_soul_id
-
-        # self.window = window_instance  # Decoupled
 
         # Initialize position
         self.x: float = float(initial_position[0])
@@ -296,7 +274,7 @@ class Soul:
         # --- Visual / Physics Initialization ---
 
         # Only init physics (assuming always needed now, or strictly logic)
-        self.window_physics = SoulPhysics(
+        self.physics = SoulPhysics(
             self, on_move_end, self.screen_width, self.screen_height
         )
         self.width = SOUL_WIDTH
@@ -315,96 +293,7 @@ class Soul:
         # Sensory System
         self.sensations: list[str] = []
 
-        # Schedule Pyglet update: REMOVED for external control
-        # pyglet.clock.schedule_interval(self.update, 1 / 60.0)
-
-        # --- ADK Agent Initialization ---
-        # Explicitly load dotenv
-        env_path = os.path.join(os.getcwd(), ".env")
-        load_dotenv(dotenv_path=env_path, override=True)
-
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if api_key:
-            log.info(
-                "GOOGLE_API_KEY found: %s...%s",
-                api_key[:4],
-                api_key[-4:] if len(api_key) > 8 else "",
-            )
-            try:
-                self.agent = LlmAgent(
-                    model="gemini-3-flash-preview",  # Using a fast model for game loops
-                    name=f"soul_{self.soul_id}_agent",
-                    description=f"AI brain for Soul {self.name}",
-                    instruction=f"""You are {self.name}, a {self.gender.gender_name} {self.species.name}.
-Your appearance: Orb Color {self.orb_color_rgb}, Aura Color {self.aura_color_rgb}.
-Your current location: {self.current_location}.
-Your stats: HP {self.current_health}/{self.stats.max_hp}, Satiety {self.satiety:.2f}/100, Hydration {self.hydration:.2f}/100.
-HINTS:
-- Satiety/Hydration < 20: You will suffer random health (HP) penalties due to starvation or dehydration.
-- HP <= 0: You will PERISH.
-- Movement: You can travel to any screen coordinates via tools.
-- Inventory: You have a capacity of 10 items.
-- Social: You can communicate with other souls via the Message Board.
-  * Posting a new thread costs 5.00 Essence.
-  * Replying to a thread costs 2.00 Essence.
-  * Reading is free. Check it often (`social_read`) to find friends, trade partners, or share knowledge.
-Make sure you only ever use tools sequentially. NEVER use one or more tools in parallel.
-
-YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD! 
-""",
-                    tools=[
-                        self.eat,
-                        self.drink,
-                        self.find_food,
-                        self.find_water,
-                        self.move_to,
-                        self.look_around,
-                        self.market_sell,
-                        self.market_browse,
-                        self.market_buy,
-                        self.market_cancel,
-                        self.social_post,
-                        self.social_read,
-                        self.social_reply,
-                        self.social_edit,
-                        self.social_delete,
-                    ],
-                )
-                self.session_service = InMemorySessionService()
-                # We initialize the session once
-                try:
-                    self.session = asyncio.run(
-                        self.session_service.create_session(
-                            app_name="soulscape",
-                            user_id=f"user_{self.soul_id}",
-                            session_id=f"session_{self.soul_id}",
-                        )
-                    )
-                except RuntimeError:
-                    # Handle running in existing loop if necessary
-                    self.session = (
-                        None  # Requires async handling if in existing loop
-                    )
-
-                self.runner = Runner(
-                    agent=self.agent,
-                    app_name="soulscape",
-                    session_service=self.session_service,
-                )
-                log.info(f"Agent initialized for {self.name}")
-            except Exception as e:
-                log.error(f"Failed to initialize agent for {self.name}: {e}")
-                self.agent = None
-        else:
-            log.warning("GOOGLE_API_KEY not found. Agent disabled.")
-            self.agent = None
-
-        self.decision_interval: float = (
-            60.0  # Check for agent decision every 30 sec
-        )
-        # Initialize last_decision_time to trigger the first decision immediately
-        # But add a small delay (e.g. 5s) to allow the app to fully load/render first
-        self.last_decision_time: float = -self.decision_interval + 5.0
+        self.agent: SoulAgent = SoulAgent(soul=self)
 
     # --- Simulation Methods ---
 
@@ -1205,13 +1094,13 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             A dictionary acknowledging the start of the journey.
         """
         # Clamp to screen dimensions
-        sw = self.window_physics.screen_width
-        sh = self.window_physics.screen_height
+        sw = self.physics.screen_width
+        sh = self.physics.screen_height
 
         x = max(0, min(x, sw))
         y = max(0, min(y, sh))
 
-        self.window_physics.roaming_target = (float(x), float(y))
+        self.physics.roaming_target = (float(x), float(y))
         log.info(f"{self.name} is moving to ({x}, {y})")
 
         return {
@@ -1333,7 +1222,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         Returns:
             A dictionary containing the soul's serialized representation.
         """
-        x, y = int(self.window_physics.x), int(self.window_physics.y)
+        x, y = int(self.physics.x), int(self.physics.y)
 
         return {
             "name": self.name,
@@ -1359,7 +1248,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
         self.time += dt
 
         # Physics Update
-        self.window_physics.update(dt)
+        self.physics.update(dt)
 
         # Visual Update
         angle: float = self.time * 0.5
@@ -1380,64 +1269,7 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
 
             # Agent Decision Update
             if self.agent:
-                time_since = self.time - self.last_decision_time
-                if time_since > self.decision_interval:
-                    log.info(
-                        "Triggering agent decision for %s (time_since=%.2f, HP=%d)",
-                        self.name,
-                        time_since,
-                        self.current_health,
-                    )
-                    self.last_decision_time = self.time
-                    # Run agent decision in a separate thread to avoid blocking the game loop
-                    self.last_decision_time = self.time
-
-                    # --- THREAD SAFETY FIX ---
-                    # 1. Capture State Snapshot (Main Thread)
-                    state_snapshot = {
-                        "name": self.name,
-                        "species": self.species.name,
-                        "gender": self.gender.gender_name,
-                        "location": self.current_location,
-                        "hp": self.current_health,
-                        "max_hp": self.stats.max_hp,
-                        "satiety": self.satiety,
-                        "hydration": self.hydration,
-                        "inventory": self.inventory.to_dict(),
-                        "orb_color": self.orb_color_rgb,
-                        "aura_color": self.aura_color_rgb,
-                        # Geometry for vision
-                        "x": self.x,
-                        "y": self.y,
-                        "width": self.width,
-                        "height": self.height,
-                        "vision_stat": (
-                            float(self.stats.vision) if self.stats else 0.0
-                        ),
-                        "debug_vision": getattr(self, "DEBUG_VISION", True),
-                        "soul_id": self.soul_id,
-                    }
-
-                    # 2. Capture Sensations (Atomic Pop)
-                    current_sensations = list(self.sensations)
-                    self.sensations.clear()
-
-                    # 3. Capture Screen Context (Must be on Main Thread)
-                    try:
-                        screen_context = pyautogui.screenshot()
-                    except Exception as e:
-                        log.error(f"Screenshot failed: {e}")
-                        screen_context = None
-
-                    # 4. Spawn Thread with Immutable Data
-                    threading.Thread(
-                        target=self._run_agent_step,
-                        args=(
-                            state_snapshot,
-                            current_sensations,
-                            screen_context,
-                        ),
-                    ).start()
+                self.agent.trigger_decision(self.time)
 
             # Periodic Heartbeat for diagnostics
             if (
@@ -1459,174 +1291,6 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                 log.info(
                     f"Soul {self.name} is currently PERISHED and awaiting revival."
                 )
-
-    def _run_agent_step(
-        self,
-        state: dict[str, Any],
-        sensations: list[str],
-        screen_context: Image.Image | None,
-    ) -> None:
-        """Executes a single step of the agent's reasoning loop in a thread.
-
-        Args:
-            state: Snapshot of the soul's state.
-            sensations: List of sensation strings.
-            screen_context: The PIL Image captured on the main thread.
-        """
-        name = state["name"]
-        log.debug(f"Agent thread started for {name}")
-
-        async def _run_async_internal():
-
-            local_screen_context = screen_context  # Use passed argument
-
-            try:
-                if local_screen_context:
-                    # Debug saving
-                    if state["debug_vision"]:
-                        debug_dir = os.path.join(os.getcwd(), "debug_vision")
-                        os.makedirs(debug_dir, exist_ok=True)
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        local_screen_context.save(
-                            os.path.join(
-                                debug_dir, f"{name}_{timestamp}_raw.png"
-                            )
-                        )
-
-                # --- Visual Fog of War Implementation ---
-                if local_screen_context:
-                    # Use snapshot data for vision calculation
-                    vision_stat = state["vision_stat"]
-                    # Ensure minimum awareness radius (150px)
-                    vision_radius = max(100, int(vision_stat * 1.5))
-
-                    # Calculate Soul Position in Image Coordinates
-                    img_w, img_h = local_screen_context.size
-
-                    # Use Snapshot geometry
-                    sx: float = float(state["x"])
-                    sy: float = float(state["y"])
-                    sw: float = float(state["width"])
-                    sh: float = float(state["height"])
-
-                    center_x: float = sx + (sw / 2)
-                    center_y: float = sy + (
-                        sh * 0.35
-                    )  # Offset up to orb center
-
-                    soul_x: float = center_x
-                    soul_y: float = center_y
-
-                    # Create Mask
-                    mask = Image.new("L", (img_w, img_h), 0)  # Black mask
-                    draw = ImageDraw.Draw(mask)
-
-                    # Draw visible circle (White)
-                    draw.ellipse(
-                        (
-                            soul_x - vision_radius,
-                            soul_y - vision_radius,
-                            soul_x + vision_radius,
-                            soul_y + vision_radius,
-                        ),
-                        fill=255,
-                    )
-
-                    # Create black background
-                    black_bg = Image.new("RGB", (img_w, img_h), (0, 0, 0))
-
-                    # Composite: Use mask to show screen, otherwise black
-                    local_screen_context = Image.composite(
-                        local_screen_context, black_bg, mask
-                    )
-
-                    if state["debug_vision"]:
-                        local_screen_context.save(
-                            os.path.join(
-                                debug_dir, f"{name}_{timestamp}_masked.png"
-                            )
-                        )
-
-                # Scale for ADK
-                img_bytes = None
-                if local_screen_context:
-                    local_screen_context.thumbnail((800, 600))
-                    img_byte_arr = io.BytesIO()
-                    local_screen_context.save(img_byte_arr, format="PNG")
-                    img_bytes = img_byte_arr.getvalue()
-            except Exception as e:
-                log.warning(
-                    f"Vision processing failed for {self.name}: {e}",
-                    exc_info=True,
-                )
-                img_bytes = None
-
-            context_str = (
-                f"Name: {name}, Status: HP={state['hp']}, "
-                f"Satiety={state['satiety']:.1f}, Hydration={state['hydration']:.1f}. "
-                "Visual context attached."
-            )
-
-            # Inject Sensations
-            if sensations:
-                sensory_input = "\nRecent Physical Sensations:\n" + "\n".join(
-                    f"- {sensation}" for sensation in sensations
-                )
-                context_str += sensory_input
-                # Buffer is already cleared in main thread
-            else:
-                context_str += "\nNo specific physical sensations recently."
-
-            query = context_str
-
-            parts = [types.Part(text=query)]
-            if img_bytes:
-                parts.append(
-                    types.Part(
-                        inline_data=types.Blob(
-                            mime_type="image/png", data=img_bytes
-                        )
-                    )
-                )
-
-            content = types.Content(role="user", parts=parts)
-
-            # Use the production-recommended run_async API
-            try:
-                async with Aclosing(
-                    self.runner.run_async(
-                        user_id=f"user_{state['soul_id']}",
-                        session_id=f"session_{state['soul_id']}",
-                        new_message=content,
-                    )
-                ) as agen:
-                    async for event in agen:
-                        if not event.content or not event.content.parts:
-                            continue
-
-                        for part in event.content.parts:
-                            # Log tool calls
-                            if part.function_call:
-                                log.info(
-                                    f"Soul {name} calling tool: {part.function_call.name}"
-                                )
-
-                            # Log tool results
-                            if part.function_response:
-                                log.info(
-                                    f"Soul {name} tool result: {part.function_response.response}"
-                                )
-
-                            # Log final response text
-                            if event.is_final_response() and part.text:
-                                log.info(f"Soul {name} decided: {part.text}")
-            except Exception as e:
-                log.error(f"Error during agent turn for {name}: {e}")
-
-        try:
-            asyncio.run(_run_async_internal())
-        except Exception as e:
-            log.error(f"Agent thread failed for {name}: {e}", exc_info=True)
 
     def on_mouse_press(
         self, x: int, y: int, button: int, modifiers: int, screen_height: int
@@ -1663,8 +1327,8 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
                     "You felt a sudden, powerful touch from above."
                 )
 
-        if self.window_physics:
-            self.window_physics.on_mouse_press(x, y_top_left, button, modifiers)
+        if self.physics:
+            self.physics.on_mouse_press(x, y_top_left, button, modifiers)
         return False
 
     def on_mouse_drag(
@@ -1689,8 +1353,8 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             screen_height: Height of the screen.
         """
         y_top_left = screen_height - y
-        if self.window_physics:
-            self.window_physics.on_mouse_drag(
+        if self.physics:
+            self.physics.on_mouse_drag(
                 x, y_top_left, dx, -dy, buttons, modifiers
             )
 
@@ -1718,11 +1382,13 @@ YOUR GOAL IS WHAT YOU DECIDE IT IS. WELCOME TO THE WORLD!
             # We might check if we moved significantly, but a simple log is fine.
             self.sensations.append("The powerful force released you.")
 
-        if self.window_physics:
-            self.window_physics.on_mouse_release(
-                x, y_top_left, button, modifiers
-            )
+        if self.physics:
+            self.physics.on_mouse_release(x, y_top_left, button, modifiers)
 
     def cleanup(self) -> None:
         """Gracefully releases all system resources held by this soul."""
         log.debug(f"Cleaned up resources for soul: {self.name}")
+
+
+# Resolve circular dependency for Pydantic
+SoulAgent.model_rebuild()
