@@ -7,25 +7,25 @@ import sys
 from pathlib import Path
 
 
-def resource_path(relative_path: str) -> str:
+def resource_path(relative_path: str) -> Path:
     """Get absolute path to resource, works for dev and for PyInstaller.
 
     Args:
         relative_path: The relative path to the resource.
 
     Returns:
-        The absolute path to the resource.
+        The absolute path to the resource as a Path object.
     """
     if hasattr(sys, "_MEIPASS"):
         # PyInstaller path
-        base_path = sys._MEIPASS
+        base_path = Path(sys._MEIPASS)
     else:
         # Resolve path relative to this file's location
         # This ensures it works even if run from a different CWD
         # Go up one level from utils to soulscape package root
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_path = Path(__file__).resolve().parent.parent
 
-    return os.path.join(base_path, relative_path)
+    return base_path / relative_path
 
 
 def get_appdata_dir() -> Path:

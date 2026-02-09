@@ -5,7 +5,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import BOTH, END, LEFT, NW, RIGHT, YES, E, W, X, Y
 from ttkbootstrap.scrolled import ScrolledFrame, ScrolledText
 
-from soulscape.core.social import Message, MessageBoard, Operator
+from soulscape.core import Message, MessageBoard, Operator
 
 
 class FeedCard(ttk.Frame):

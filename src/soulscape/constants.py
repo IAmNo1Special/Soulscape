@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+from pathlib import Path
 from typing import Final
 
 from soulscape.utils.helpers import resource_path
@@ -45,16 +44,16 @@ CAMERA_ROTATION_SPEED: Final[float] = 0.2  # Speed of the subtle camera rotation
 
 
 # Shader File Paths
-SHADER_DIR: Final[str] = resource_path("shaders/")
-ORB_VERTEX_SHADER_PATH: Final[str] = (
-    f"{SHADER_DIR}orbs/default/default_orb.vert"
+SHADER_DIR: Final[Path] = resource_path("shaders/")
+ORB_VERTEX_SHADER_PATH: Final[Path] = (
+    SHADER_DIR / "orbs/default/default_orb.vert"
 )
-ORB_FRAGMENT_SHADER_PATH: Final[str] = (
-    f"{SHADER_DIR}orbs/default/default_orb.frag"
+ORB_FRAGMENT_SHADER_PATH: Final[Path] = (
+    SHADER_DIR / "orbs/default/default_orb.frag"
 )
-AURA_VERTEX_SHADER_PATH: Final[str] = (
-    f"{SHADER_DIR}auras/default/default_aura.vert"
+AURA_VERTEX_SHADER_PATH: Final[Path] = (
+    SHADER_DIR / "auras/default/default_aura.vert"
 )
-AURA_FRAGMENT_SHADER_PATH: Final[str] = (
-    f"{SHADER_DIR}auras/default/default_aura.frag"
+AURA_FRAGMENT_SHADER_PATH: Final[Path] = (
+    SHADER_DIR / "auras/default/default_aura.frag"
 )

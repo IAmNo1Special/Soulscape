@@ -38,7 +38,7 @@ from soulscape.constants import (
 from soulscape.ui.graphics.resources import ResourceManager, resource_manager
 
 if TYPE_CHECKING:
-    from soulscape.core.soul import Soul
+    from soulscape.core import Soul
 
 
 class SceneRenderer:

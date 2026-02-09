@@ -7,31 +7,17 @@ from __future__ import annotations
 import math
 import random
 import time
-from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-# Import constants
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
-from soulscape.core.gender import Gender, all_genders
-from soulscape.core.items import Drink, Food, Inventory
-from soulscape.core.marketplace import Marketplace
-from soulscape.core.social import MessageBoard
-from soulscape.core.soul_components.agent import SoulAgent
-from soulscape.core.soul_components.physics import SoulPhysics
-from soulscape.core.species import Species
-from soulscape.core.stats import SoulStats
 from soulscape.system.logger import log
 
-# Global list of locations (moved from Isekai.py)
-POSSIBLE_LOCATIONS = [
-    "Capital City",
-    "Small Village",
-    "Forest Cabin",
-    "Mountain Fortress",
-]
+from ..biology import Gender, SoulBiology, SoulStats, Species
+from ..interactions import Drink, Food, Inventory, Marketplace, MessageBoard
+from .agent import SoulAgent
+from .physics import SoulPhysics
 
 
-# --- Main Application Class ---
 class Soul:
     """An autonomous entity within the Soulscape simulation.
 
@@ -51,14 +37,13 @@ class Soul:
         window_physics: A SoulPhysics instance handling screen movement.
     """
 
-    _current_soul_id: int = 0
-
     @classmethod
     def from_dict(
         cls,
         data: dict[str, Any],
         on_right_click: Any = None,
         on_move_end: Any = None,
+        on_state_change: Any = None,
         soul_registry: list[Soul] | None = None,
         **kwargs: Any,
     ) -> Soul:
@@ -76,12 +61,13 @@ class Soul:
         Returns:
             A new Soul instance with its state fully restored.
         """
-        name = data.get("name")
+        name = data.get("biology").get("name")
         orb_color = tuple(data.get("orb_color", (0.56, 0.93, 0.56)))
         aura_color = tuple(data.get("aura_color", (1.0, 0.5, 0.0)))
+        aura_visible = bool(data.get("aura_visible", True))
         position = tuple(data.get("position", (100, 100)))
 
-        stats_data = data.get("stats")
+        stats_data = data.get("biology").get("stats")
         stats = SoulStats.from_dict(stats_data) if stats_data else None
 
         soul = cls(
@@ -90,6 +76,7 @@ class Soul:
             name=name,
             on_right_click=on_right_click,
             on_move_end=on_move_end,
+            on_state_change=on_state_change,
             initial_position=position,
             stats=stats,
             soul_registry=soul_registry,
@@ -98,10 +85,12 @@ class Soul:
         )
 
         # Restore survival stats if available
-        if "satiety" in data:
-            soul.satiety = data["satiety"]
-        if "hydration" in data:
-            soul.hydration = data["hydration"]
+        biology_data = data.get("biology", {})
+        if biology_data:
+            soul.biology = SoulBiology.from_dict(biology_data)
+
+        # Restore aura visibility
+        soul.aura_visible = aura_visible
 
         # Restore inventory if available
         inventory_data = data.get("inventory")
@@ -121,6 +110,7 @@ class Soul:
         name: str | None = None,
         on_right_click: Any = None,
         on_move_end: Any = None,
+        on_state_change: Any = None,
         initial_position: tuple[int, int] = (0, 0),
         stats: SoulStats | None = None,
         # Simulation Parameters
@@ -143,6 +133,7 @@ class Soul:
             name: The soul's full name. If None, a default name will be assigned.
             on_right_click: Callback triggered on right-click.
             on_move_end: Callback triggered when a movement target is reached.
+            on_state_change: Callback triggered when a major state change occurs (e.g. tools).
             initial_position: The starting (x, y) screen coordinates.
             stats: Pre-defined SoulStats. If None, random stats are generated.
             species: The biological species. Defaults to Human if None.
@@ -155,111 +146,21 @@ class Soul:
             screen_width: The width of the desktop in pixels.
             screen_height: The height of the desktop in pixels.
         """
-        Soul._current_soul_id += 1
-        self.soul_id: int = Soul._current_soul_id
 
         # Initialize position
         self.x: float = float(initial_position[0])
         self.y: float = float(initial_position[1])
         self.draw_y: float = self.y  # Y position for drawing (includes hover)
-
         self.orb_color_rgb = orb_color_rgb
         self.aura_color_rgb = aura_color_rgb
-
         self.on_right_click: Any = on_right_click
         self.on_move_end: Any = on_move_end
+        self.on_state_change: Any = on_state_change
         self.soul_registry: list[Soul] = soul_registry or []
         self.screen_width: int = screen_width
         self.screen_height: int = screen_height
 
-        # --- Simulation Logic Initialization ---
-
-        # Species & Gender
-        # We need a default species if none provided, to avoid crashes in simulation
-        # In a real app, maybe we'd require it, but for compatibility:
-        if species is None:
-            # Basic default if not provided (e.g. legacy/testing)
-            # Ideally simulation should provide this.
-            # We create a fallback locally if needed or assume user handles it.
-            # For now, let's allow None but simulation methods might need checking.
-            self.species = Species(
-                "Human", [Gender("Male", False), Gender("Female", True)]
-            )
-        else:
-            self.species = species
-
-        if gender is None:
-            self.gender: Gender = random.choice(all_genders)
-        else:
-            self.gender: Gender = gender
-
-        # Name Handling
-        self.first_name: str | None = None
-        self.family_name: str | None = "Doe"
-
-        if name:
-            parts = name.split(" ", 1)
-            self.first_name = parts[0]
-            if len(parts) > 1:
-                self.family_name = parts[1]
-
-        self.name = self.get_full_name()  # Update interaction name
-
-        # Lineage
-        self.birth_mother: Soul | None = birth_mother
-        self.birth_father: Soul | None = birth_father
-
-        # Location
-        self.current_location: str = (
-            current_location
-            if current_location
-            else random.choice(POSSIBLE_LOCATIONS)
-        )
-        self._set_hometown()
-        self._set_birth_datetime()
-
-        # Stats & Biology
-        if stats:
-            self.stats = stats
-        else:
-            self.stats = SoulStats.create_random()
-
-        self.experience_points: float = 0.0
-        self.level: int = 1
-
-        # Derived Stats
-        self.current_health: int = self.stats.max_hp
-
         self.citizenship: list[str] = []
-
-        # Known Names (Simple lists for now, logic from Isekai.py used constant lists)
-        self.known_male_first_names: list[str] = [
-            "Jackson",
-            "John",
-            "Jack",
-            "Malcom",
-            "Fatin",
-        ]
-        self.known_female_first_names: list[str] = [
-            "Jane",
-            "Lily",
-            "Mallory",
-            "Fatima",
-            "Fatinah",
-        ]
-
-        # Needs (Values drain every 1.0s update interval)
-        self.satiety: float = 100.0
-        self.hydration: float = 100.0
-        self.satiety_drain_rate: float = (
-            0.2  # Takes ~8.3 mins to drain from 100 to 0 (1 point every 5s)
-        )
-        self.hydration_drain_rate: float = (
-            0.2  # Takes ~8.3 mins to drain from 100 to 0 (1 point every 5s)
-        )
-        self.activity_level: str = (
-            "resting"  # Can be 'resting', 'active', 'fighting'.
-        )
 
         # Initialize Inventory
         self.inventory: Inventory = Inventory(capacity=10)
@@ -273,10 +174,6 @@ class Soul:
 
         # --- Visual / Physics Initialization ---
 
-        # Only init physics (assuming always needed now, or strictly logic)
-        self.physics = SoulPhysics(
-            self, on_move_end, self.screen_width, self.screen_height
-        )
         self.width = SOUL_WIDTH
         self.height = SOUL_HEIGHT
 
@@ -290,144 +187,25 @@ class Soul:
         self.update_interval: float = 1.0  # seconds for simulation tick
         self._simulation_time_accumulator: float = 0.0
 
-        # Sensory System
-        self.sensations: list[str] = []
-
+        self.biology = SoulBiology(
+            species=species,
+            name=name,
+            birth_mother=birth_mother,
+            birth_father=birth_father,
+            gender=gender,
+            stats=stats,
+            current_location=current_location,
+        )
+        self.physics = SoulPhysics(
+            self, on_move_end, self.screen_width, self.screen_height
+        )
         self.agent: SoulAgent = SoulAgent(soul=self)
 
     # --- Simulation Methods ---
 
-    def get_full_name(self) -> str:
-        """Assembles the first and family names into a readable format.
-
-        Returns:
-            The combined full name, or a generic placeholder if not named.
-        """
-        if self.first_name and self.family_name:
-            return f"{self.first_name} {self.family_name}"
-        elif self.first_name:
-            return self.first_name
-        return f"Soul #{self.soul_id}"
-
-    def _set_birth_datetime(self) -> None:
-        """Records the soul's precise birth time."""
-        self.birth_datetime = datetime.now()
-
-    def _set_hometown(self) -> None:
-        """Sets the hometown to current location for reference."""
-        self.hometown = self.current_location
-
-    def get_id(self) -> int:
-        """Returns the unique numeric ID of the soul."""
-        return self.soul_id
-
-    def get_species(self) -> Species:
-        """Returns the species object associated with this soul."""
-        return self.species
-
-    def get_gender(self) -> str:
-        """Returns the string name of the soul's gender."""
-        return self.gender.gender_name if self.gender else "Unknown"
-
-    def get_current_health(self) -> int:
-        """Returns the current HP level."""
-        return self.current_health
-
-    def get_max_health(self) -> int:
-        """Returns the maximum HP level from biological stats."""
-        return self.stats.max_hp
-
-    def get_birth_datetime(self) -> datetime:
-        """Returns the timestamp of when this soul was created."""
-        return self.birth_datetime
-
-    def get_hometown(self) -> str:
-        """Returns the name of the place where the soul was born."""
-        return self.hometown
-
     def stop(self) -> None:
         """Gracefully halts the soul simulation and releases resources."""
         self.cleanup()
-
-    def get_age(self) -> int:
-        """Calculates time elapsed since birth in seconds."""
-        if hasattr(self, "birth_datetime"):
-            current_datetime: datetime = datetime.now()
-            time_since_birth = current_datetime - self.birth_datetime
-            return int(time_since_birth.total_seconds())
-        return 0
-
-    def is_alive(self) -> bool:
-        """Checks if the soul's vitality is above zero."""
-        return self.current_health > 0
-
-    def is_dead(self) -> bool:
-        """Checks if the soul's vitality has reached zero."""
-        return self.current_health <= 0
-
-    def decrease_satiety(self) -> None:
-        """Naturally drains satiety over time based on current activity.
-
-        This simulates biological energy consumption. More active souls burn
-        energy faster.
-        """
-        rate = self.satiety_drain_rate * self.get_activity_multiplier()
-        self.satiety = round(self.satiety - rate, 2)
-        if self.satiety < 0:
-            self.satiety = 0
-
-    def decrease_hydration(self) -> None:
-        """Naturally drains hydration over time.
-
-        Simulates the constant need for fluids.
-        """
-        rate = self.hydration_drain_rate  # No environment factor
-        self.hydration = round(self.hydration - rate, 2)
-        if self.hydration < 0:
-            self.hydration = 0
-
-    def get_activity_multiplier(self) -> float:
-        """Returns the energy consumption scale for current behavior."""
-        if self.activity_level == "active":
-            return 1.5
-        elif self.activity_level == "fighting":
-            return 2.0
-        return 1.0
-
-    def check_status(self) -> None:
-        """Evaluates biological needs and applies starvation/dehydration damage.
-
-        If needs are critically low, the soul's health will begin to wither.
-        """
-        if self.is_dead():
-            return
-
-        if self.satiety < 20:
-            # Ideally use log or event system, simple print implies headless
-            print(f"{self.name} is starving!")
-            self.apply_health_penalty()
-        elif self.satiety < 50:
-            print(f"{self.name} is hungry.")
-
-        if self.hydration < 20:
-            print(f"{self.name} is dehydrated!")
-            self.apply_health_penalty()
-        elif self.hydration < 50:
-            print(f"{self.name} is thirsty.")
-
-    def apply_health_penalty(self) -> None:
-        """Reduces current HP as a penalty for neglected biological needs."""
-        if self.current_health > 0:
-            health_penalty = random.randint(1, 5)
-            self.current_health -= health_penalty
-            print(f"{self.name} suffers a health penalty of {health_penalty}!")
-            if self.current_health <= 0:
-                self.current_health = 0
-                log.info(f"--- {self.name} HAS PERISHED ---")
-                print(f"--- {self.name} HAS PERISHED ---")
-        else:
-            # Soul is already dead, no further penalties
-            pass
 
     def eat(self) -> dict[str, Any]:
         """Consumes a food item from the inventory to sate hunger.
@@ -440,11 +218,11 @@ class Soul:
         """
         food_items = self.inventory.get_consumables(Food)
         if not food_items:
-            # log.warning(f"{self.name} tried to eat but has no food!")
+            # log.warning(f"{self.biology.name} tried to eat but has no food!")
             return {
                 "status": "fail",
                 "message": "No food in inventory!",
-                "data": {"current_satiety": self.satiety},
+                "data": {"current_satiety": self.biology.satiety},
             }
 
         # Consume the first food item.
@@ -453,10 +231,15 @@ class Soul:
         result_msg = item.consume(self)
         self.inventory.remove_item(item)
         log.info(result_msg)
+        if self.on_state_change:
+            self.on_state_change()
         return {
             "status": "success",
             "message": result_msg,
-            "data": {"satiety_value": value, "current_satiety": self.satiety},
+            "data": {
+                "satiety_value": value,
+                "current_satiety": self.biology.satiety,
+            },
         }
 
     def drink(self) -> dict[str, Any]:
@@ -470,11 +253,13 @@ class Soul:
         """
         drink_items = self.inventory.get_consumables(Drink)
         if not drink_items:
-            log.warning("%s tried to drink but has no water!", self.name)
+            log.warning(
+                "%s tried to drink but has no water!", self.biology.name
+            )
             return {
                 "status": "fail",
                 "message": "No water in inventory!",
-                "data": {"current_hydration": self.hydration},
+                "data": {"current_hydration": self.biology.hydration},
             }
 
         # Consume the first drink item.
@@ -483,20 +268,22 @@ class Soul:
         result_msg = item.consume(self)
         self.inventory.remove_item(item)
         log.info(result_msg)
+        if self.on_state_change:
+            self.on_state_change()
         return {
             "status": "success",
             "message": result_msg,
             "data": {
                 "hydration_value": value,
-                "current_hydration": self.hydration,
+                "current_hydration": self.biology.hydration,
             },
         }
 
     def set_activity_level(self, level: str) -> None:
         """Sets the current physical activity intensity."""
         if level in ["resting", "active", "fighting"]:
-            self.activity_level = level
-            print(f"{self.name} is now {self.activity_level}.")
+            self.biology.activity_level = level
+            print(f"{self.biology.name} is now {self.biology.activity_level}.")
 
     def find_food(self) -> dict[str, Any]:
         """Scours the immediate surroundings for sustenance.
@@ -509,11 +296,16 @@ class Soul:
         """
         success_rate = 0.1  # 10% chance to find food.
         if random.random() > success_rate:
-            log.info(f"{self.name} searched for food but found nothing.")
+            log.info(
+                f"{self.biology.name} searched for food but found nothing."
+            )
             return {
                 "status": "fail",
                 "message": "You searched for food but found nothing.",
-                "data": {"satiety_value": 0, "current_satiety": self.satiety},
+                "data": {
+                    "satiety_value": 0,
+                    "current_satiety": self.biology.satiety,
+                },
             }
 
         food_value = random.randint(10, 30)
@@ -521,14 +313,16 @@ class Soul:
 
         if self.inventory.add_item(new_food):
             log.info(
-                f"{self.name} found {new_food.name} ({food_value} food value)!"
+                f"{self.biology.name} found {new_food.name} ({food_value} food value)!"
             )
+            if self.on_state_change:
+                self.on_state_change()
             return {
                 "status": "success",
                 "message": f"You found {new_food.name} ({food_value} food value)!",
                 "data": {
                     "satiety_value": food_value,
-                    "current_satiety": self.satiety,
+                    "current_satiety": self.biology.satiety,
                 },
             }
 
@@ -536,7 +330,10 @@ class Soul:
         return {
             "status": "fail",
             "message": "You found food but inventory is full!",
-            "data": {"satiety_value": 0, "current_satiety": self.satiety},
+            "data": {
+                "satiety_value": 0,
+                "current_satiety": self.biology.satiety,
+            },
         }
 
     def find_water(self) -> dict[str, Any]:
@@ -550,13 +347,15 @@ class Soul:
         """
         success_rate = 0.1  # 10% chance to find water.
         if random.random() > success_rate:
-            log.info(f"{self.name} searched for water but found nothing.")
+            log.info(
+                f"{self.biology.name} searched for water but found nothing."
+            )
             return {
                 "status": "fail",
                 "message": "You searched for water but found nothing.",
                 "data": {
                     "hydration_value": 0,
-                    "current_hydration": self.hydration,
+                    "current_hydration": self.biology.hydration,
                 },
             }
 
@@ -567,14 +366,16 @@ class Soul:
 
         if self.inventory.add_item(new_drink):
             log.info(
-                f"{self.name} found {new_drink.name} ({water_value} water value)!"
+                f"{self.biology.name} found {new_drink.name} ({water_value} water value)!"
             )
+            if self.on_state_change:
+                self.on_state_change()
             return {
                 "status": "success",
                 "message": f"You found {new_drink.name} ({water_value} water value)!",
                 "data": {
                     "hydration_value": water_value,
-                    "current_hydration": self.hydration,
+                    "current_hydration": self.biology.hydration,
                 },
             }
 
@@ -582,7 +383,10 @@ class Soul:
         return {
             "status": "fail",
             "message": "You found water but inventory is full!",
-            "data": {"hydration_value": 0, "current_hydration": self.hydration},
+            "data": {
+                "hydration_value": 0,
+                "current_hydration": self.biology.hydration,
+            },
         }
 
     def look_around(self) -> dict[str, Any]:
@@ -599,15 +403,15 @@ class Soul:
 
         # Calculate vision radius (must match _run_agent_step logic)
         vision_stat: float = 0.0
-        if self.stats:
-            vision_stat = float(self.stats.vision)
+        if self.biology.stats:
+            vision_stat = float(self.biology.stats.vision)
 
         # Scale radius: Use a moderate base radius so souls can see nearby but not too far.
         # 150px is a good "awareness" zone on screen (300px diameter).
         vision_radius: int = max(100, int(vision_stat * 1.5))
 
         for other in self.soul_registry:
-            if other.soul_id == self.soul_id:
+            if other.biology.soul_id == self.biology.soul_id:
                 continue
 
             dx = other.x - self.x
@@ -624,7 +428,7 @@ class Soul:
 
             nearby_souls_info.append(
                 {
-                    "name": other.name,
+                    "name": other.biology.name,
                     "distance": round(dist, 1),
                     "direction": f"{abs(dx):.1f}px {dir_x}, {abs(dy):.1f}px {dir_y}",
                     "status": "Alive" if other.is_alive() else "Perished",
@@ -681,8 +485,11 @@ class Soul:
 
         # List on marketplace
         listing_id = self.marketplace.add_listing(
-            self.soul_id, self.name, item, price
+            self.biology.soul_id, self.biology.name, item, price
         )
+
+        if self.on_state_change:
+            self.on_state_change()
 
         return {
             "status": "success",
@@ -755,7 +562,7 @@ class Soul:
             }
 
         # Validate Buyer != Seller (Self-Purchase Prevention)
-        if listing.seller_id == self.soul_id:
+        if listing.seller_id == self.biology.soul_id:
             return {
                 "status": "fail",
                 "message": "You cannot buy your own listing.",
@@ -799,7 +606,7 @@ class Soul:
         seller = None
         if self.soul_registry:
             for s in self.soul_registry:
-                if s.soul_id == listing.seller_id:
+                if s.biology.soul_id == listing.seller_id:
                     seller = s
                     break
 
@@ -807,12 +614,15 @@ class Soul:
             seller.essence += seller_net
             seller.essence = round(seller.essence, 2)
             log.info(
-                f"{self.name} bought {listing.item.name} from {seller.name} for {listing.price} Essence. Tax: {tax_amount}. Seller Net: {seller_net}"
+                f"{self.biology.name} bought {listing.item.name} from {seller.biology.name} for {listing.price} Essence. Tax: {tax_amount}. Seller Net: {seller_net}"
             )
         else:
             log.warning(
                 f"Seller {listing.seller_id} not found for payment. Essence burned."
             )
+
+        if self.on_state_change:
+            self.on_state_change()
 
         return {
             "status": "success",
@@ -840,7 +650,7 @@ class Soul:
             return {"status": "fail", "message": "Listing not found."}
 
         # Validate Ownership
-        if listing.seller_id != self.soul_id:
+        if listing.seller_id != self.biology.soul_id:
             return {
                 "status": "fail",
                 "message": "You can only cancel your own listings.",
@@ -865,8 +675,11 @@ class Soul:
         self.inventory.add_item(removed_listing.item)
 
         log.info(
-            f"{self.name} cancelled listing {listing_id} and retrieved {removed_listing.item.name}."
+            f"{self.biology.name} cancelled listing {listing_id} and retrieved {removed_listing.item.name}."
         )
+
+        if self.on_state_change:
+            self.on_state_change()
 
         return {
             "status": "success",
@@ -895,7 +708,7 @@ class Soul:
         cost = 5.00
         if self.essence < cost:
             log.info(
-                f"{self.name} tried to post but has insufficient essence ({self.essence:.2f} < {cost})"
+                f"{self.biology.name} tried to post but has insufficient essence ({self.essence:.2f} < {cost})"
             )
             return {
                 "status": "fail",
@@ -905,9 +718,13 @@ class Soul:
 
         self.essence -= cost
         post = self.message_board.create_post(
-            self.soul_id, self.name, title, content
+            self.biology.soul_id, self.biology.name, title, content
         )
-        log.info(f"{self.name} posted to message board: {title} (Cost: {cost})")
+        log.info(
+            f"{self.biology.name} posted to message board: {title} (Cost: {cost})"
+        )
+        if self.on_state_change:
+            self.on_state_change()
         return {
             "status": "success",
             "message": "Message posted successfully.",
@@ -929,7 +746,7 @@ class Soul:
         cost = 2.00
         if self.essence < cost:
             log.info(
-                f"{self.name} tried to reply but has insufficient essence ({self.essence:.2f} < {cost})"
+                f"{self.biology.name} tried to reply but has insufficient essence ({self.essence:.2f} < {cost})"
             )
             return {
                 "status": "fail",
@@ -939,11 +756,13 @@ class Soul:
 
         self.essence -= cost
         reply = self.message_board.create_reply(
-            self.soul_id, self.name, message_id, content
+            self.biology.soul_id, self.biology.name, message_id, content
         )
         log.info(
-            f"{self.name} replied to {message_id}: {content[:30]}... (Cost: {cost})"
+            f"{self.biology.name} replied to {message_id}: {content[:30]}... (Cost: {cost})"
         )
+        if self.on_state_change:
+            self.on_state_change()
         return {
             "status": "success",
             "message": f"Replied to message {message_id}.",
@@ -1036,7 +855,7 @@ class Soul:
         cost = 2.00
         if self.essence < cost:
             log.info(
-                f"{self.name} tried to edit but has insufficient essence ({self.essence:.2f} < {cost})"
+                f"{self.biology.name} tried to edit but has insufficient essence ({self.essence:.2f} < {cost})"
             )
             return {
                 "status": "fail",
@@ -1046,10 +865,14 @@ class Soul:
 
         self.essence -= cost
         success = self.message_board.edit_message(
-            self.soul_id, message_id, new_content
+            self.biology.soul_id, message_id, new_content
         )
         if success:
-            log.info(f"{self.name} edited message {message_id} (Cost: {cost})")
+            log.info(
+                f"{self.biology.name} edited message {message_id} (Cost: {cost})"
+            )
+            if self.on_state_change:
+                self.on_state_change()
             return {
                 "status": "success",
                 "message": "Message edited.",
@@ -1072,8 +895,12 @@ class Soul:
         Returns:
             A dictionary confirming the removal.
         """
-        success = self.message_board.delete_message(self.soul_id, message_id)
+        success = self.message_board.delete_message(
+            self.biology.soul_id, message_id
+        )
         if success:
+            if self.on_state_change:
+                self.on_state_change()
             return {"status": "success", "message": "Message deleted."}
         return {
             "status": "fail",
@@ -1101,7 +928,7 @@ class Soul:
         y = max(0, min(y, sh))
 
         self.physics.roaming_target = (float(x), float(y))
-        log.info(f"{self.name} is moving to ({x}, {y})")
+        log.info(f"{self.biology.name} is moving to ({x}, {y})")
 
         return {
             "status": "success",
@@ -1115,9 +942,11 @@ class Soul:
         Simulates psychological effects of physical neglect, such as
         hallucinations or fatigue when satiety or hydration is critically low.
         """
-        if self.satiety < 20 or self.hydration < 20:
+        if self.biology.satiety < 20 or self.biology.hydration < 20:
             event = random.choice(["hallucination", "fatigue"])
-            print(f"Due to low levels, {self.name} experiences {event}!")
+            print(
+                f"Due to low levels, {self.biology.name} experiences {event}!"
+            )
 
     def name_child(self, child: Soul) -> None:
         """Names a child soul based on gender and known names.
@@ -1125,29 +954,30 @@ class Soul:
         Args:
             child: The child Soul instance to be named.
         """
-        if not child.first_name:
-            if child.gender.gender_name == "male" or (
-                hasattr(child.gender, "gender_name")
-                and child.gender.gender_name == "male"
-            ):
-                names = self.known_male_first_names
+        if not child.biology.first_name:
+            if child.biology.gender.gender_name == "male":
+                names = SoulBiology.KNOWN_MALE_FIRST_NAMES
             else:
-                names = self.known_female_first_names  # simplified check
+                names = SoulBiology.KNOWN_FEMALE_FIRST_NAMES  # simplified check
 
             if names:
-                child.first_name = random.choice(names)
+                child.biology.first_name = random.choice(names)
             else:
-                child.first_name = "Unnamed"
+                child.biology.first_name = "Unnamed"
 
-        if not child.family_name:
-            child.family_name = self.family_name
+        if not child.biology.family_name:
+            child.biology.family_name = self.biology.family_name
 
-        child.name = child.get_full_name()  # Update display name
+        child.biology.name = (
+            child.biology.get_full_name()
+        )  # Update display name
 
-        gender_str = "boy" if child.gender.gender_name == "male" else "girl"
-        pronoun = "him" if child.gender.gender_name == "male" else "her"
+        gender_str = (
+            "boy" if child.biology.gender.gender_name == "male" else "girl"
+        )
+        pronoun = "him" if child.biology.gender.gender_name == "male" else "her"
         print(
-            f"{self.name} had a baby {gender_str} and named {pronoun} {child.name}"
+            f"{self.biology.name} had a baby {gender_str} and named {pronoun} {child.biology.name}"
         )
 
     def claim_child(self, child: Soul) -> None:
@@ -1156,10 +986,10 @@ class Soul:
         Args:
             child: The child Soul instance.
         """
-        if self.gender.gender_name == "male":
-            child.birth_father = self
-        elif self.gender.gender_name == "female":
-            child.birth_mother = self
+        if self.biology.gender.gender_name == "male":
+            child.biology.birth_father = self
+        elif self.biology.gender.gender_name == "female":
+            child.biology.birth_mother = self
 
     def give_birth(self) -> Soul | None:
         """Simulates giving birth to a new soul if gender allows.
@@ -1167,18 +997,18 @@ class Soul:
         Returns:
             A new Soul instance if successful, None otherwise.
         """
-        if self.gender.can_give_birth:
+        if self.biology.gender.can_give_birth:
             child = Soul(
-                species=self.species,
+                species=self.biology.species,
                 gender=None,
                 birth_mother=self,
-                current_location=self.current_location,
+                current_location=self.biology.current_location,
                 # Pass None for visual args to default
             )
-            print(f"{self.name} gave birth.")
+            print(f"{self.biology.name} gave birth.")
             return child
         else:
-            print(f"{self.gender}s can't give birth.")
+            print(f"{self.biology.gender}s can't give birth.")
             return None
 
     def attack(self, target: Soul) -> int | None:
@@ -1190,25 +1020,27 @@ class Soul:
         Returns:
             The amount of damage dealt as an integer, or None if invalid.
         """
-        if self.is_dead():
+        if self.biology.is_dead():
             print("You are dead, you can't attack!")
             return None
-        if not target or target.is_dead():
+        if not target or target.biology.is_dead():
             print("Target is invalid or already dead.")
             return None
 
-        damage = self.stats.attack - target.stats.defense
+        damage = self.biology.stats.attack - target.biology.stats.defense
         if damage < 0:
             damage = 0
-        if damage == 0 and self.stats.attack > 0:
+        if damage == 0 and self.biology.stats.attack > 0:
             damage = 1
 
-        target.current_health -= damage
-        print(f"{self.name} attacks {target.name} for {damage} damage!")
+        target.biology.current_health -= damage
+        print(
+            f"{self.biology.name} attacks {target.biology.name} for {damage} damage!"
+        )
 
-        if target.current_health <= 0:
-            target.current_health = 0
-            print(f"You killed {target.name}!")
+        if target.biology.current_health <= 0:
+            target.biology.current_health = 0
+            print(f"You killed {target.biology.name}!")
 
         return damage
 
@@ -1225,13 +1057,11 @@ class Soul:
         x, y = int(self.physics.x), int(self.physics.y)
 
         return {
-            "name": self.name,
+            "biology": self.biology.to_dict(),
             "orb_color": self.orb_color_rgb,
             "aura_color": self.aura_color_rgb,
+            "aura_visible": self.aura_visible,
             "position": (x, y),
-            "stats": self.stats.to_dict() if self.stats else None,
-            "satiety": round(self.satiety, 2),
-            "hydration": round(self.hydration, 2),
             "inventory": self.inventory.to_dict(),
             "essence": self.essence,
         }
@@ -1259,13 +1089,13 @@ class Soul:
         ]
 
         # Simulation Update (Tick-based)
-        if self.is_alive():
+        if self.biology.is_alive():
             self._simulation_time_accumulator += dt
             if self._simulation_time_accumulator >= self.update_interval:
                 self._simulation_time_accumulator -= self.update_interval
-                self.decrease_satiety()
-                self.decrease_hydration()
-                self.check_status()
+                self.biology.decrease_satiety()
+                self.biology.decrease_hydration()
+                self.biology.check_status()
 
             # Agent Decision Update
             if self.agent:
@@ -1278,7 +1108,7 @@ class Soul:
             ):
                 self._last_heartbeat = self.time
                 log.debug(
-                    f"Heartbeat for {self.name}: HP={self.current_health}, Satiety={self.satiety}"
+                    f"Heartbeat for {self.biology.name}: HP={self.biology.current_health}, Satiety={self.biology.satiety}"
                 )
         else:
             # If dead, handle a small visual fade or stop
@@ -1289,7 +1119,7 @@ class Soul:
             ):
                 self._last_death_log = self.time
                 log.info(
-                    f"Soul {self.name} is currently PERISHED and awaiting revival."
+                    f"Soul {self.biology.name} is currently PERISHED and awaiting revival."
                 )
 
     def on_mouse_press(
@@ -1323,7 +1153,7 @@ class Soul:
                 self.x <= x <= self.x + self.width
                 and self.y <= y_top_left <= self.y + self.height
             ):
-                self.sensations.append(
+                self.biology.sensations.append(
                     "You felt a sudden, powerful touch from above."
                 )
 
@@ -1380,14 +1210,14 @@ class Soul:
         # Actually input router calls this on the specific soul.
         if button == 1:  # 1 is LEFT mouse button
             # We might check if we moved significantly, but a simple log is fine.
-            self.sensations.append("The powerful force released you.")
+            self.biology.sensations.append("The powerful force released you.")
 
         if self.physics:
             self.physics.on_mouse_release(x, y_top_left, button, modifiers)
 
     def cleanup(self) -> None:
         """Gracefully releases all system resources held by this soul."""
-        log.debug(f"Cleaned up resources for soul: {self.name}")
+        log.debug(f"Cleaned up resources for soul: {self.biology.name}")
 
 
 # Resolve circular dependency for Pydantic

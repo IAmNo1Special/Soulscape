@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import atexit
-import os
-from typing import Callable
+from pathlib import Path
+from typing import Callable, Union
 
 import pyglet
 
@@ -26,7 +26,9 @@ class ShaderProgram:
     """
 
     def __init__(
-        self, vertex_shader_path: str, fragment_shader_path: str
+        self,
+        vertex_shader_path: Union[str, Path],
+        fragment_shader_path: Union[str, Path],
     ) -> None:
         """Initializes the ShaderProgram.
 
@@ -34,8 +36,8 @@ class ShaderProgram:
             vertex_shader_path: Path to the vertex shader.
             fragment_shader_path: Path to the fragment shader.
         """
-        self.vertex_shader_path = os.path.abspath(vertex_shader_path)
-        self.fragment_shader_path = os.path.abspath(fragment_shader_path)
+        self.vertex_shader_path = Path(vertex_shader_path).resolve()
+        self.fragment_shader_path = Path(fragment_shader_path).resolve()
         self.program: pyglet.graphics.shader.ShaderProgram | None = None
         self.on_reload_callbacks: set[Callable[[], None]] = set()
         self.load()
@@ -163,7 +165,8 @@ class ShaderProgram:
 
 
 def create_shader_program(
-    vertex_shader_path: str, fragment_shader_path: str
+    vertex_shader_path: Union[str, Path],
+    fragment_shader_path: Union[str, Path],
 ) -> ShaderProgram:
     """
     Creates a shader program that supports hot-reloading.

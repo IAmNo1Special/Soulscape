@@ -22,6 +22,13 @@ class Gender:
         self.gender_name: str = gender_name
         self.can_give_birth: bool = can_give_birth
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serializes gender to a dictionary."""
+        return {
+            "gender_name": self.gender_name,
+            "can_give_birth": self.can_give_birth,
+        }
+
     def __repr__(self) -> str:
         """String representation."""
         return self.gender_name

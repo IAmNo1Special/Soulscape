@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import io
+import random
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 # Import constants
 import pyautogui
@@ -17,17 +18,26 @@ from PIL import Image, ImageDraw
 from soulscape.system.logger import log
 
 if TYPE_CHECKING:
-    from soulscape.core.soul import Soul
+    from .soul import Soul
 
 
 class SoulAgent(LlmAgent):
     """Manages the AI brain and tool interactions for a Soul."""
+
+    model_options: ClassVar[list[str]] = [
+        # "gemini-3-pro-preview",
+        # "gemini-3-flash-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-preview-09-2025",
+    ]
     soul: Soul | None = None
     last_decision_time: float = 0.0
     decision_interval: float = 60.0
     session_service: InMemorySessionService | None = None
     session: Session | None = None
     runner: Runner | None = None
+    is_thinking: bool = False
 
     def __init__(self, soul: Soul):
         """Initializes the SoulAgent.
@@ -37,17 +47,18 @@ class SoulAgent(LlmAgent):
         """
         self._init_llm_agent(soul)
         self.soul: Soul = soul
-        
-        
+
         try:
-            self.session_service: InMemorySessionService = InMemorySessionService()
+            self.session_service: InMemorySessionService = (
+                InMemorySessionService()
+            )
             # We initialize the session once
             try:
                 self.session = asyncio.run(
                     self.session_service.create_session(
                         app_name="soulscape",
-                        user_id=f"user_{self.soul.soul_id}",
-                        session_id=f"session_{self.soul.soul_id}",
+                        user_id=f"user_{self.soul.biology.soul_id}",
+                        session_id=f"session_{self.soul.biology.soul_id}",
                     )
                 )
 
@@ -64,9 +75,11 @@ class SoulAgent(LlmAgent):
                 app_name="soulscape",
                 session_service=self.session_service,
             )
-            log.info(f"Agent initialized for {self.soul.name}")
+            log.info(f"Agent initialized for {self.soul.biology.name}")
         except Exception as e:
-            log.error(f"Failed to initialize agent for {self.soul.name}: {e}")
+            log.error(
+                f"Failed to initialize agent for {self.soul.biology.name}: {e}"
+            )
 
         # Initialize last_decision_time to trigger the first decision immediately
         # But add a small delay (e.g. 5s) to allow the app to fully load/render first
@@ -74,21 +87,24 @@ class SoulAgent(LlmAgent):
 
     def trigger_decision(self, current_time: float) -> None:
         """Triggers the agent's decision-making process if the interval has passed."""
-        if current_time - self.last_decision_time > self.decision_interval:
-            self.last_decision_time = current_time
+        if (
+            not self.is_thinking
+            and current_time - self.last_decision_time > self.decision_interval
+        ):
+            self.is_thinking = True
             self._start_agent_thread()
 
     def _init_llm_agent(self, soul: Soul) -> LlmAgent:
         """Initializes the LlmAgent with tools."""
 
         super().__init__(
-            model="gemini-3-flash-preview",  # Using a fast model for game loops
-            name=f"soul_{soul.soul_id}_agent",
-            description=f"AI brain for Soul {soul.name}",
-            instruction=f"""You are {soul.name}, a {soul.gender.gender_name} {soul.species.name}.
+            model=random.choice(SoulAgent.model_options),
+            name=soul.biology.name.replace(" ", "_"),
+            description="A magical and mysterious entity called a 'Soul'.",
+            instruction=f"""You are {soul.biology.name}, a {soul.biology.gender.gender_name} {soul.biology.species.name}.
             Your appearance: Orb Color {soul.orb_color_rgb}, Aura Color {soul.aura_color_rgb}.
-            Your current location: {soul.current_location}.
-            Your stats: HP {soul.current_health}/{soul.stats.max_hp}, Satiety {soul.satiety:.2f}/100, Hydration {soul.hydration:.2f}/100.
+            Your current location: {soul.biology.current_location}.
+            Your stats: HP {soul.biology.current_health}/{soul.biology.stats.max_hp}, Satiety {soul.biology.satiety:.2f}/100, Hydration {soul.biology.hydration:.2f}/100.
             HINTS:
             - Satiety/Hydration < 20: You will suffer random health (HP) penalties due to starvation or dehydration.
             - HP <= 0: You will PERISH.
@@ -211,6 +227,9 @@ class SoulAgent(LlmAgent):
                                     )
             except Exception as e:
                 log.error(f"Error during agent turn for {name}: {e}")
+            finally:
+                self.is_thinking = False
+                self.last_decision_time = self.soul.time if self.soul else 0.0
 
         asyncio.run(_run_async_internal())
 
@@ -220,14 +239,14 @@ class SoulAgent(LlmAgent):
         state_snapshot = self.soul.to_dict()
         state_snapshot.update(
             {
-                "name": self.soul.name,
-                "species": self.soul.species.name,
-                "gender": self.soul.gender.gender_name,
-                "location": self.soul.current_location,
-                "hp": self.soul.current_health,
-                "max_hp": self.soul.stats.max_hp,
-                "satiety": self.soul.satiety,
-                "hydration": self.soul.hydration,
+                "name": self.soul.biology.name,
+                "species": self.soul.biology.species.name,
+                "gender": self.soul.biology.gender.gender_name,
+                "location": self.soul.biology.current_location,
+                "hp": self.soul.biology.current_health,
+                "max_hp": self.soul.biology.stats.max_hp,
+                "satiety": self.soul.biology.satiety,
+                "hydration": self.soul.biology.hydration,
                 "inventory": self.soul.inventory.to_dict(),
                 "orb_color": self.soul.orb_color_rgb,
                 "aura_color": self.soul.aura_color_rgb,
@@ -237,16 +256,18 @@ class SoulAgent(LlmAgent):
                 "width": self.soul.width,
                 "height": self.soul.height,
                 "vision_stat": (
-                    float(self.soul.stats.vision) if self.soul.stats else 0.0
+                    float(self.soul.biology.stats.vision)
+                    if self.soul.biology.stats
+                    else 0.0
                 ),
                 "debug_vision": getattr(self.soul, "DEBUG_VISION", True),
-                "soul_id": self.soul.soul_id,
+                "soul_id": self.soul.biology.soul_id,
             }
         )
 
         # 2. Capture Sensations
-        current_sensations = list(self.soul.sensations)
-        self.soul.sensations.clear()
+        current_sensations = list(self.soul.biology.sensations)
+        self.soul.biology.sensations.clear()
 
         # 3. Capture Screen Context
         try:

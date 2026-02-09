@@ -19,7 +19,7 @@ from soulscape.system.logger import log
 from soulscape.utils.helpers import get_appdata_dir
 
 if TYPE_CHECKING:
-    from soulscape.core.items import Item
+    from .inventory import Item
 
 
 @dataclass
@@ -58,9 +58,7 @@ class MarketListing:
         Returns:
             A new MarketListing instance.
         """
-        from soulscape.core.items import (  # Local import to avoid circular dep
-            Item,
-        )
+        from .inventory import Item  # Local import to avoid circular dep
 
         item = Item.from_dict(data["item"])
         return cls(

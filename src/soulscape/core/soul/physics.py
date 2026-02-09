@@ -21,19 +21,19 @@ from soulscape.constants import (
 from soulscape.system.logger import log
 
 if TYPE_CHECKING:
-    from soulscape.core.soul import Soul
+    from .soul import Soul
 
 
 # --- Window Physics and Interaction ---
 class SoulPhysics:
-    """Manages the movement and interaction of a Soul entity.
+    """Manages the movement and interaction of a Soul soul.
 
     Handles mouse dragging, following, roaming, and collision avoidance.
     """
 
     def __init__(
         self,
-        entity: Soul,
+        soul: Soul,
         on_move_end: Callable[[], None] | None = None,
         screen_width: int = 1920,
         screen_height: int = 1080,
@@ -41,19 +41,19 @@ class SoulPhysics:
         """Initializes physics for a Soul.
 
         Args:
-            entity: The Soul instance to control.
+            soul: The Soul instance to control.
             on_move_end: Optional callback triggered when movement stops.
             screen_width: Width of the screen.
             screen_height: Height of the screen.
         """
-        log.debug(f"Initializing physics for Soul: {entity.name}")
-        self.entity = entity
+        log.debug(f"Initializing physics for Soul: {soul.biology.name}")
+        self.soul = soul
         self.window = None  # Decoupled
         self.on_move_end = on_move_end
 
-        # Initialize from entity position
-        self.x: float = float(self.entity.x)
-        self.y: float = float(self.entity.y)
+        # Initialize from soul position
+        self.x: float = float(self.soul.x)
+        self.y: float = float(self.soul.y)
 
         self.vx: float = 0.0
         self.vy: float = 0.0
@@ -71,8 +71,8 @@ class SoulPhysics:
 
         # Calculate speeds based on stats if available
         base_speed_val = 100.0
-        if hasattr(entity, "stats") and entity.stats:
-            speed_stat = entity.stats.speed
+        if hasattr(soul, "biology") and soul.biology.stats:
+            speed_stat = soul.biology.stats.speed
         else:
             speed_stat = base_speed_val
 
@@ -88,7 +88,7 @@ class SoulPhysics:
         )
         self.follow_delay: float = 0.0  # Timer for follow delay
         self.follow_delay_duration: float = 0.5
-        self.name: str = entity.name
+        self.name: str = soul.biology.name
         self.is_hovered: bool = False
 
         # Track previous position for smooth movement
@@ -228,10 +228,10 @@ class SoulPhysics:
                 ),
             )
 
-            # Update entity position
-            self.entity.x = self.x
-            self.entity.y = self.y
-            self.entity.draw_y = self.y
+            # Update soul position
+            self.soul.x = self.x
+            self.soul.y = self.y
+            self.soul.draw_y = self.y
 
     def update(self, dt: float) -> None:
         """Updates the soul's position and physics.
@@ -271,11 +271,11 @@ class SoulPhysics:
                     self.screen_height - self.height + WINDOW_OVERSHOOT,
                 ),
             )
-            # Update entity position (we update Y here for visual hover in overlay)
-            self.entity.draw_y = final_y
+            # Update soul position (we update Y here for visual hover in overlay)
+            self.soul.draw_y = final_y
 
         else:
-            self.entity.draw_y = self.y  # No hover
+            self.soul.draw_y = self.y  # No hover
 
             # Pick target if needed
             # Pick target if needed (only if autonomous roaming is enabled)
@@ -321,10 +321,10 @@ class SoulPhysics:
         push_y = 0.0
         count = 0
 
-        # Access registry from entity if available
-        if hasattr(self.entity, "soul_registry") and self.entity.soul_registry:
-            for other in self.entity.soul_registry:
-                if other is self.entity:
+        # Access registry from soul if available
+        if hasattr(self.soul, "soul_registry") and self.soul.soul_registry:
+            for other in self.soul.soul_registry:
+                if other is self.soul:
                     continue
 
                 # Check rough bounds first
@@ -366,9 +366,9 @@ class SoulPhysics:
             self.x += move_x
             self.y += move_y
 
-            # Sync to entity
-            self.entity.x = self.x
-            self.entity.y = self.y
+            # Sync to soul
+            self.soul.x = self.x
+            self.soul.y = self.y
 
     def _move_towards_target(
         self, target_x: float, target_y: float, dt: float
@@ -439,11 +439,11 @@ class SoulPhysics:
             ),
         )
 
-        # Only update entity position if it changed significantly
+        # Only update soul position if it changed significantly
         if abs(self.x - self.last_x) > 0.5 or abs(self.y - self.last_y) > 0.5:
-            self.entity.x = self.x
-            self.entity.y = self.y
-            self.entity.draw_y = self.y  # Sync draw Y
+            self.soul.x = self.x
+            self.soul.y = self.y
+            self.soul.draw_y = self.y  # Sync draw Y
             self.last_x, self.last_y = self.x, self.y
 
         return False  # Still moving

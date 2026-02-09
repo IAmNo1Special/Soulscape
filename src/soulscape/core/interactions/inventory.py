@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from soulscape.core.soul import Soul
+    from ..soul.soul import Soul
 
 
 class Item(ABC):
@@ -113,10 +113,10 @@ class Food(Consumable):
         Returns:
             Message describing the effect.
         """
-        soul.satiety += self.value
-        if soul.satiety > 100:
-            soul.satiety = 100
-        return f"{soul.name} ate {self.name} and is now {soul.satiety}% full."
+        soul.biology.satiety += self.value
+        if soul.biology.satiety > 100:
+            soul.biology.satiety = 100
+        return f"{soul.biology.name} ate {self.name} and is now {soul.biology.satiety}% full."
 
 
 class Drink(Consumable):
@@ -131,12 +131,12 @@ class Drink(Consumable):
         Returns:
             Message describing the effect.
         """
-        soul.hydration += self.value
-        if soul.hydration > 100:
-            soul.hydration = 100
+        soul.biology.hydration += self.value
+        if soul.biology.hydration > 100:
+            soul.biology.hydration = 100
         return (
-            f"{soul.name} drank {self.name} and is now "
-            f"{soul.hydration}% hydrated."
+            f"{soul.biology.name} drank {self.name} and is now "
+            f"{soul.biology.hydration}% hydrated."
         )
 
 

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .stats import Stat
 
 
 class Nature(str, Enum):
@@ -36,7 +39,7 @@ class Nature(str, Enum):
     SERIOUS = "Serious"
 
     @staticmethod
-    def get_modifier(nature: Nature, stat: str) -> float:
+    def get_modifier(nature: Nature, stat: str | Stat) -> float:
         """Returns the modifier (0.9, 1.0, 1.1) for a given nature and stat.
 
         HP is never modified by nature.

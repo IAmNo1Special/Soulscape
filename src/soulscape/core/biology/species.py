@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from soulscape.core.gender import Gender
+    from .gender import Gender
 
 
 class Species:
@@ -24,6 +24,13 @@ class Species:
         self.species_id: int = Species.current_species_id
         self.name: str = name
         self.genders: list[Gender] = genders
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serializes species to a dictionary."""
+        return {
+            "name": self.name,
+            "genders": [g.to_dict() for g in self.genders],
+        }
 
     def __repr__(self) -> str:
         """String representation."""

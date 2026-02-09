@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
 
-from soulscape.core.mechanics import Nature
+from .mechanics import Nature
 
 
 class Stat(str, Enum):

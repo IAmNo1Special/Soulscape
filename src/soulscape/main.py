@@ -6,10 +6,11 @@ Manages a single transparent full-screen window and renders multiple souls withi
 from __future__ import annotations
 
 import multiprocessing
-import os
 import random
 import sys
+import time
 import winreg
+from pathlib import Path
 from typing import Any
 
 import pyglet
@@ -17,8 +18,7 @@ from dotenv import load_dotenv
 from pyglet.window import key
 
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
-from soulscape.core.social import MessageBoard
-from soulscape.core.soul import Soul
+from soulscape.core import MessageBoard, Soul
 from soulscape.system.input_router import InputRouter
 from soulscape.system.logger import log
 from soulscape.system.persistence import (
@@ -35,7 +35,7 @@ from soulscape.ui.gui.gui_service import GuiCommand, run_gui_service
 # Globals - now encapsulated in SoulscapeApp, but kept for type hinting if needed
 # active_souls: list[Soul] = []
 # Explicitly load dotenv
-env_path = os.path.join(os.getcwd(), ".env")
+env_path = Path.cwd() / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
 
@@ -53,6 +53,9 @@ class SoulscapeApp:
         # Load settings
         self.saved_settings: dict[str, Any] = load_settings()
         self.global_opacity: int = self.saved_settings.get("opacity", 80)
+        self.global_aura_visible: bool = self.saved_settings.get(
+            "aura_visible", True
+        )
         self.run_on_startup: bool = self._check_startup_registry()
 
         self.gui_command_queue: Any = None
@@ -60,6 +63,7 @@ class SoulscapeApp:
         self.gui_process: Any = None
 
         self.next_soul_id: int = 1
+        self.last_save_time: float = time.time()
 
     def run(self) -> None:
         """Starts the application."""
@@ -87,6 +91,9 @@ class SoulscapeApp:
         # 2b. Initialize Scene Renderer and Input Router
         self.scene_renderer = SceneRenderer()
         self.input_router = InputRouter()
+
+        # Apply initial aura visibility
+        self.scene_renderer.aura_visible = self.global_aura_visible
 
         # 3. Setup Input Handling
         self._setup_window_events()
@@ -167,12 +174,7 @@ class SoulscapeApp:
             if symbol == key.ESCAPE:
                 self.quit_app()
             elif symbol == key.A:
-                # Iterate and toggle aura
-                for soul in self.active_souls:
-                    soul.aura_visible = not soul.aura_visible
-
-            # Broadcast to all (generic handler if needed, but 'A' is now handled)
-            # soul.on_key_press(symbol, modifiers) -> Removed from Soul
+                self.toggle_auras()
 
     def _setup_tray(self) -> None:
         """Initializes and starts the system tray icon."""
@@ -182,8 +184,7 @@ class SoulscapeApp:
             pyglet.clock.schedule_once(lambda dt: self.create_soul(), 0)
 
         def on_tray_toggle_auras() -> None:
-            for soul in self.active_souls:
-                soul.aura_visible = not soul.aura_visible
+            self.toggle_auras()
 
         def on_tray_settings() -> None:
             self.show_global_settings()
@@ -208,15 +209,35 @@ class SoulscapeApp:
         )
         self.tray_controller.start()
 
+    def toggle_auras(self) -> None:
+        """Toggles aura visibility for all souls and persists the setting."""
+        self.scene_renderer.aura_visible = not self.scene_renderer.aura_visible
+        self.global_aura_visible = self.scene_renderer.aura_visible
+        for soul in self.active_souls:
+            soul.aura_visible = self.scene_renderer.aura_visible
+        log.info(f"Global Aura Visibility: {self.scene_renderer.aura_visible}")
+        self.persist_souls_state()
+
     def persist_souls_state(self) -> None:
         """Saves current souls to disk."""
         data = [soul.to_dict() for soul in self.active_souls]
         save_souls(data)
 
+        # Also save global settings that affect souls (like aura visibility)
+        current_settings = load_settings()
+        current_settings["aura_visible"] = self.global_aura_visible
+        save_settings(current_settings)
+
     def update_souls(self, dt: float) -> None:
         """Updates all active souls."""
         for soul in self.active_souls:
             soul.update(dt)
+
+        # Periodic Save (every 60 seconds)
+        if time.time() - self.last_save_time > 60:
+            log.debug("Performing periodic souls state persistence.")
+            self.persist_souls_state()
+            self.last_save_time = time.time()
 
     def create_soul(
         self,
@@ -260,28 +281,32 @@ class SoulscapeApp:
             aura_color_rgb=aura_color,
             on_right_click=self.handle_soul_right_click,
             on_move_end=self.persist_souls_state,
+            on_state_change=self.persist_souls_state,
             initial_position=position,
             soul_registry=self.active_souls,
             screen_width=sw,
             screen_height=sh,
         )
-
+        soul.aura_visible = self.global_aura_visible
         self.active_souls.append(soul)
         log.debug(f"Spawned new soul: {name}")
+        self.persist_souls_state()
         return soul
 
     def handle_soul_right_click(
         self, soul: Soul, screen_x: int, screen_y: int
     ) -> None:
         """Callback for soul right-click events."""
-        log.debug(f"Right-click on soul {soul.name} at {screen_x}, {screen_y}")
+        log.debug(
+            f"Right-click on soul {soul.biology.name} at {screen_x}, {screen_y}"
+        )
 
         if self.gui_command_queue:
             self.gui_command_queue.put(
                 {
                     "type": GuiCommand.SHOW_CONTEXT_MENU,
                     "soul_id": id(soul),
-                    "name": soul.name,
+                    "name": soul.biology.name,
                     "x": screen_x,
                     "y": screen_y,
                 }
@@ -293,10 +318,10 @@ class SoulscapeApp:
             {
                 "type": GuiCommand.SHOW_SOUL_SETTINGS,
                 "soul_id": id(soul),
-                "name": soul.name,
+                "name": soul.biology.name,
                 "orb_color": soul.orb_color_rgb,
                 "aura_color": soul.aura_color_rgb,
-                "stats": soul.stats.to_dict(),
+                "stats": soul.biology.stats.to_dict(),
             }
         )
 
@@ -338,11 +363,11 @@ class SoulscapeApp:
                     cmd = f'"{sys.executable}"'
                 else:
                     exe_path = sys.executable
-                    script_path = os.path.abspath(sys.argv[0])
+                    script_path = Path(sys.argv[0]).resolve()
                     cmd = f'"{exe_path}" "{script_path}"'
 
                 winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, cmd)
-                log.debug("Added Soulscape to Windows startup: %s", cmd)
+                log.debug(f"Added Soulscape to Windows startup: {cmd}")
             else:
                 try:
                     winreg.DeleteValue(key, app_name)
@@ -351,7 +376,7 @@ class SoulscapeApp:
                     pass  # Key doesn't exist, nothing to delete
             winreg.CloseKey(key)
         except Exception as e:
-            log.error("Error modifying Windows startup: %s", e)
+            log.error(f"Error modifying Windows startup: {e}")
 
     def show_global_settings(self) -> None:
         """Shows global settings dialog."""
@@ -378,6 +403,7 @@ class SoulscapeApp:
                     data=soul_data,
                     on_right_click=self.handle_soul_right_click,
                     on_move_end=self.persist_souls_state,
+                    on_state_change=self.persist_souls_state,
                     soul_registry=self.active_souls,
                     screen_width=sw,
                     screen_height=sh,
@@ -437,11 +463,12 @@ class SoulscapeApp:
                                 target_soul.aura_visible = (
                                     not target_soul.aura_visible
                                 )
+                                self.persist_souls_state()
                             elif action == "DISMISS":
                                 self.active_souls.remove(target_soul)
                                 target_soul.cleanup()
                                 log.debug(
-                                    "Dismissed soul: %s", target_soul.name
+                                    f"Dismissed soul: {target_soul.biology.name}"
                                 )
                                 self.persist_souls_state()
 
@@ -455,8 +482,7 @@ class SoulscapeApp:
                             data["content"],
                         )
                         log.info(
-                            "Created operator post via GUI: %s",
-                            data["title"],
+                            f"Created operator post via GUI: {data['title']}"
                         )
 
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_REPLY:
@@ -469,8 +495,7 @@ class SoulscapeApp:
                             data["content"],
                         )
                         log.info(
-                            "Created operator reply via GUI: %s",
-                            data["content"][:20],
+                            f"Created operator reply via GUI: {data['content'][:20]}"
                         )
 
                 elif cmd_type == GuiCommand.DELETE_SOCIAL_MESSAGE:
@@ -481,12 +506,11 @@ class SoulscapeApp:
                         )
                         if success:
                             log.info(
-                                "Deleted social message: %s", data["message_id"]
+                                f"Deleted social message: {data['message_id']}"
                             )
                         else:
                             log.warning(
-                                "Failed to delete social message: %s",
-                                data["message_id"],
+                                f"Failed to delete social message: {data['message_id']}"
                             )
 
                 elif cmd_type == GuiCommand.EDIT_SOCIAL_MESSAGE:
@@ -499,12 +523,11 @@ class SoulscapeApp:
                         )
                         if success:
                             log.info(
-                                "Edited social message: %s", data["message_id"]
+                                f"Edited social message: {data['message_id']}"
                             )
                         else:
                             log.warning(
-                                "Failed to edit social message: %s",
-                                data["message_id"],
+                                f"Failed to edit social message: {data['message_id']}"
                             )
 
                 elif cmd_type == GuiCommand.SHOW_SOUL_SETTINGS:
@@ -516,7 +539,7 @@ class SoulscapeApp:
                             None,
                         )
                         if target_soul:
-                            target_soul.name = data.get("name")
+                            target_soul.biology.name = data.get("name")
                             target_soul.orb_color_rgb = data.get("orb_color")
                             target_soul.aura_color_rgb = data.get("aura_color")
 
@@ -528,7 +551,9 @@ class SoulscapeApp:
                                 target_soul.aura_color_rgb
                             )
 
-                            log.debug("Updated soul %s", target_soul.name)
+                            log.debug(
+                                f"Updated soul {target_soul.biology.name}"
+                            )
                             self.persist_souls_state()
 
                 elif cmd_type == GuiCommand.SHOW_ADD_SOUL:
@@ -546,7 +571,7 @@ class SoulscapeApp:
         except multiprocessing.queues.Empty:
             pass
         except Exception as e:
-            log.error("Error processing GUI results: %s", e)
+            log.error(f"Error processing GUI results: {e}")
 
     def quit_app(self) -> None:
         """Cleans up resources and exits the application."""

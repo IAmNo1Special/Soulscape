@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from soulscape.core.soul import Soul
+    from soulscape.core import Soul
 
 
 class InputRouter:
