@@ -6,16 +6,15 @@ It manages a global, persistent message board for asynchronous communication bet
 
 from __future__ import annotations
 
-import json
-import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from soulscape.system.logger import log
-from soulscape.utils.helpers import get_appdata_dir
+
+if TYPE_CHECKING:
+    from ..stores import DataStore
 
 
 @dataclass
@@ -62,9 +61,9 @@ class Message:
             message_id=data["message_id"],
             author_id=data["author_id"],
             author_name=data["author_name"],
-            title=data["title"],
+            title=data.get("title", ""),
             content=data["content"],
-            timestamp=data["timestamp"],
+            timestamp=data.get("timestamp", time.time()),
             parent_id=data.get("parent_id"),
         )
         msg.replies = [
@@ -78,72 +77,69 @@ class MessageBoard:
 
     _instance = None
 
-    def __new__(cls) -> MessageBoard:
+    def __new__(cls, store: DataStore | None = None) -> MessageBoard:
         """Creates or returns the singleton instance."""
         if cls._instance is None:
             cls._instance = super(MessageBoard, cls).__new__(cls)
             cls._instance.posts = {}  # type: dict[str, Message]
-            cls._instance.db_path = cls.get_messageboard_file()
-            cls._instance._load_data()
+
+            # Default to LocalStore if none provided
+            if store is None:
+                from ..stores import get_default_store
+
+                store = get_default_store()
+            cls._instance.store = store
+            # Need to call initialize() to load data
+            cls._instance.initialized = False
         return cls._instance
 
-    def get_messageboard_file() -> Path:
-        """Get the path to messageboard.json."""
-        return get_appdata_dir() / "messageboard.json"
+    async def initialize(self) -> None:
+        """Asynchronously loads initial data if not already done.
 
-    def _load_data(self) -> None:
-        """Loads messages from JSON file if changed."""
-        if not os.path.exists(self.db_path):
-            return
+        Use this for the first load. For subsequent forced reloads,
+        use refresh().
+        """
+        if not self.initialized:
+            await self._load_data()
+            self.initialized = True
 
+    async def refresh(self) -> None:
+        """Forces a reload of data from the store."""
+        await self._load_data()
+        self.initialized = True
+
+    async def _load_data(self) -> None:
+        """Loads messages from the data store asynchronously."""
         try:
-            mtime = os.path.getmtime(self.db_path)
-            # Only reload if file has changed
-            if hasattr(self, "_last_mtime") and mtime == self._last_mtime:
+            data = await self.store.load_messageboard()
+            if not data:
                 return
 
-            with open(self.db_path, "r") as f:
-                data = json.load(f)
-                new_posts = {}
-                for post_data in data:
-                    try:
-                        post = Message.from_dict(post_data)
-                        new_posts[post.message_id] = post
-                    except Exception as e:
-                        log.error(f"Failed to load post: {e}")
+            new_posts = {}
+            for post_data in data:
+                try:
+                    post = Message.from_dict(post_data)
+                    new_posts[post.message_id] = post
+                except Exception as e:
+                    log.error(f"Failed to load post: {e}")
 
-                self.posts = new_posts
-                self._last_mtime = mtime
-                log.info(
-                    f"Loaded {len(self.posts)} threads from message board."
-                )
+            self.posts = new_posts
+            log.info(f"Loaded {len(self.posts)} threads from data store.")
         except Exception as e:
-            log.error(f"Failed to load message board data: {e}")
+            log.error(f"Failed to load message board data from store: {e}")
 
-    def _save_data(self) -> None:
-        """Saves messages to JSON file."""
+    async def _save_data(self) -> None:
+        """Saves messages to the data store asynchronously."""
         try:
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             data = [post.to_dict() for post in self.posts.values()]
-            with open(self.db_path, "w") as f:
-                json.dump(data, f, indent=4)
+            await self.store.save_messageboard(data)
         except Exception as e:
-            log.error(f"Failed to save message board data: {e}")
+            log.error(f"Failed to save message board data to store: {e}")
 
-    def create_post(
+    async def create_post(
         self, author_id: int, author_name: str, title: str, content: str
     ) -> Message:
-        """Creates and saves a new root post.
-
-        Args:
-            author_id: ID of the author.
-            author_name: Name of the author.
-            title: Title of the thread.
-            content: Content of the message.
-
-        Returns:
-            The created Message object.
-        """
+        """Creates and saves a new root post asynchronously."""
         message_id = str(uuid.uuid4())[:8]
         post = Message(
             message_id=message_id,
@@ -153,23 +149,15 @@ class MessageBoard:
             content=content,
         )
         self.posts[message_id] = post
-        self._save_data()
+        # Granular Hub update
+        await self.store.add_post(post.to_dict())
+        await self._save_data()
         return post
 
-    def create_reply(
+    async def create_reply(
         self, author_id: int, author_name: str, parent_id: str, content: str
     ) -> Message | None:
-        """Creates a reply to an existing post or message.
-
-        Args:
-            author_id: ID of the replying author.
-            author_name: Name of the replying author.
-            parent_id: ID of the message being replied to.
-            content: Content of the reply.
-
-        Returns:
-            The created Message object if successful, otherwise None.
-        """
+        """Creates a reply asynchronously."""
         # Find the root thread
         root_post = self._find_thread_root(parent_id)
         if not root_post:
@@ -189,11 +177,20 @@ class MessageBoard:
         parent_msg = self._find_message_in_tree(root_post, parent_id)
         if parent_msg:
             parent_msg.replies.append(reply)
-            self._save_data()
+            # Granular Hub update
+            await self.store.add_reply(
+                {
+                    "message_id": parent_id,
+                    "author_id": author_id,
+                    "author_name": author_name,
+                    "content": content,
+                }
+            )
+            await self._save_data()
             return reply
         return None
 
-    def edit_message(
+    async def edit_message(
         self, author_id: int, message_id: str, new_content: str
     ) -> bool:
         """Edits an existing message if the author matches.
@@ -213,14 +210,14 @@ class MessageBoard:
                 or author_id == Operator.ID
             ):
                 self.posts[message_id].content = new_content
-                self._save_data()
+                await self._save_data()
                 return True
             return False
 
         # Recursive search
         for post in self.posts.values():
             if self._edit_recursive(post, author_id, message_id, new_content):
-                self._save_data()
+                await self._save_data()
                 return True
         return False
 
@@ -238,7 +235,7 @@ class MessageBoard:
                 return True
         return False
 
-    def delete_message(self, author_id: int, message_id: str) -> bool:
+    async def delete_message(self, author_id: int, message_id: str) -> bool:
         """Deletes a message if the author matches.
 
         Args:
@@ -255,14 +252,14 @@ class MessageBoard:
                 or author_id == Operator.ID
             ):
                 del self.posts[message_id]
-                self._save_data()
+                await self._save_data()
                 return True
             return False
 
         # Check replies (recursive search)
         for post in self.posts.values():
             if self._delete_recursive(post, author_id, message_id):
-                self._save_data()
+                await self._save_data()
                 return True
         return False
 
@@ -350,23 +347,27 @@ class Operator:
     NAME = "Operator"
 
     @staticmethod
-    def post(title: str, content: str) -> None:
+    async def post(title: str, content: str) -> None:
         """Creates a new post as the Operator.
 
         Args:
             title: The thread title.
             content: The message content.
         """
-        MessageBoard().create_post(Operator.ID, Operator.NAME, title, content)
+        await MessageBoard().initialize()
+        await MessageBoard().create_post(
+            Operator.ID, Operator.NAME, title, content
+        )
 
     @staticmethod
-    def reply(parent_id: str, content: str) -> None:
+    async def reply(parent_id: str, content: str) -> None:
         """Creates a reply as the Operator.
 
         Args:
             parent_id: The ID of the message being replied to.
             content: The reply content.
         """
-        MessageBoard().create_reply(
-            parent_id, Operator.ID, Operator.NAME, content
+        await MessageBoard().initialize()
+        await MessageBoard().create_reply(
+            Operator.ID, Operator.NAME, parent_id, content
         )

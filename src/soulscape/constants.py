@@ -6,7 +6,7 @@ from soulscape.utils.helpers import resource_path
 # Window Dimensions
 SOUL_WIDTH: Final[int] = 50
 SOUL_HEIGHT: Final[int] = 80
-WINDOW_OVERSHOOT: Final[int] = 40
+WINDOW_OVERSHOOT: Final[int] = 0
 
 # Physics Parameters for Window Movement
 

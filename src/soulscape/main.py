@@ -5,6 +5,7 @@ Manages a single transparent full-screen window and renders multiple souls withi
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import random
 import sys
@@ -20,7 +21,7 @@ from pyglet.window import key
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
 from soulscape.core import MessageBoard, Soul
 from soulscape.system.input_router import InputRouter
-from soulscape.system.logger import log
+from soulscape.system.logger import log, setup_logging
 from soulscape.system.persistence import (
     load_settings,
     load_souls,
@@ -31,12 +32,21 @@ from soulscape.system.tray import TrayController
 from soulscape.system.window_manager import get_window_manager
 from soulscape.ui.graphics.scene_renderer import SceneRenderer
 from soulscape.ui.gui.gui_service import GuiCommand, run_gui_service
+from soulscape.utils.helpers import safe_run_async
 
 # Globals - now encapsulated in SoulscapeApp, but kept for type hinting if needed
 # active_souls: list[Soul] = []
 # Explicitly load dotenv
 env_path = Path.cwd() / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
+
+
+# Set up logging using the project's utility
+setup_logging(level=logging.DEBUG)
+# Suppress noisy library logs even in debug mode
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.WARNING)
+logging.getLogger("pyglet").setLevel(logging.INFO)
 
 
 class SoulscapeApp:
@@ -57,6 +67,9 @@ class SoulscapeApp:
             "aura_visible", True
         )
         self.run_on_startup: bool = self._check_startup_registry()
+        self.instance_id: str = self.saved_settings.get(
+            "instance_id", "unknown"
+        )
 
         self.gui_command_queue: Any = None
         self.gui_result_queue: Any = None
@@ -286,6 +299,7 @@ class SoulscapeApp:
             soul_registry=self.active_souls,
             screen_width=sw,
             screen_height=sh,
+            local_instance_id=self.instance_id,
         )
         soul.aura_visible = self.global_aura_visible
         self.active_souls.append(soul)
@@ -407,6 +421,7 @@ class SoulscapeApp:
                     soul_registry=self.active_souls,
                     screen_width=sw,
                     screen_height=sh,
+                    local_instance_id=self.instance_id,
                 )
                 self.active_souls.append(soul)
         else:
@@ -475,11 +490,13 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_POST:
                     data = msg.get("data")
                     if data:
-                        MessageBoard().create_post(
-                            data["author_id"],
-                            data["author_name"],
-                            data["title"],
-                            data["content"],
+                        safe_run_async(
+                            MessageBoard().create_post(
+                                data["author_id"],
+                                data["author_name"],
+                                data["title"],
+                                data["content"],
+                            )
                         )
                         log.info(
                             f"Created operator post via GUI: {data['title']}"
@@ -488,11 +505,13 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_REPLY:
                     data = msg.get("data")
                     if data:
-                        MessageBoard().create_reply(
-                            data["author_id"],
-                            data["author_name"],
-                            data["parent_id"],
-                            data["content"],
+                        safe_run_async(
+                            MessageBoard().create_reply(
+                                data["author_id"],
+                                data["author_name"],
+                                data["parent_id"],
+                                data["content"],
+                            )
                         )
                         log.info(
                             f"Created operator reply via GUI: {data['content'][:20]}"
@@ -501,8 +520,10 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.DELETE_SOCIAL_MESSAGE:
                     data = msg.get("data")
                     if data:
-                        success = MessageBoard().delete_message(
-                            data["requester_id"], data["message_id"]
+                        success = safe_run_async(
+                            MessageBoard().delete_message(
+                                data["requester_id"], data["message_id"]
+                            )
                         )
                         if success:
                             log.info(
@@ -516,10 +537,12 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.EDIT_SOCIAL_MESSAGE:
                     data = msg.get("data")
                     if data:
-                        success = MessageBoard().edit_message(
-                            data["requester_id"],
-                            data["message_id"],
-                            data["content"],
+                        success = safe_run_async(
+                            MessageBoard().edit_message(
+                                data["requester_id"],
+                                data["message_id"],
+                                data["content"],
+                            )
                         )
                         if success:
                             log.info(

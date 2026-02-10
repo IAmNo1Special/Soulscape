@@ -18,7 +18,7 @@ def get_souls_file() -> Path:
 
 
 def save_souls(souls: list[dict[str, Any]]) -> bool:
-    """Save soul configurations to souls.json using atomic write.
+    """Save soul configurations to souls.json or Hub.
 
     Args:
         souls: List of serialized soul dictionaries.
@@ -26,10 +26,26 @@ def save_souls(souls: list[dict[str, Any]]) -> bool:
     Returns:
         True if save succeeded, False otherwise.
     """
+    if os.getenv("SOULSCAPE_HUB_URL"):
+        from soulscape.system.network.client import NetworkClient
+        from soulscape.utils.helpers import safe_run_async
+
+        try:
+            log.debug("Saving souls to Hub...")
+            res = safe_run_async(NetworkClient().post_souls(souls))
+
+            # Handle Future if returned (when loop is already running)
+            if hasattr(res, "result") and callable(res.result):
+                res = res.result()
+
+            return res is not None and res.get("status") == "success"
+        except Exception as e:
+            log.error(f"Error saving souls to Hub: {e}")
+            return False
+
     try:
         souls_file = get_souls_file()
-
-        # Atomic write: write to temp, then replace
+        # ... existing local save logic ...
         fd, temp_path = tempfile.mkstemp(dir=souls_file.parent, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -49,37 +65,57 @@ def save_souls(souls: list[dict[str, Any]]) -> bool:
 
 
 def load_souls() -> list[dict[str, Any]]:
-    """Load soul configurations from souls.json.
+    """Load soul configurations from souls.json or Hub.
 
     Returns:
-        List of raw soul dictionaries, or empty list if file doesn't exist or is invalid.
+        List of raw soul dictionaries, or empty list if none exist.
     """
-    try:
-        souls_file = get_souls_file()
+    if os.getenv("SOULSCAPE_HUB_URL"):
+        from soulscape.system.network.client import NetworkClient
+        from soulscape.utils.helpers import safe_run_async
 
-        if not souls_file.exists():
-            log.debug(f"No souls file found at {souls_file}")
+        try:
+            log.debug("Loading souls from Hub...")
+            data = safe_run_async(NetworkClient().get_souls())
+
+            # Handle Future if returned
+            if hasattr(data, "result") and callable(data.result):
+                data = data.result()
+
+            if isinstance(data, list):
+                log.debug(f"Loaded {len(data)} souls from Hub")
+                return data
+            return []
+        except Exception as e:
+            log.error(f"Error loading souls from Hub: {e}")
+            return []
+    else:
+
+        try:
+            souls_file = get_souls_file()
+            if not souls_file.exists():
+                log.debug(f"No souls file found at {souls_file}")
+                return []
+
+            with open(souls_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if not isinstance(data, list):
+                log.warning(f"Invalid data format in {souls_file}")
+                return []
+
+            log.debug(f"Loaded {len(data)} raw souls from {souls_file}")
+            return data
+
+        except json.JSONDecodeError as e:
+            log.error(f"Error parsing souls.json: {e}")
+            return []
+        except Exception as e:
+            log.error(f"Error loading souls: {e}")
             return []
 
-        with open(souls_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
 
-        if not isinstance(data, list):
-            log.warning(f"Invalid data format in {souls_file}")
-            return []
-
-        log.debug(f"Loaded {len(data)} raw souls from {souls_file}")
-        return data
-
-    except json.JSONDecodeError as e:
-        log.error(f"Error parsing souls.json: {e}")
-        return []
-    except Exception as e:
-        log.error(f"Error loading souls: {e}")
-        return []
-
-
-def delete_souls_file() -> bool:
+def __delete_souls_file() -> bool:
     """Delete the souls.json file (for testing/reset)."""
     try:
         souls_file = get_souls_file()
@@ -137,11 +173,19 @@ def load_settings() -> dict[str, Any]:
     Returns:
         Dict with settings, defaults used for missing keys.
     """
-    defaults = {"opacity": 100, "spawn_hotkey": "ctrl+shift+s"}
+    import uuid
+
+    defaults = {
+        "opacity": 100,
+        "spawn_hotkey": "ctrl+shift+s",
+        "instance_id": uuid.uuid4().hex,
+    }
 
     try:
         settings_file = get_settings_file()
         if not settings_file.exists():
+            # Save defaults immediately to persist instance_id
+            save_settings(defaults)
             return defaults
 
         with open(settings_file, "r", encoding="utf-8") as f:
@@ -160,9 +204,14 @@ def load_settings() -> dict[str, Any]:
         settings["opacity"] = int(opacity)
 
         # Merge with defaults for any missing keys
+        needs_save = False
         for key, value in defaults.items():
             if key not in settings:
                 settings[key] = value
+                needs_save = True
+
+        if needs_save:
+            save_settings(settings)
 
         return settings
     except Exception as e:

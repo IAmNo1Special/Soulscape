@@ -4,6 +4,7 @@ import asyncio
 import io
 import random
 import threading
+import uuid
 from typing import TYPE_CHECKING, Any, ClassVar
 
 # Import constants
@@ -11,11 +12,15 @@ import pyautogui
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService, Session
+from google.adk.tools import LongRunningFunctionTool
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
 from PIL import Image, ImageDraw
 
 from soulscape.system.logger import log
+
+from ..interactions.marketplace import Marketplace
+from ..interactions.social import MessageBoard
 
 if TYPE_CHECKING:
     from .soul import Soul
@@ -38,6 +43,8 @@ class SoulAgent(LlmAgent):
     session: Session | None = None
     runner: Runner | None = None
     is_thinking: bool = False
+    session_user_id: str = ""
+    session_id: str = ""
 
     def __init__(self, soul: Soul):
         """Initializes the SoulAgent.
@@ -52,13 +59,18 @@ class SoulAgent(LlmAgent):
             self.session_service: InMemorySessionService = (
                 InMemorySessionService()
             )
-            # We initialize the session once
+            # Define consistent session identifiers
+            self.session_user_id = f"user_{self.soul.biology.soul_id}_{self.soul.biology.name.replace(' ', '_')}"
+            self.session_id = (
+                f"session_{self.soul.biology.soul_id}_{uuid.uuid4().hex[:8]}"
+            )
+
             try:
                 self.session = asyncio.run(
                     self.session_service.create_session(
                         app_name="soulscape",
-                        user_id=f"user_{self.soul.biology.soul_id}",
-                        session_id=f"session_{self.soul.biology.soul_id}",
+                        user_id=self.session_user_id,
+                        session_id=self.session_id,
                     )
                 )
 
@@ -103,8 +115,6 @@ class SoulAgent(LlmAgent):
             description="A magical and mysterious entity called a 'Soul'.",
             instruction=f"""You are {soul.biology.name}, a {soul.biology.gender.gender_name} {soul.biology.species.name}.
             Your appearance: Orb Color {soul.orb_color_rgb}, Aura Color {soul.aura_color_rgb}.
-            Your current location: {soul.biology.current_location}.
-            Your stats: HP {soul.biology.current_health}/{soul.biology.stats.max_hp}, Satiety {soul.biology.satiety:.2f}/100, Hydration {soul.biology.hydration:.2f}/100.
             HINTS:
             - Satiety/Hydration < 20: You will suffer random health (HP) penalties due to starvation or dehydration.
             - HP <= 0: You will PERISH.
@@ -123,7 +133,7 @@ class SoulAgent(LlmAgent):
                 soul.drink,
                 soul.find_food,
                 soul.find_water,
-                soul.move_to,
+                LongRunningFunctionTool(func=soul.move_to),
                 soul.look_around,
                 soul.market_sell,
                 soul.market_browse,
@@ -134,6 +144,8 @@ class SoulAgent(LlmAgent):
                 soul.social_reply,
                 soul.social_edit,
                 soul.social_delete,
+                soul.wait_x_secs,
+                soul.cancel_action,
             ],
         )
 
@@ -186,11 +198,19 @@ class SoulAgent(LlmAgent):
         name = state["name"]
 
         async def _run_async_internal():
+            # Ensure singletons are initialized asynchronously
+            await Marketplace().initialize()
+            await MessageBoard().initialize()
+
             img_bytes = self._process_vision(state, screen_context)
 
             context_str = (
-                f"Name: {name}, Status: HP={state['hp']}, "
-                f"Satiety={state['satiety']:.1f}, Hydration={state['hydration']:.1f}. "
+                f"Name: {name}, "
+                f"Current Location: ({state['x']:.0f}, {state['y']:.0f}). "
+                f"Status: HP={state['hp']}/{state['max_hp']}, "
+                f"Satiety={state['satiety']:.1f}/100, Hydration={state['hydration']:.1f}/100. "
+                f"Essence={state['essence']:.1f}. "
+                f"Inventory: {state['inventory']}."
                 "Visual context attached."
             )
             if sensations:
@@ -213,12 +233,66 @@ class SoulAgent(LlmAgent):
             try:
                 async with Aclosing(
                     self.runner.run_async(
-                        user_id=f"user_{state['soul_id']}",
-                        session_id=f"session_{state['soul_id']}",
+                        user_id=self.session_user_id,
+                        session_id=self.session_id,
                         new_message=content,
                     )
-                ) as agen:
-                    async for event in agen:
+                ) as events:
+                    async for event in events:
+                        if event.long_running_tool_ids:
+                            # Handle long-running tools (like move_to)
+                            for call_id in event.long_running_tool_ids:
+                                # Poll for completion. For soulscape, move_to finishes when physics target is None.
+                                log.info(
+                                    f"Agent {name} waiting for long-running tool {call_id}..."
+                                )
+                                while (
+                                    self.soul
+                                    and self.soul.physics.roaming_target
+                                    is not None
+                                ):
+                                    await asyncio.sleep(
+                                        1.0
+                                    )  # Poll every second
+
+                                # Send final response once arrived
+                                log.info(
+                                    f"Agent {name} arrived at destination. Resuming..."
+                                )
+                                final_res = types.FunctionResponse(
+                                    id=call_id,
+                                    name="move_to",
+                                    response={
+                                        "status": "success",
+                                        "message": "Arrived at destination.",
+                                    },
+                                )
+                                # We continue the run with the response
+                                async with Aclosing(
+                                    self.runner.run_async(
+                                        user_id=self.session_user_id,
+                                        session_id=self.session_id,
+                                        new_message=types.Content(
+                                            role="user",
+                                            parts=[
+                                                types.Part(
+                                                    function_response=final_res
+                                                )
+                                            ],
+                                        ),
+                                    )
+                                ) as sub_events:
+                                    async for sub_event in sub_events:
+                                        if (
+                                            sub_event.is_final_response()
+                                            and sub_event.content.parts
+                                        ):
+                                            for part in sub_event.content.parts:
+                                                if part.text:
+                                                    log.info(
+                                                        f"Soul {name} decided after move: {part.text}"
+                                                    )
+
                         if event.is_final_response() and event.content.parts:
                             for part in event.content.parts:
                                 if part.text:
