@@ -67,6 +67,25 @@ class NetworkClient:
     async def post_reply(self, reply_data: dict[str, Any]) -> Any:
         return await self._post("/social/reply", reply_data)
 
+    async def edit_message(
+        self, message_id: str, edit_data: dict[str, Any]
+    ) -> Any:
+        return await self._post(f"/social/edit/{message_id}", edit_data)
+
+    async def delete_message(self, message_id: str, author_id: int) -> Any:
+        # Pydantic expect author_id in some way? Or query param?
+        # Hub expects it in delete_message(message_id, author_id)
+        # We'll pass it as query param or extra data if we want
+        return await self._post(
+            f"/social/delete/{message_id}?author_id={author_id}", {}
+        )
+
+    async def delete_listing(self, listing_id: str) -> Any:
+        return await self._post(f"/marketplace/delete/{listing_id}", {})
+
+    async def update_funds(self, amount: float) -> Any:
+        return await self._post("/marketplace/funds", {"amount": amount})
+
     async def get_souls(self) -> Any:
         return await self._get("/souls")
 

@@ -6,14 +6,15 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import random
 import time
+from pathlib import Path
 from typing import Any
 
-from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
-from soulscape.system.logger import log
-from soulscape.utils.helpers import action_guard
-
+from ...constants import SOUL_HEIGHT, SOUL_WIDTH
+from ...system.logger import log
+from ...utils.helpers import action_guard
 from ..biology import Gender, SoulBiology, SoulStats, Species
 from ..interactions import Drink, Food, Inventory, Marketplace, MessageBoard
 from .agent import SoulAgent
@@ -46,6 +47,7 @@ class Soul:
         on_right_click: Any = None,
         on_move_end: Any = None,
         on_state_change: Any = None,
+        on_async_state_change: Any = None,
         soul_registry: list[Soul] | None = None,
         **kwargs: Any,
     ) -> Soul:
@@ -54,9 +56,12 @@ class Soul:
         Args:
             data: A dictionary containing the soul's serialized state.
             on_right_click: An optional callback invoked when the soul is
-                right-clicked.
-            on_move_end: An optional callback invoked when the soul finishes a
-                movement action.
+                clicked with the right mouse button.
+            on_move_end: An optional callback invoked when a movement target
+                is reached.
+            on_state_change: An optional callback invoked when a major soul
+                state occurs.
+            on_async_state_change: Async variant for state changes.
             soul_registry: A list of all active souls in the simulation.
             **kwargs: Additional configuration parameters like screen_width.
 
@@ -84,6 +89,7 @@ class Soul:
             on_right_click=on_right_click,
             on_move_end=on_move_end,
             on_state_change=on_state_change,
+            on_async_state_change=on_async_state_change,
             initial_position=position,
             stats=stats,
             soul_registry=soul_registry,
@@ -119,6 +125,7 @@ class Soul:
         on_right_click: Any = None,
         on_move_end: Any = None,
         on_state_change: Any = None,
+        on_async_state_change: Any = None,
         initial_position: tuple[int, int] = (0, 0),
         stats: SoulStats | None = None,
         # Simulation Parameters
@@ -164,6 +171,7 @@ class Soul:
         self.on_right_click: Any = on_right_click
         self.on_move_end: Any = on_move_end
         self.on_state_change: Any = on_state_change
+        self.on_async_state_change: Any = on_async_state_change
         self.soul_registry: list[Soul] = soul_registry or []
         self.screen_width: int = screen_width
         self.screen_height: int = screen_height
@@ -252,13 +260,13 @@ class Soul:
             A success message.
         """
         if action_name == "move_to":
-            self.physics.roaming_target = None
+            self.physics.target_location = None
             msg = "Movement cancelled."
         elif action_name:
             self._active_actions.discard(action_name)
             msg = f"Action '{action_name}' cancelled."
         else:
-            self.physics.roaming_target = None
+            self.physics.target_location = None
             self._active_actions.clear()
             msg = "All actions cancelled."
 
@@ -270,191 +278,11 @@ class Soul:
         """Gracefully halts the soul simulation and releases resources."""
         self.cleanup()
 
-    @action_guard
-    async def eat(self) -> dict[str, Any]:
-        """Consumes a food item from the inventory to sate hunger.
-
-        This tool searches the backpack for any available food source. If found,
-        it replenishes the soul's energy and removes the item from inventory.
-
-        Returns:
-            A dictionary containing the success status and current satiety data.
-        """
-        food_items = self.inventory.get_consumables(Food)
-        if not food_items:
-            # log.warning(f"{self.biology.name} tried to eat but has no food!")
-            return {
-                "status": "fail",
-                "message": "No food in inventory!",
-                "data": {"current_satiety": self.biology.satiety},
-            }
-
-        # Consume the first food item.
-        item = food_items[0]
-        value = item.value
-        result_msg = item.consume(self)
-        self.inventory.remove_item(item)
-        log.info(result_msg)
-        if self.on_state_change:
-            self.on_state_change()
-        return {
-            "status": "success",
-            "message": result_msg,
-            "data": {
-                "satiety_value": value,
-                "current_satiety": self.biology.satiety,
-            },
-        }
-
-    @action_guard
-    async def drink(self) -> dict[str, Any]:
-        """Consumes a drink from the inventory to quench thirst.
-
-        The soul searches for a liquid refreshment in its backpack. Drinking
-        instantly restores hydration levels and clears the inventory slot.
-
-        Returns:
-            A dictionary with status feedback and new hydration levels.
-        """
-        drink_items = self.inventory.get_consumables(Drink)
-        if not drink_items:
-            log.warning(
-                "%s tried to drink but has no water!", self.biology.name
-            )
-            return {
-                "status": "fail",
-                "message": "No water in inventory!",
-                "data": {"current_hydration": self.biology.hydration},
-            }
-
-        # Consume the first drink item.
-        item = drink_items[0]
-        value = item.value
-        result_msg = item.consume(self)
-        self.inventory.remove_item(item)
-        log.info(result_msg)
-        if self.on_state_change:
-            self.on_state_change()
-        return {
-            "status": "success",
-            "message": result_msg,
-            "data": {
-                "hydration_value": value,
-                "current_hydration": self.biology.hydration,
-            },
-        }
-
     def set_activity_level(self, level: str) -> None:
         """Sets the current physical activity intensity."""
         if level in ["resting", "active", "fighting"]:
             self.biology.activity_level = level
             print(f"{self.biology.name} is now {self.biology.activity_level}.")
-
-    @action_guard
-    async def find_food(self) -> dict[str, Any]:
-        """Scours the immediate surroundings for sustenance.
-
-        There is a 10% chance to find edibles. If found, the soul secures the
-        bounty in its backpack for later consumption.
-
-        Returns:
-            A dictionary detailing the search outcome and any items found.
-        """
-        success_rate = 0.1  # 10% chance to find food.
-        if random.random() > success_rate:
-            log.info(
-                f"{self.biology.name} searched for food but found nothing."
-            )
-            return {
-                "status": "fail",
-                "message": "You searched for food but found nothing.",
-                "data": {
-                    "satiety_value": 0,
-                    "current_satiety": self.biology.satiety,
-                },
-            }
-
-        food_value = random.randint(10, 30)
-        new_food = Food("Wild Berries", "Found in the wild.", food_value)
-
-        if self.inventory.add_item(new_food):
-            log.info(
-                f"{self.biology.name} found {new_food.name} ({food_value} food value)!"
-            )
-            if self.on_state_change:
-                self.on_state_change()
-            return {
-                "status": "success",
-                "message": f"You found {new_food.name} ({food_value} food value)!",
-                "data": {
-                    "satiety_value": food_value,
-                    "current_satiety": self.biology.satiety,
-                },
-            }
-
-        log.info("You found food but inventory is full!")
-        return {
-            "status": "fail",
-            "message": "You found food but inventory is full!",
-            "data": {
-                "satiety_value": 0,
-                "current_satiety": self.biology.satiety,
-            },
-        }
-
-    @action_guard
-    async def find_water(self) -> dict[str, Any]:
-        """Searches for a clean source of water to fill a bottle.
-
-        There is a 10% chance to find water. If found, the soul secures the
-        bounty in its backpack for later consumption.
-
-        Returns:
-            A dictionary detailing the search results.
-        """
-        success_rate = 0.1  # 10% chance to find water.
-        if random.random() > success_rate:
-            log.info(
-                f"{self.biology.name} searched for water but found nothing."
-            )
-            return {
-                "status": "fail",
-                "message": "You searched for water but found nothing.",
-                "data": {
-                    "hydration_value": 0,
-                    "current_hydration": self.biology.hydration,
-                },
-            }
-
-        water_value = random.randint(10, 30)
-        new_drink = Drink(
-            "Water Bottle", "Collected from a stream.", water_value
-        )
-
-        if self.inventory.add_item(new_drink):
-            log.info(
-                f"{self.biology.name} found {new_drink.name} ({water_value} water value)!"
-            )
-            if self.on_state_change:
-                self.on_state_change()
-            return {
-                "status": "success",
-                "message": f"You found {new_drink.name} ({water_value} water value)!",
-                "data": {
-                    "hydration_value": water_value,
-                    "current_hydration": self.biology.hydration,
-                },
-            }
-
-        log.info("You found water but inventory is full!")
-        return {
-            "status": "fail",
-            "message": "You found water but inventory is full!",
-            "data": {
-                "hydration_value": 0,
-                "current_hydration": self.biology.hydration,
-            },
-        }
 
     @action_guard
     async def look_around(self) -> dict[str, Any]:
@@ -560,7 +388,9 @@ class Soul:
             self.biology.soul_id, self.biology.name, item, price
         )
 
-        if self.on_state_change:
+        if self.on_async_state_change:
+            await self.on_async_state_change()
+        elif self.on_state_change:
             self.on_state_change()
 
         return {
@@ -655,8 +485,10 @@ class Soul:
             return {"status": "fail", "message": "Inventory full."}
 
         # Execute Trade
-        # 1. Remove listing (atomic-ish)
-        if not await Marketplace().remove_listing(listing_id):
+        # 1. Remove listing (atomic-ish Buy)
+        if not await Marketplace().buy_listing(
+            listing_id, self.biology.soul_id, self.biology.name
+        ):
             return {
                 "status": "fail",
                 "message": "Listing was just sold to someone else.",
@@ -671,8 +503,10 @@ class Soul:
         self.essence -= listing.price
         self.essence = round(self.essence, 2)
 
-        # Add tax to marketplace fund
-        await Marketplace().add_funds(tax_amount)
+        # Add tax to marketplace fund (Only if NOT remote,
+        # as Hub's buy_item already does it)
+        if not os.getenv("SOULSCAPE_HUB_URL"):
+            await Marketplace().add_funds(tax_amount)
 
         # 4. Transfer Item
         self.inventory.add_item(listing.item)
@@ -696,7 +530,9 @@ class Soul:
                 f"Seller {listing.seller_id} not found for payment. Essence burned."
             )
 
-        if self.on_state_change:
+        if self.on_async_state_change:
+            await self.on_async_state_change()
+        elif self.on_state_change:
             self.on_state_change()
 
         return {
@@ -755,7 +591,9 @@ class Soul:
             f"{self.biology.name} cancelled listing {listing_id} and retrieved {removed_listing.item.name}."
         )
 
-        if self.on_state_change:
+        if self.on_async_state_change:
+            await self.on_async_state_change()
+        elif self.on_state_change:
             self.on_state_change()
 
         return {
@@ -802,7 +640,9 @@ class Soul:
         log.info(
             f"{self.biology.name} posted to message board: {title} (Cost: {cost})"
         )
-        if self.on_state_change:
+        if self.on_async_state_change:
+            await self.on_async_state_change()
+        elif self.on_state_change:
             self.on_state_change()
         return {
             "status": "success",
@@ -844,7 +684,9 @@ class Soul:
         log.info(
             f"{self.biology.name} replied to {message_id}: {content[:30]}... (Cost: {cost})"
         )
-        if self.on_state_change:
+        if self.on_async_state_change:
+            await self.on_async_state_change()
+        elif self.on_state_change:
             self.on_state_change()
         return {
             "status": "success",
@@ -960,7 +802,9 @@ class Soul:
             log.info(
                 f"{self.biology.name} edited message {message_id} (Cost: {cost})"
             )
-            if self.on_state_change:
+            if self.on_async_state_change:
+                await self.on_async_state_change()
+            elif self.on_state_change:
                 self.on_state_change()
             return {
                 "status": "success",
@@ -990,7 +834,9 @@ class Soul:
             self.biology.soul_id, message_id
         )
         if success:
-            if self.on_state_change:
+            if self.on_async_state_change:
+                await self.on_async_state_change()
+            elif self.on_state_change:
                 self.on_state_change()
             return {"status": "success", "message": "Message deleted."}
         return {
@@ -1021,8 +867,12 @@ class Soul:
         x = max(0, min(x, sw))
         y = max(0, min(y, sh))
 
-        self.physics.roaming_target = (float(x), float(y))
         log.info(f"{self.biology.name} is moving to ({x}, {y})")
+        self.physics.target_location = (float(x), float(y))
+        if self.on_async_state_change:
+            await self.on_async_state_change()
+        elif self.on_state_change:
+            self.on_state_change()
 
         return {
             "status": "started",
@@ -1206,7 +1056,7 @@ class Soul:
             ):
                 self._last_heartbeat = self.time
                 log.debug(
-                    f"Heartbeat for {self.biology.name}: HP={self.biology.current_health}, Satiety={self.biology.satiety}"
+                    f"Heartbeat for {self.biology.name}: HP={self.biology.current_health}, Satiety={self.biology.satiety}, Hydration={self.biology.hydration}"
                 )
         else:
             # If dead, handle a small visual fade or stop

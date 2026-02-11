@@ -209,6 +209,8 @@ class MessageBoard:
                 self.posts[message_id].author_id == author_id
                 or author_id == Operator.ID
             ):
+                # Granular Hub update
+                await self.store.edit_post(message_id, new_content, author_id)
                 self.posts[message_id].content = new_content
                 await self._save_data()
                 return True
@@ -216,22 +218,30 @@ class MessageBoard:
 
         # Recursive search
         for post in self.posts.values():
-            if self._edit_recursive(post, author_id, message_id, new_content):
+            if await self._edit_recursive(
+                post, author_id, message_id, new_content
+            ):
                 await self._save_data()
                 return True
         return False
 
-    def _edit_recursive(
+    async def _edit_recursive(
         self, parent: Message, author_id: int, target_id: str, new_content: str
     ) -> bool:
         """Helper to find and edit valid reply."""
         for reply in parent.replies:
             if reply.message_id == target_id:
                 if reply.author_id == author_id or author_id == Operator.ID:
+                    # Granular Hub update
+                    await self.store.edit_post(
+                        target_id, new_content, author_id
+                    )
                     reply.content = new_content
                     return True
                 return False
-            if self._edit_recursive(reply, author_id, target_id, new_content):
+            if await self._edit_recursive(
+                reply, author_id, target_id, new_content
+            ):
                 return True
         return False
 
@@ -251,6 +261,8 @@ class MessageBoard:
                 self.posts[message_id].author_id == author_id
                 or author_id == Operator.ID
             ):
+                # Granular Hub update
+                await self.store.delete_post(message_id, author_id)
                 del self.posts[message_id]
                 await self._save_data()
                 return True
@@ -258,12 +270,12 @@ class MessageBoard:
 
         # Check replies (recursive search)
         for post in self.posts.values():
-            if self._delete_recursive(post, author_id, message_id):
+            if await self._delete_recursive(post, author_id, message_id):
                 await self._save_data()
                 return True
         return False
 
-    def _delete_recursive(
+    async def _delete_recursive(
         self, parent: Message, author_id: int, target_id: str
     ) -> bool:
         """Helper to find and delete valid reply.
@@ -279,11 +291,13 @@ class MessageBoard:
         for i, reply in enumerate(parent.replies):
             if reply.message_id == target_id:
                 if reply.author_id == author_id or author_id == Operator.ID:
+                    # Granular Hub update
+                    await self.store.delete_post(target_id, author_id)
                     parent.replies.pop(i)
                     return True
                 return False
             # Recurse
-            if self._delete_recursive(reply, author_id, target_id):
+            if await self._delete_recursive(reply, author_id, target_id):
                 return True
         return False
 

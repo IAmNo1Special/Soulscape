@@ -147,6 +147,8 @@ class Marketplace:
     async def add_funds(self, amount: float) -> None:
         """Adds essence to the market fund (e.g. from taxes)."""
         self.essence_fund += amount
+        # Granular Hub update
+        await self.store.update_funds(amount)
         await self._save_data()
 
     async def add_listing(
@@ -181,11 +183,24 @@ class Marketplace:
         return listing_id
 
     async def remove_listing(self, listing_id: str) -> MarketListing | None:
-        """Removes a listing from the marketplace."""
+        """Removes a listing from the marketplace (Cancellation)."""
         listing = self.listings.pop(listing_id, None)
         if listing:
-            # Granular Hub update
+            # Granular Hub update (pure delete)
             await self.store.delete_listing(listing_id)
+            await self._save_data()
+        return listing
+
+    async def buy_listing(
+        self, listing_id: str, buyer_id: int, buyer_name: str
+    ) -> MarketListing | None:
+        """Executes a purchase of a listing (Buying)."""
+        listing = self.listings.pop(listing_id, None)
+        if listing:
+            # Granular Hub update (trigger tax)
+            await self.store.buy_listing(
+                listing_id, {"buyer_id": buyer_id, "buyer_name": buyer_name}
+            )
             await self._save_data()
         return listing
 

@@ -20,3 +20,5 @@ debug_vision/
 gradex_jsons/
 
 connecting_others.md
+
+.chroma_db/

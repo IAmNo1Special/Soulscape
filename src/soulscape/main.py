@@ -5,10 +5,13 @@ Manages a single transparent full-screen window and renders multiple souls withi
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import multiprocessing
+import os
 import random
 import sys
+import threading
 import time
 import winreg
 from pathlib import Path
@@ -26,7 +29,6 @@ from soulscape.system.persistence import (
     load_settings,
     load_souls,
     save_settings,
-    save_souls,
 )
 from soulscape.system.tray import TrayController
 from soulscape.system.window_manager import get_window_manager
@@ -44,9 +46,10 @@ load_dotenv(dotenv_path=env_path, override=True)
 # Set up logging using the project's utility
 setup_logging(level=logging.DEBUG)
 # Suppress noisy library logs even in debug mode
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("asyncio").setLevel(logging.WARNING)
-logging.getLogger("pyglet").setLevel(logging.INFO)
+logging.getLogger("httpx").setLevel(logging.DEBUG)
+logging.getLogger("asyncio").setLevel(logging.DEBUG)
+logging.getLogger("pyglet").setLevel(logging.WARNING)
+logging.getLogger("google.adk").setLevel(logging.DEBUG)
 
 
 class SoulscapeApp:
@@ -77,6 +80,7 @@ class SoulscapeApp:
 
         self.next_soul_id: int = 1
         self.last_save_time: float = time.time()
+        self._is_saving_souls: bool = False  # Lock for background saves
 
     def run(self) -> None:
         """Starts the application."""
@@ -231,12 +235,64 @@ class SoulscapeApp:
         log.info(f"Global Aura Visibility: {self.scene_renderer.aura_visible}")
         self.persist_souls_state()
 
-    def persist_souls_state(self) -> None:
-        """Saves current souls to disk."""
-        data = [soul.to_dict() for soul in self.active_souls]
-        save_souls(data)
+    async def async_persist_souls_state(self) -> None:
+        """Async version of persist_souls_state."""
+        from soulscape.system.persistence import async_save_souls
 
-        # Also save global settings that affect souls (like aura visibility)
+        data = [soul.to_dict() for soul in self.active_souls]
+        await async_save_souls(data)
+
+        # Also save global settings (local only, so sync is fine)
+        current_settings = load_settings()
+        current_settings["aura_visible"] = self.global_aura_visible
+        save_settings(current_settings)
+
+    def persist_souls_state(self) -> None:
+        """Saves current souls to disk.
+
+        NOTE: If the event loop is already running (e.g., in the main thread),
+        this will schedule the save as a task. If Hub is active and we are
+        on the main thread (Pyglet), we spawn a background thread to avoid
+        blocking the GUI/Simulation during network I/O.
+        """
+        if self._is_saving_souls:
+            # Skip if a save is already in progress to avoid overlapping
+            return
+
+        data = [soul.to_dict() for soul in self.active_souls]
+
+        if os.getenv("SOULSCAPE_HUB_URL"):
+
+            def run_save():
+                self._is_saving_souls = True
+                try:
+                    from soulscape.system.persistence import save_souls
+
+                    save_souls(data)
+                finally:
+                    self._is_saving_souls = False
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we are in an async task already, schedule there
+                    # Note: We don't use the simple flag here because create_task is near-instant,
+                    # but the task execution itself should ideally be guarded.
+                    # For simplicity, we'll let async_persist handle its own flow.
+                    loop.create_task(self.async_persist_souls_state())
+                else:
+                    # Fire-and-forget thread
+                    threading.Thread(target=run_save, daemon=True).start()
+            except RuntimeError:
+                # No loop, fire-and-forget thread
+                threading.Thread(target=run_save, daemon=True).start()
+        else:
+            # Local persistence is fast enough for sync
+            from soulscape.system.persistence import save_souls
+
+            save_souls(data)
+
+        # Also save global settings (local only, sync is fine)
         current_settings = load_settings()
         current_settings["aura_visible"] = self.global_aura_visible
         save_settings(current_settings)
@@ -295,6 +351,7 @@ class SoulscapeApp:
             on_right_click=self.handle_soul_right_click,
             on_move_end=self.persist_souls_state,
             on_state_change=self.persist_souls_state,
+            on_async_state_change=self.async_persist_souls_state,
             initial_position=position,
             soul_registry=self.active_souls,
             screen_width=sw,
@@ -418,6 +475,7 @@ class SoulscapeApp:
                     on_right_click=self.handle_soul_right_click,
                     on_move_end=self.persist_souls_state,
                     on_state_change=self.persist_souls_state,
+                    on_async_state_change=self.async_persist_souls_state,
                     soul_registry=self.active_souls,
                     screen_width=sw,
                     screen_height=sh,

@@ -47,3 +47,23 @@ class DataStore(ABC):
     async def add_reply(self, reply_data: dict[str, Any]) -> bool:
         """Sends a social reply to the store."""
         return True
+
+    async def edit_post(
+        self, message_id: str, content: str, author_id: int
+    ) -> bool:
+        """Updates an existing post/reply in the store."""
+        return True
+
+    async def delete_post(self, message_id: str, author_id: int) -> bool:
+        """Removes a post/reply from the store."""
+        return True
+
+    async def buy_listing(
+        self, listing_id: str, buyer_data: dict[str, Any]
+    ) -> bool:
+        """Completes a marketplace purchase in the store."""
+        return True
+
+    async def update_funds(self, amount: float) -> bool:
+        """Updates the global essence fund."""
+        return True

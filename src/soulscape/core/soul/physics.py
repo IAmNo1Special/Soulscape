@@ -34,7 +34,7 @@ class SoulPhysics:
     def __init__(
         self,
         soul: Soul,
-        on_move_end: Callable[[], None] | None = None,
+        on_move_end: Callable[[Soul, float, float], None] | None = None,
         screen_width: int = 1920,
         screen_height: int = 1080,
     ):
@@ -48,7 +48,7 @@ class SoulPhysics:
         """
         log.debug(f"Initializing physics for Soul: {soul.biology.name}")
         self.soul = soul
-        self.window = None  # Decoupled
+        self.window = None
         self.on_move_end = on_move_end
 
         # Initialize from soul position
@@ -60,7 +60,7 @@ class SoulPhysics:
         self.is_dragging: bool = False
         self.drag_offset_x: float = 0
         self.drag_offset_y: float = 0
-        self.roaming_target: tuple[float, float] | None = None
+        self.target_location: tuple[float, float] | None = None
         self.roaming_pause: float = 0.0
         self.roaming_enabled: bool = False  # Souls only move when instructed
         self.follow_mouse: bool = False
@@ -137,7 +137,7 @@ class SoulPhysics:
                         # Stop any current movement
                         self.vx = 0.0
                         self.vy = 0.0
-                        self.roaming_target = None
+                        self.target_location = None
                         self.roaming_pause = 0.0
                     return  # Skip dragging on double click
 
@@ -159,7 +159,7 @@ class SoulPhysics:
             self.is_dragging = False
 
             if was_dragging and self.on_move_end:
-                self.on_move_end()
+                self.on_move_end(self.soul, self.x, self.y)
 
     def on_mouse_enter(self, x: int, y: int) -> None:
         """Handles mouse enter event to show the name label.
@@ -280,7 +280,7 @@ class SoulPhysics:
             # Pick target if needed
             # Pick target if needed (only if autonomous roaming is enabled)
             if self.roaming_enabled and (
-                self.roaming_target is None or random.random() < 0.005
+                self.target_location is None or random.random() < 0.005
             ):
                 padding = min(self.screen_width, self.screen_height) * 0.1
                 tx = random.uniform(
@@ -289,18 +289,20 @@ class SoulPhysics:
                 ty = random.uniform(
                     padding, self.screen_height - self.height - padding
                 )
-                self.roaming_target = (tx, ty)
+                self.target_location = (tx, ty)
 
             # Move towards target
-            if self.roaming_target:
+            if self.target_location:
                 reached = self._move_towards_target(
-                    self.roaming_target[0], self.roaming_target[1], dt
+                    self.target_location[0], self.target_location[1], dt
                 )
                 if reached:
-                    self.roaming_target = None
+                    self.target_location = None
                     self.roaming_pause = random.uniform(
                         ROAM_PAUSE_MIN, ROAM_PAUSE_MAX
                     )
+                    if self.on_move_end:
+                        self.on_move_end(self.soul, self.x, self.y)
 
             # Apply separation force (Personal Space) to avoid stacking
             self._apply_separation(dt)
@@ -389,9 +391,15 @@ class SoulPhysics:
         distance_sq = dx * dx + dy * dy
 
         # Define a dead zone where we stop moving (squared for efficiency)
-        dead_zone_sq = 4.0  # 2.0 pixels squared
+        # 10.0 pixels is a good threshold for "arrived" in screen space
+        dead_zone_sq = 100.0  # 10.0 pixels squared
 
         if distance_sq <= dead_zone_sq:
+            # Snap exactly to target for perfection
+            self.x = target_x
+            self.y = target_y
+            self.soul.x = self.x
+            self.soul.y = self.y
             return True  # Reached target
 
         # Calculate actual distance

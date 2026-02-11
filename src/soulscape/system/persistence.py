@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,8 @@ def get_souls_file() -> Path:
     return get_appdata_dir() / "souls.json"
 
 
-def save_souls(souls: list[dict[str, Any]]) -> bool:
-    """Save soul configurations to souls.json or Hub.
+async def async_save_souls(souls: list[dict[str, Any]]) -> bool:
+    """Async version of save_souls. Passes through to Hub if configured.
 
     Args:
         souls: List of serialized soul dictionaries.
@@ -28,17 +29,44 @@ def save_souls(souls: list[dict[str, Any]]) -> bool:
     """
     if os.getenv("SOULSCAPE_HUB_URL"):
         from soulscape.system.network.client import NetworkClient
+
+        try:
+            log.debug("Async saving souls to Hub...")
+            res = await NetworkClient().post_souls(souls)
+            is_saved = res is not None and res.get("status") == "success"
+            log.debug(f"Souls saved to Hub: {is_saved}")
+            return is_saved
+        except Exception as e:
+            log.error(f"Error async saving souls to Hub: {e}")
+            return False
+
+    # Local save is already fast and synchronous, but we can run it in a thread if needed.
+    # For now, just call the sync version.
+    return save_souls(souls)
+
+
+def save_souls(souls: list[dict[str, Any]]) -> bool:
+    """Save soul configurations to souls.json or Hub.
+    NOTE: Synchronous Hub saves will block the current thread.
+    If called from the main thread, this can freeze the GUI.
+    """
+    if os.getenv("SOULSCAPE_HUB_URL"):
+        from soulscape.system.network.client import NetworkClient
         from soulscape.utils.helpers import safe_run_async
 
         try:
-            log.debug("Saving souls to Hub...")
+            is_main = threading.current_thread() is threading.main_thread()
+            thread_type = "main thread" if is_main else "worker thread"
+            log.debug(f"Saving souls to Hub ({thread_type} sync)...")
+
             res = safe_run_async(NetworkClient().post_souls(souls))
 
             # Handle Future if returned (when loop is already running)
             if hasattr(res, "result") and callable(res.result):
                 res = res.result()
-
-            return res is not None and res.get("status") == "success"
+            is_saved = res is not None and res.get("status") == "success"
+            log.debug(f"Souls saved to Hub: {is_saved}")
+            return is_saved
         except Exception as e:
             log.error(f"Error saving souls to Hub: {e}")
             return False
@@ -64,6 +92,24 @@ def save_souls(souls: list[dict[str, Any]]) -> bool:
         return False
 
 
+async def async_load_souls() -> list[dict[str, Any]]:
+    """Async version of load_souls."""
+    if os.getenv("SOULSCAPE_HUB_URL"):
+        from soulscape.system.network.client import NetworkClient
+
+        try:
+            log.debug("Async loading souls from Hub...")
+            data = await NetworkClient().get_souls()
+            if isinstance(data, list):
+                log.debug(f"Loaded {len(data)} souls from Hub")
+                return data
+            return []
+        except Exception as e:
+            log.error(f"Error async loading souls from Hub: {e}")
+            return []
+    return load_souls()
+
+
 def load_souls() -> list[dict[str, Any]]:
     """Load soul configurations from souls.json or Hub.
 
@@ -75,7 +121,10 @@ def load_souls() -> list[dict[str, Any]]:
         from soulscape.utils.helpers import safe_run_async
 
         try:
-            log.debug("Loading souls from Hub...")
+            is_main = threading.current_thread() is threading.main_thread()
+            thread_type = "main thread" if is_main else "worker thread"
+            log.debug(f"Loading souls from Hub ({thread_type} sync)...")
+
             data = safe_run_async(NetworkClient().get_souls())
 
             # Handle Future if returned
