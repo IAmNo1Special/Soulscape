@@ -89,5 +89,8 @@ class NetworkClient:
     async def get_souls(self) -> Any:
         return await self._get("/souls")
 
-    async def post_souls(self, souls_data: list[dict[str, Any]]) -> Any:
-        return await self._post("/souls", souls_data)
+    async def post_souls(
+        self, souls_data: list[dict[str, Any]], owner_id: str
+    ) -> Any:
+        payload = {"owner_id": owner_id, "souls": souls_data}
+        return await self._post("/souls", payload)

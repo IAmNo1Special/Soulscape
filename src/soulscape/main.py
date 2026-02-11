@@ -259,8 +259,14 @@ class SoulscapeApp:
         try:
             from soulscape.system.persistence import async_save_souls
 
-            data = [soul.to_dict() for soul in self.active_souls]
-            await async_save_souls(data)
+            # Only send locally-owned souls to the Hub
+            owned_souls = [
+                soul
+                for soul in self.active_souls
+                if soul.owner_id == self.instance_id
+            ]
+            data = [soul.to_dict() for soul in owned_souls]
+            await async_save_souls(data, owner_id=self.instance_id)
 
             # Also save global settings (local only, so sync is fine)
             current_settings = load_settings()

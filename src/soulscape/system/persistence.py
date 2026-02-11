@@ -18,11 +18,14 @@ def get_souls_file() -> Path:
     return get_appdata_dir() / "souls.json"
 
 
-async def async_save_souls(souls: list[dict[str, Any]]) -> bool:
+async def async_save_souls(
+    souls: list[dict[str, Any]], owner_id: str = ""
+) -> bool:
     """Async version of save_souls. Passes through to Hub if configured.
 
     Args:
         souls: List of serialized soul dictionaries.
+        owner_id: The instance_id of this client, used for owner-scoped sync.
 
     Returns:
         True if save succeeded, False otherwise.
@@ -32,7 +35,7 @@ async def async_save_souls(souls: list[dict[str, Any]]) -> bool:
 
         try:
             log.debug("Async saving souls to Hub...")
-            res = await NetworkClient().post_souls(souls)
+            res = await NetworkClient().post_souls(souls, owner_id=owner_id)
             is_saved = res is not None and res.get("status") == "success"
             log.debug(f"Souls saved to Hub: {is_saved}")
             return is_saved
