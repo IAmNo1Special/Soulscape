@@ -58,7 +58,7 @@ class Message:
             A new Message instance.
         """
         msg = cls(
-            message_id=data["message_id"],
+            message_id=data.get("message_id") or data.get("reply_id"),
             author_id=data["author_id"],
             author_name=data["author_name"],
             title=data.get("title", ""),
@@ -140,7 +140,7 @@ class MessageBoard:
         self, author_id: int, author_name: str, title: str, content: str
     ) -> Message:
         """Creates and saves a new root post asynchronously."""
-        message_id = str(uuid.uuid4())[:8]
+        message_id = str(uuid.uuid4())[:12]
         post = Message(
             message_id=message_id,
             author_id=author_id,
@@ -163,7 +163,7 @@ class MessageBoard:
         if not root_post:
             return None
 
-        reply_id = str(uuid.uuid4())[:8]
+        reply_id = str(uuid.uuid4())[:12]
         reply = Message(
             message_id=reply_id,
             author_id=author_id,

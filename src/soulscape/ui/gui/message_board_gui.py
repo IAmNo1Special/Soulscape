@@ -581,9 +581,9 @@ class ThreadViewDialog(ttk.Toplevel):
             else:
                 safe_run_async(
                     self.board.create_reply(
-                        self.post.message_id,
                         Operator.ID,
                         Operator.NAME,
+                        self.post.message_id,
                         content,
                     )
                 )
