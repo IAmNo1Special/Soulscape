@@ -8,14 +8,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import multiprocessing
-import os
 import random
 import sys
 import threading
 import time
 import winreg
 from pathlib import Path
-from typing import Any
+from typing import Any, Coroutine
 
 import pyglet
 from dotenv import load_dotenv
@@ -34,10 +33,7 @@ from soulscape.system.tray import TrayController
 from soulscape.system.window_manager import get_window_manager
 from soulscape.ui.graphics.scene_renderer import SceneRenderer
 from soulscape.ui.gui.gui_service import GuiCommand, run_gui_service
-from soulscape.utils.helpers import safe_run_async
 
-# Globals - now encapsulated in SoulscapeApp, but kept for type hinting if needed
-# active_souls: list[Soul] = []
 # Explicitly load dotenv
 env_path = Path.cwd() / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
@@ -78,9 +74,25 @@ class SoulscapeApp:
         self.gui_result_queue: Any = None
         self.gui_process: Any = None
 
-        self.next_soul_id: int = 1
         self.last_save_time: float = time.time()
+        self.last_topmost_time: float = time.time()
         self._is_saving_souls: bool = False  # Lock for background saves
+
+        # Persistent Background Event Loop for non-UI tasks (saves, net IO)
+        self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(
+            target=self._run_event_loop, daemon=True
+        )
+        self._loop_thread.start()
+
+    def _run_event_loop(self) -> None:
+        """Starts the background event loop."""
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run_coro(self, coro: Coroutine) -> Any:
+        """Helper to run a coroutine in the background loop."""
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def run(self) -> None:
         """Starts the application."""
@@ -117,6 +129,8 @@ class SoulscapeApp:
 
         # 4. Load Content
         self.load_initial_souls()
+
+        self.window_manager.window.set_visible(True)
 
         # 5. Tray Icon
         self._setup_tray()
@@ -237,65 +251,26 @@ class SoulscapeApp:
 
     async def async_persist_souls_state(self) -> None:
         """Async version of persist_souls_state."""
-        from soulscape.system.persistence import async_save_souls
-
-        data = [soul.to_dict() for soul in self.active_souls]
-        await async_save_souls(data)
-
-        # Also save global settings (local only, so sync is fine)
-        current_settings = load_settings()
-        current_settings["aura_visible"] = self.global_aura_visible
-        save_settings(current_settings)
-
-    def persist_souls_state(self) -> None:
-        """Saves current souls to disk.
-
-        NOTE: If the event loop is already running (e.g., in the main thread),
-        this will schedule the save as a task. If Hub is active and we are
-        on the main thread (Pyglet), we spawn a background thread to avoid
-        blocking the GUI/Simulation during network I/O.
-        """
         if self._is_saving_souls:
-            # Skip if a save is already in progress to avoid overlapping
             return
 
-        data = [soul.to_dict() for soul in self.active_souls]
+        self._is_saving_souls = True
+        try:
+            from soulscape.system.persistence import async_save_souls
 
-        if os.getenv("SOULSCAPE_HUB_URL"):
+            data = [soul.to_dict() for soul in self.active_souls]
+            await async_save_souls(data)
 
-            def run_save():
-                self._is_saving_souls = True
-                try:
-                    from soulscape.system.persistence import save_souls
+            # Also save global settings (local only, so sync is fine)
+            current_settings = load_settings()
+            current_settings["aura_visible"] = self.global_aura_visible
+            save_settings(current_settings)
+        finally:
+            self._is_saving_souls = False
 
-                    save_souls(data)
-                finally:
-                    self._is_saving_souls = False
-
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we are in an async task already, schedule there
-                    # Note: We don't use the simple flag here because create_task is near-instant,
-                    # but the task execution itself should ideally be guarded.
-                    # For simplicity, we'll let async_persist handle its own flow.
-                    loop.create_task(self.async_persist_souls_state())
-                else:
-                    # Fire-and-forget thread
-                    threading.Thread(target=run_save, daemon=True).start()
-            except RuntimeError:
-                # No loop, fire-and-forget thread
-                threading.Thread(target=run_save, daemon=True).start()
-        else:
-            # Local persistence is fast enough for sync
-            from soulscape.system.persistence import save_souls
-
-            save_souls(data)
-
-        # Also save global settings (local only, sync is fine)
-        current_settings = load_settings()
-        current_settings["aura_visible"] = self.global_aura_visible
-        save_settings(current_settings)
+    def persist_souls_state(self) -> None:
+        """Saves current souls to disk via background loop."""
+        self._run_coro(self.async_persist_souls_state())
 
     def update_souls(self, dt: float) -> None:
         """Updates all active souls."""
@@ -307,6 +282,11 @@ class SoulscapeApp:
             log.debug("Performing periodic souls state persistence.")
             self.persist_souls_state()
             self.last_save_time = time.time()
+
+        # Periodic Topmost Enforcement (every 5 seconds)
+        if time.time() - self.last_topmost_time > 5:
+            self.window_manager.set_always_on_top()
+            self.last_topmost_time = time.time()
 
     def create_soul(
         self,
@@ -548,7 +528,7 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_POST:
                     data = msg.get("data")
                     if data:
-                        safe_run_async(
+                        self._run_coro(
                             MessageBoard().create_post(
                                 data["author_id"],
                                 data["author_name"],
@@ -563,7 +543,7 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_REPLY:
                     data = msg.get("data")
                     if data:
-                        safe_run_async(
+                        self._run_coro(
                             MessageBoard().create_reply(
                                 data["author_id"],
                                 data["author_name"],
@@ -578,38 +558,28 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.DELETE_SOCIAL_MESSAGE:
                     data = msg.get("data")
                     if data:
-                        success = safe_run_async(
+                        self._run_coro(
                             MessageBoard().delete_message(
                                 data["requester_id"], data["message_id"]
                             )
                         )
-                        if success:
-                            log.info(
-                                f"Deleted social message: {data['message_id']}"
-                            )
-                        else:
-                            log.warning(
-                                f"Failed to delete social message: {data['message_id']}"
-                            )
+                        log.info(
+                            f"Dispatched deletion for message: {data['message_id']}"
+                        )
 
                 elif cmd_type == GuiCommand.EDIT_SOCIAL_MESSAGE:
                     data = msg.get("data")
                     if data:
-                        success = safe_run_async(
+                        self._run_coro(
                             MessageBoard().edit_message(
                                 data["requester_id"],
                                 data["message_id"],
                                 data["content"],
                             )
                         )
-                        if success:
-                            log.info(
-                                f"Edited social message: {data['message_id']}"
-                            )
-                        else:
-                            log.warning(
-                                f"Failed to edit social message: {data['message_id']}"
-                            )
+                        log.info(
+                            f"Dispatched edit for message: {data['message_id']}"
+                        )
 
                 elif cmd_type == GuiCommand.SHOW_SOUL_SETTINGS:
                     data = msg.get("data")

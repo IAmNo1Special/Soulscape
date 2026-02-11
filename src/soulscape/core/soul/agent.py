@@ -39,8 +39,8 @@ class SoulAgent(LlmAgent):
     model_options: ClassVar[list[str]] = [
         # "gemini-3-pro-preview",
         # "gemini-3-flash-preview",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
+        #"gemini-2.5-pro",
+        #"gemini-2.5-flash",
         "gemini-2.5-flash-preview-09-2025",
     ]
 
