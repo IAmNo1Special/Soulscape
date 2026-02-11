@@ -93,6 +93,7 @@ class Soul:
             screen_height=kwargs.get("screen_height", 1080),
             owner_id=data.get("owner_id"),
             local_instance_id=kwargs.get("local_instance_id"),
+            soul_id=data.get("soul_id"),
         )
 
         # Restore soul instance features using biology helper (handles flat/nested)
@@ -134,6 +135,7 @@ class Soul:
         screen_height: int = 1080,
         owner_id: str | None = None,
         local_instance_id: str | None = None,
+        soul_id: str | None = None,
     ) -> None:
         """Initializes a new Soul entity.
 
@@ -204,6 +206,7 @@ class Soul:
             gender=gender,
             stats=stats,
             current_location=(self.x, self.y),
+            soul_id=soul_id,
         )
         self.physics = SoulPhysics(
             self, on_move_end, self.screen_width, self.screen_height

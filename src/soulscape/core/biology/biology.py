@@ -13,10 +13,10 @@ from .stats import SoulStats
 if TYPE_CHECKING:
     from ..soul.soul import Soul
 
+import uuid
+
 
 class SoulBiology:
-    _current_soul_id: int = 0
-
     # Known Names
     KNOWN_MALE_FIRST_NAMES: list[str] = [
         "Jackson",
@@ -42,9 +42,9 @@ class SoulBiology:
         gender: Gender | None = None,
         stats: SoulStats | None = None,
         current_location: tuple[float, float] = (0.0, 0.0),
+        soul_id: str | None = None,
     ):
-        SoulBiology._current_soul_id += 1
-        self.soul_id: int = SoulBiology._current_soul_id
+        self.soul_id: str = soul_id or uuid.uuid4().hex
         self.name = name
         self.species = species
         self.birth_mother = birth_mother
@@ -131,7 +131,7 @@ class SoulBiology:
             return self.first_name
         return f"Soul #{self.soul_id}"
 
-    def get_id(self) -> int:
+    def get_id(self) -> str:
         """Returns the unique numeric ID of the soul."""
         return self.soul_id
 
@@ -349,9 +349,15 @@ class SoulBiology:
         if isinstance(loc, list):
             loc = tuple(loc)
 
+        soul_id = data.get("soul_id")
+        # Handle legacy integer IDs by converting to string, or generate new if missing
+        if isinstance(soul_id, int):
+            soul_id = str(soul_id)
+
         bio = cls(
             name=name,
             current_location=loc,
+            soul_id=soul_id,
         )
         bio.first_name = first_name
         bio.family_name = family_name

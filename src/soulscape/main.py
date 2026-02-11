@@ -69,6 +69,7 @@ class SoulscapeApp:
         self.instance_id: str = self.saved_settings.get(
             "instance_id", "unknown"
         )
+        self.next_soul_id: int = 1
 
         self.gui_command_queue: Any = None
         self.gui_result_queue: Any = None
