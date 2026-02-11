@@ -39,8 +39,8 @@ class SoulAgent(LlmAgent):
     model_options: ClassVar[list[str]] = [
         # "gemini-3-pro-preview",
         # "gemini-3-flash-preview",
-        #"gemini-2.5-pro",
-        #"gemini-2.5-flash",
+        # "gemini-2.5-pro",
+        # "gemini-2.5-flash",
         "gemini-2.5-flash-preview-09-2025",
     ]
 
@@ -101,19 +101,6 @@ class SoulAgent(LlmAgent):
             """,
             tools=[
                 local_grim,
-                LongRunningFunctionTool(func=soul.move_to),
-                soul.look_around,
-                soul.market_sell,
-                soul.market_browse,
-                soul.market_buy,
-                soul.market_cancel,
-                soul.social_post,
-                soul.social_read,
-                soul.social_reply,
-                soul.social_edit,
-                soul.social_delete,
-                soul.wait_x_secs,
-                soul.cancel_action,
             ],
         )
 
@@ -231,7 +218,18 @@ class SoulAgent(LlmAgent):
                 setattr(self._soul, spell_name, bound_method)
 
                 # 2. Update Grimorium's registry so magetools_execute_spell works with bound methods
-                self._grimorium.spell_sync.registry[spell_name] = bound_method
+                # 3. Handle Long-Running Tools
+                if spell_name == "move_to":
+                    self._grimorium.spell_sync.registry[spell_name] = (
+                        LongRunningFunctionTool(func=bound_method)
+                    )
+                    log.debug(
+                        f"Promoted {spell_name} to LongRunningFunctionTool"
+                    )
+                else:
+                    self._grimorium.spell_sync.registry[spell_name] = (
+                        bound_method
+                    )
 
                 log.debug(
                     f"Attached modular spell: {spell_name} to {self._soul.biology.name}"

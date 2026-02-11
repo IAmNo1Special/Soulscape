@@ -1,14 +1,15 @@
 # Domains
-Resource Management, Sustenance, Basic Needs Fulfillment
+Combat, Resource Management, Environmental Perception, Spatial Navigation
 
 # Summary
-This suite of tools provides an agent with fundamental capabilities for managing critical survival resources: water and food. The functionalities span the discovery and acquisition of these resources from the environment, their storage within an inventory system, and their subsequent consumption to mitigate hunger and thirst, thereby restoring an agent's energy and hydration levels.
+This toolset provides an agent with essential capabilities for survival, resource management, and environmental interaction. It enables the agent to engage in direct combat, locate and consume critical resources (food and water) for physiological maintenance, perceive nearby entities within its environment, and execute purposeful movement to specific coordinates. The tools collectively support basic self-preservation and interaction within a dynamic environment.
 
 # Major Capabilities
-- **find_water**: Initiates a search for clean water sources, with a probabilistic success rate, and adds any found water to the agent's inventory.
-- **drink**: Facilitates the consumption of a liquid refreshment from the agent's inventory, resulting in an immediate restoration of hydration levels and removal of the consumed item.
-- **find_food**: Executes a search for edible items within the immediate surroundings, with a probabilistic success rate, and stores any discovered food in the agent's inventory.
-- **eat**: Enables the consumption of a food item from the agent's inventory, replenishing energy/satiety levels and clearing the corresponding inventory slot.
+-   **Combat Engagement**: Initiate direct offensive actions against target entities, applying damage based on the agent's attributes.
+-   **Resource Acquisition**: Actively search and secure vital resources, specifically food and water, from the immediate surroundings, with a probabilistic chance of success.
+-   **Physiological Maintenance**: Consume acquired resources (food and drink) from inventory to replenish hydration and satiety levels, directly impacting the agent's physiological status.
+-   **Environmental Perception**: Utilize sensory mechanisms to detect and identify other entities within the agent's immediate vicinity, providing directional and distance metrics.
+-   **Spatial Navigation**: Initiate and manage long-duration movement operations to precise absolute coordinates within the environment, with framework-level turn suspension until arrival.
 
 # Key Search Keywords
-survival, resource management, hydration, hunger, food acquisition, water acquisition, inventory management, consumption, basic needs
+survival, combat, attack, damage, resource acquisition, food, water, hydration, sustenance, consume, inventory, perception, entities, navigation, movement, travel, environment.

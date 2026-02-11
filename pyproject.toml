@@ -40,5 +40,3 @@ target-version = ['py313']
 profile = "black"
 known_first_party = ["soulscape"]
 
-[project.scripts]
-soulscape = "soulscape.main:main"

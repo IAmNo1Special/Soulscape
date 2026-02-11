@@ -45,7 +45,7 @@ setup_logging(level=logging.DEBUG)
 logging.getLogger("httpx").setLevel(logging.DEBUG)
 logging.getLogger("asyncio").setLevel(logging.DEBUG)
 logging.getLogger("pyglet").setLevel(logging.WARNING)
-logging.getLogger("google.adk").setLevel(logging.DEBUG)
+logging.getLogger("google").setLevel(logging.DEBUG)
 
 
 class SoulscapeApp:
@@ -636,6 +636,11 @@ class SoulscapeApp:
         sys.exit(0)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point for the application."""
     app = SoulscapeApp()
     app.run()
+
+
+if __name__ == "__main__":
+    main()
