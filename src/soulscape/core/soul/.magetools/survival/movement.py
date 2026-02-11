@@ -51,7 +51,7 @@ async def look_around(self) -> dict[str, Any]:
                 "name": other.biology.name,
                 "distance": round(dist, 1),
                 "direction": f"{abs(dx):.1f}px {dir_x}, {abs(dy):.1f}px {dir_y}",
-                "status": "Alive" if other.is_alive() else "Perished",
+                "status": "Alive" if other.biology.is_alive() else "Perished",
             }
         )
 
