@@ -285,7 +285,7 @@ class SoulBiology:
             "hydration": self.hydration,
             "xp": int(self.experience_points),
             "position": [self.current_location[0], self.current_location[1]],
-            "hometown": self.hometown,
+            "hometown": [self.hometown[0], self.hometown[1]],
             "birth_date": (
                 self.birth_datetime.isoformat() if self.birth_datetime else None
             ),
