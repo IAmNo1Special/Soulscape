@@ -469,8 +469,12 @@ class SoulscapeApp:
                     local_instance_id=self.instance_id,
                 )
                 self.active_souls.append(soul)
-        else:
-            # Create default soul
+
+        # Ensure this instance has at least one locally-owned soul
+        has_own_soul = any(
+            soul.owner_id == self.instance_id for soul in self.active_souls
+        )
+        if not has_own_soul:
             self.create_soul()
 
     def check_gui_results(self) -> None:
