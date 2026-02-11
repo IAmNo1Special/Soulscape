@@ -471,7 +471,7 @@ class SoulscapeApp:
                 self.active_souls.append(soul)
         else:
             # Create default soul
-            self.create_soul(name="Genesis Soul")
+            self.create_soul()
 
     def check_gui_results(self) -> None:
         """Polls the GUI result queue for messages and processes them."""
