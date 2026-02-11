@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import sys
 from abc import ABC, abstractmethod
+from time import sleep
 
 try:
     from ctypes import c_void_p, create_unicode_buffer, windll
@@ -42,12 +43,16 @@ class WindowManager(ABC):
             bool: True if all settings were applied successfully, False otherwise.
         """
         success = True
-        success &= self._remove_window_border()
-        success &= self._hide_from_taskbar()
-        success &= self._apply_transparency()
-        success &= self.set_always_on_top(True)
-
-        self.window.set_visible(True)
+        try:
+            # sleep to ensure window is created
+            sleep(0.5)
+            success &= self._remove_window_border()
+            success &= self._hide_from_taskbar()
+            success &= self._apply_transparency()
+            success &= self.set_always_on_top(True)
+        except Exception as e:
+            log.error(f"Error setting up window: {e}")
+            success = False
 
         return success
 

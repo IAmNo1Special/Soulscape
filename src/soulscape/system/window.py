@@ -12,8 +12,8 @@ class SoulscapeWindow(pyglet.window.Window):
         """Initializes the SoulscapeWindow."""
         screen = pyglet.display.get_display().get_default_screen()
         super().__init__(
-            width=screen.width,
-            height=screen.height - 0,  # Leave 1px at bottom for taskbar trigger
+            width=screen.width + 10,
+            height=screen.height + 10,
             style=pyglet.window.Window.WINDOW_STYLE_TRANSPARENT,
             screen=screen,
             vsync=True,

@@ -14,15 +14,6 @@ if TYPE_CHECKING:
     from ..soul.soul import Soul
 
 
-# Global list of locations (moved from Isekai.py)
-POSSIBLE_LOCATIONS = [
-    "Capital City",
-    "Small Village",
-    "Forest Cabin",
-    "Mountain Fortress",
-]
-
-
 class SoulBiology:
     _current_soul_id: int = 0
 
@@ -50,7 +41,7 @@ class SoulBiology:
         birth_father: Soul | None = None,
         gender: Gender | None = None,
         stats: SoulStats | None = None,
-        current_location: str = "Main Square",
+        current_location: tuple[float, float] = (0.0, 0.0),
     ):
         SoulBiology._current_soul_id += 1
         self.soul_id: int = SoulBiology._current_soul_id
@@ -96,17 +87,10 @@ class SoulBiology:
         # Lineage
         self.birth_mother: Soul | None = birth_mother
         self.birth_father: Soul | None = birth_father
+        self.birth_datetime: datetime = datetime.now()
 
-        self._set_birth_datetime()
-
-        # TODO: Should this be updated to be a coordinate(the same as x, y) instead of a string?
-        self.current_location: str = (
-            current_location
-            if current_location
-            else random.choice(POSSIBLE_LOCATIONS)
-        )
-
-        self._set_hometown()
+        self.current_location: tuple[float, float] = current_location
+        self.hometown: tuple[float, float] = current_location
 
         # Stats & Biology
         if stats:
@@ -147,14 +131,6 @@ class SoulBiology:
             return self.first_name
         return f"Soul #{self.soul_id}"
 
-    def _set_birth_datetime(self) -> None:
-        """Records the soul's precise birth time."""
-        self.birth_datetime = datetime.now()
-
-    def _set_hometown(self) -> None:
-        """Sets the hometown to current location for reference."""
-        self.hometown = self.current_location
-
     def get_id(self) -> int:
         """Returns the unique numeric ID of the soul."""
         return self.soul_id
@@ -171,9 +147,14 @@ class SoulBiology:
         """Returns the current HP level."""
         return self.current_health
 
-    def get_max_health(self) -> int:
+    @property
+    def max_health(self) -> int:
         """Returns the maximum HP level from biological stats."""
         return self.stats.max_hp
+
+    def get_max_health(self) -> int:
+        """Returns the maximum HP level from biological stats."""
+        return self.max_health
 
     def get_birth_datetime(self) -> datetime:
         """Returns the timestamp of when this soul was created."""
@@ -237,28 +218,28 @@ class SoulBiology:
             return
 
         if self.satiety < 20:
-            # Ideally use log or event system, simple print implies headless
-            print(f"{self.name} is starving!")
+            log.debug(f"{self.name} is starving!")
             self.apply_health_penalty()
         elif self.satiety < 50:
-            print(f"{self.name} is hungry.")
+            log.debug(f"{self.name} is hungry.")
 
         if self.hydration < 20:
-            print(f"{self.name} is dehydrated!")
+            log.debug(f"{self.name} is dehydrated!")
             self.apply_health_penalty()
         elif self.hydration < 50:
-            print(f"{self.name} is thirsty.")
+            log.debug(f"{self.name} is thirsty.")
 
     def apply_health_penalty(self) -> None:
         """Reduces current HP as a penalty for neglected biological needs."""
         if self.current_health > 0:
             health_penalty = random.randint(1, 5)
             self.current_health -= health_penalty
-            print(f"{self.name} suffers a health penalty of {health_penalty}!")
+            log.debug(
+                f"{self.name} suffers a health penalty of {health_penalty}!"
+            )
             if self.current_health <= 0:
                 self.current_health = 0
                 log.info(f"--- {self.name} HAS PERISHED ---")
-                print(f"--- {self.name} HAS PERISHED ---")
         else:
             # Soul is already dead, no further penalties
             pass
@@ -289,30 +270,121 @@ class SoulBiology:
             ),
         }
 
+    def to_flat_dict(self) -> dict[str, Any]:
+        """Serializes biology to a fully flat dictionary format."""
+        data = {
+            "name": self.name,
+            "first_name": self.first_name,
+            "family_name": self.family_name,
+            "species": self.species.name if self.species else None,
+            "gender": self.gender.gender_name if self.gender else None,
+            "level": self.level,
+            "hp": self.current_health,
+            "max_health": self.stats.max_hp,
+            "satiety": self.satiety,
+            "hydration": self.hydration,
+            "xp": int(self.experience_points),
+            "position": [self.current_location[0], self.current_location[1]],
+            "hometown": [self.hometown[0], self.hometown[1]],
+            "birth_date": (
+                self.birth_datetime.isoformat() if self.birth_datetime else None
+            ),
+            "activity": self.activity_level,
+            "mother_id": (
+                self.birth_mother.biology.soul_id if self.birth_mother else None
+            ),
+            "father_id": (
+                self.birth_father.biology.soul_id if self.birth_father else None
+            ),
+        }
+
+        # Flatten Stats
+        if self.stats:
+            stats_dict = self.stats.to_dict()
+            base = stats_dict.get("base", {})
+            ivs = stats_dict.get("ivs", {})
+            evs = stats_dict.get("evs", {})
+
+            data.update(
+                {
+                    "stat_hp_base": base.get("hp"),
+                    "stat_atk_base": base.get("attack"),
+                    "stat_def_base": base.get("defense"),
+                    "stat_spa_base": base.get("sp_atk"),
+                    "stat_spd_base": base.get("sp_def"),
+                    "stat_spe_base": base.get("speed"),
+                    "stat_vis_base": base.get("vision"),
+                    "stat_hp_iv": ivs.get("hp"),
+                    "stat_atk_iv": ivs.get("attack"),
+                    "stat_def_iv": ivs.get("defense"),
+                    "stat_spa_iv": ivs.get("sp_atk"),
+                    "stat_spd_iv": ivs.get("sp_def"),
+                    "stat_spe_iv": ivs.get("speed"),
+                    "stat_vis_iv": ivs.get("vision"),
+                    "stat_hp_ev": evs.get("hp"),
+                    "stat_atk_ev": evs.get("attack"),
+                    "stat_def_ev": evs.get("defense"),
+                    "stat_spa_ev": evs.get("sp_atk"),
+                    "stat_spd_ev": evs.get("sp_def"),
+                    "stat_spe_ev": evs.get("speed"),
+                    "stat_vis_ev": evs.get("vision"),
+                    "nature": stats_dict.get("nature"),
+                }
+            )
+        return data
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SoulBiology:
-        """Reconstructs biology from a dictionary."""
-        # This is a bit complex because species/gender/parents need lookups
-        # For now, we return a basic instance and let Soul handle the mapping or keep it simple.
-        # Actually, let's just make it a data container for now.
+        """Reconstructs biology from a dictionary (assumes flat protocol)."""
+        name = data.get("name")
+        first_name = data.get("first_name")
+        family_name = data.get("family_name")
+
+        # Location handling (ensure it's a tuple)
+        loc = data.get("position")
+        if loc is None:
+            # Fallback to current_location if position is missing (though it shouldn't be)
+            loc = data.get("current_location", (0.0, 0.0))
+
+        if isinstance(loc, list):
+            loc = tuple(loc)
+
         bio = cls(
-            name=data.get("name"),
-            current_location=data.get("current_location", "Main Square"),
+            name=name,
+            current_location=loc,
         )
-        bio.first_name = data.get("first_name")
-        bio.family_name = data.get("family_name")
+        bio.first_name = first_name
+        bio.family_name = family_name
         bio.satiety = data.get("satiety", 100.0)
         bio.hydration = data.get("hydration", 100.0)
-        bio.experience_points = data.get("experience_points", 0.0)
+        bio.experience_points = data.get("xp", 0.0)
         bio.level = data.get("level", 1)
-        bio.current_health = data.get("current_health", 100)
-        bio.hometown = data.get("hometown", bio.current_location)
-        bio.activity_level = data.get("activity_level", "resting")
+        bio.current_health = data.get("hp", 100)
 
-        if data.get("birth_datetime"):
-            bio.birth_datetime = datetime.fromisoformat(data["birth_datetime"])
+        home = data.get("hometown", loc)
+        if isinstance(home, list):
+            home = tuple(home)
+        bio.hometown = home
+        bio.activity_level = data.get("activity", "resting")
 
-        if data.get("stats"):
-            bio.stats = SoulStats.from_dict(data["stats"])
+        birth_date = data.get("birth_date")
+        if birth_date:
+            try:
+                bio.birth_datetime = datetime.fromisoformat(birth_date)
+            except (ValueError, TypeError):
+                pass
+
+        # Stats are always flat now
+        bio.stats = SoulStats.from_dict(data)
+
+        # Handle flat gender
+        gender_val = data.get("gender")
+        # Try to match with existing gender objects
+        gender_str = str(gender_val).lower() if gender_val else "male"
+        matched_gender = next(
+            (g for g in all_genders if g.gender_name.lower() == gender_str),
+            all_genders[0],  # Default to Male
+        )
+        bio.gender = matched_gender
 
         return bio

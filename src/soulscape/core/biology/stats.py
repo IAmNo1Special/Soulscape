@@ -233,18 +233,39 @@ class SoulStats:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SoulStats:
-        """Reconstructs SoulStats from a dictionary.
+        """Reconstructs SoulStats from a flat dictionary (Hub SQL format)."""
+        base = StatSet(
+            hp=data.get("stat_hp_base", 100),
+            attack=data.get("stat_atk_base", 100),
+            defense=data.get("stat_def_base", 100),
+            sp_atk=data.get("stat_spa_base", 100),
+            sp_def=data.get("stat_spd_base", 100),
+            speed=data.get("stat_spe_base", 100),
+            vision=data.get("stat_vis_base", 100),
+        )
+        ivs = StatSet(
+            hp=data.get("stat_hp_iv", 0),
+            attack=data.get("stat_atk_iv", 0),
+            defense=data.get("stat_def_iv", 0),
+            sp_atk=data.get("stat_spa_iv", 0),
+            sp_def=data.get("stat_spd_iv", 0),
+            speed=data.get("stat_spe_iv", 0),
+            vision=data.get("stat_vis_iv", 0),
+        )
+        evs = StatSet(
+            hp=data.get("stat_hp_ev", 0),
+            attack=data.get("stat_atk_ev", 0),
+            defense=data.get("stat_def_ev", 0),
+            sp_atk=data.get("stat_spa_ev", 0),
+            sp_def=data.get("stat_spd_ev", 0),
+            speed=data.get("stat_spe_ev", 0),
+            vision=data.get("stat_vis_ev", 0),
+        )
 
-        Args:
-            data: The dictionary containing stat data.
-
-        Returns:
-            A new SoulStats instance.
-        """
         return cls(
-            base=StatSet.from_dict(data.get("base", {})),
-            ivs=StatSet.from_dict(data.get("ivs", {})),
-            evs=StatSet.from_dict(data.get("evs", {})),
+            base=base,
+            ivs=ivs,
+            evs=evs,
             level=data.get("level", 1),
             nature=Nature(data.get("nature", "Hardy")),
         )

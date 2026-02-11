@@ -37,8 +37,11 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     """
     logger = logging.getLogger("soulscape")
 
-    # Avoid duplicate handlers if called multiple times
+    # If handlers already exist, just update the levels and return
     if logger.handlers:
+        logger.setLevel(level)
+        for handler in logger.handlers:
+            handler.setLevel(level)
         return logger
 
     logger.setLevel(level)

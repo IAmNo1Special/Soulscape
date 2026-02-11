@@ -7,19 +7,16 @@ asynchronously.
 
 from __future__ import annotations
 
-import json
-import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from soulscape.system.logger import log
-from soulscape.utils.helpers import get_appdata_dir
 
 if TYPE_CHECKING:
-    from .inventory import Item
+    from ..interactions.inventory import Item
+    from ..stores import DataStore
 
 
 @dataclass
@@ -76,74 +73,85 @@ class Marketplace:
 
     _instance = None
 
-    def __new__(cls) -> Marketplace:
+    def __new__(cls, store: DataStore | None = None) -> Marketplace:
         """Creates or returns the singleton instance."""
         if cls._instance is None:
             cls._instance = super(Marketplace, cls).__new__(cls)
             cls._instance.listings = {}  # type: dict[str, MarketListing]
             cls._instance.essence_fund = 0.0  # Accumulated tax
-            cls._instance.db_path = cls.get_marketplace_file()
-            cls._instance._load_data()
+
+            # Default to LocalStore if none provided
+            if store is None:
+                from ..stores import get_default_store
+
+                store = get_default_store()
+            cls._instance.store = store
+            # Need to call initialize() to load data
+            cls._instance.initialized = False
         return cls._instance
 
-    def get_marketplace_file() -> Path:
-        """Get the path to marketplace.json."""
-        return get_appdata_dir() / "marketplace.json"
+    async def initialize(self) -> None:
+        """Asynchronously loads initial data if not already done.
 
-    def _load_data(self) -> None:
-        """Loads listings and essence fund from JSON file."""
-        if not os.path.exists(self.db_path):
-            return
+        Use this for the first load. For subsequent forced reloads,
+        use refresh().
+        """
+        if not self.initialized:
+            await self._load_data()
+            self.initialized = True
 
+    async def refresh(self) -> None:
+        """Forces a reload of data from the store."""
+        await self._load_data()
+        self.initialized = True
+
+    async def _load_data(self) -> None:
+        """Loads listings and essence fund from the data store asynchronously."""
         try:
-            with open(self.db_path, "r") as f:
-                data = json.load(f)
+            data = await self.store.load_marketplace()
+            if not data:
+                return
 
-                # Load Essence Fund (handle legacy files)
-                self.essence_fund = float(data.get("essence_fund", 0.0))
+            # Load Essence Fund
+            self.essence_fund = float(data.get("essence_fund", 0.0))
 
-                # Load Listings
-                listings_data = (
-                    data.get("listings", []) if isinstance(data, dict) else data
-                )
-                # Support old format where root was list
-                if isinstance(data, list):
-                    listings_data = data
+            # Load Listings
+            listings_data = data.get("listings", [])
 
-                for listing_data in listings_data:
-                    try:
-                        listing = MarketListing.from_dict(listing_data)
-                        self.listings[listing.listing_id] = listing
-                    except Exception as e:
-                        log.error(f"Failed to load listing: {e}")
+            for listing_data in listings_data:
+                try:
+                    listing = MarketListing.from_dict(listing_data)
+                    self.listings[listing.listing_id] = listing
+                except Exception as e:
+                    log.error(f"Failed to load listing: {e}")
 
             log.info(
                 f"Loaded {len(self.listings)} active listings. Market Fund: {self.essence_fund:.2f}"
             )
         except Exception as e:
-            log.error(f"Failed to load marketplace data: {e}")
+            log.error(f"Failed to load marketplace data from store: {e}")
 
-    def _save_data(self) -> None:
-        """Saves active listings and essence fund to JSON file."""
+    async def _save_data(self) -> None:
+        """Saves active listings and essence fund to the data store asynchronously."""
         try:
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             data = {
                 "essence_fund": self.essence_fund,
                 "listings": [
                     listing.to_dict() for listing in self.listings.values()
                 ],
             }
-            with open(self.db_path, "w") as f:
-                json.dump(data, f, indent=4)
+            await self.store.save_marketplace(data)
         except Exception as e:
-            log.error(f"Failed to save marketplace data: {e}")
+            log.error(f"Failed to save marketplace data to store: {e}")
 
-    def add_funds(self, amount: float) -> None:
+    async def add_funds(self, amount: float) -> None:
         """Adds essence to the market fund (e.g. from taxes)."""
         self.essence_fund += amount
-        self._save_data()
+        # Granular Hub update
+        await self.store.update_funds(amount)
+        await self._save_data()
 
-    def add_listing(
+    async def add_listing(
         self, seller_id: int, seller_name: str, item: Item, price: float
     ) -> str:
         """Creates a new listing and adds it to the marketplace.
@@ -168,21 +176,32 @@ class Marketplace:
             price=price,
         )
         self.listings[listing_id] = listing
-        self._save_data()
+        # Granular Hub update
+        await self.store.add_listing(listing.to_dict())
+        # For local fallback, we still usually save everything
+        await self._save_data()
         return listing_id
 
-    def remove_listing(self, listing_id: str) -> MarketListing | None:
-        """Removes a listing from the marketplace.
-
-        Args:
-            listing_id: The ID of the listing to remove.
-
-        Returns:
-            The removed MarketListing if found, otherwise None.
-        """
+    async def remove_listing(self, listing_id: str) -> MarketListing | None:
+        """Removes a listing from the marketplace (Cancellation)."""
         listing = self.listings.pop(listing_id, None)
         if listing:
-            self._save_data()
+            # Granular Hub update (pure delete)
+            await self.store.delete_listing(listing_id)
+            await self._save_data()
+        return listing
+
+    async def buy_listing(
+        self, listing_id: str, buyer_id: int, buyer_name: str
+    ) -> MarketListing | None:
+        """Executes a purchase of a listing (Buying)."""
+        listing = self.listings.pop(listing_id, None)
+        if listing:
+            # Granular Hub update (trigger tax)
+            await self.store.buy_listing(
+                listing_id, {"buyer_id": buyer_id, "buyer_name": buyer_name}
+            )
+            await self._save_data()
         return listing
 
     def get_listing(self, listing_id: str) -> MarketListing | None:

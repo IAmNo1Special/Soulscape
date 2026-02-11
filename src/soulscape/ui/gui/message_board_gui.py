@@ -6,6 +6,7 @@ from ttkbootstrap.constants import BOTH, END, LEFT, NW, RIGHT, YES, E, W, X, Y
 from ttkbootstrap.scrolled import ScrolledFrame, ScrolledText
 
 from soulscape.core import Message, MessageBoard, Operator
+from soulscape.utils.helpers import safe_run_async
 
 
 class FeedCard(ttk.Frame):
@@ -194,7 +195,7 @@ class MessageBoardWindow(ttk.Toplevel):
 
     def _refresh_data(self) -> None:
         """Refreshes the message data from the board."""
-        self.board._load_data()
+        safe_run_async(self.board.refresh())
         posts = self.board.get_recent_posts(50)
 
         current_hash = "|".join(
@@ -266,7 +267,7 @@ class MessageBoardWindow(ttk.Toplevel):
         """Automatically refreshes data if the window is open."""
         if self.winfo_exists():
             # Only refresh if data file actually changed to avoid flickering
-            self.board._load_data()
+            safe_run_async(self.board.refresh())
             self._refresh_data()
             self.after(5000, self._auto_refresh)
 
@@ -343,8 +344,10 @@ class PostDialog(ttk.Toplevel):
             if self.on_post:
                 self.on_post(Operator.ID, Operator.NAME, title, content)
             else:
-                self.board.create_post(
-                    Operator.ID, Operator.NAME, title, content
+                safe_run_async(
+                    self.board.create_post(
+                        Operator.ID, Operator.NAME, title, content
+                    )
                 )
 
             self.on_success()
@@ -382,7 +385,7 @@ class ThreadViewDialog(ttk.Toplevel):
         if not self.winfo_exists():
             return
 
-        self.board._load_data()
+        safe_run_async(self.board.refresh())
         updated_post = self.board.posts.get(self.post.message_id)
 
         if updated_post:
@@ -576,13 +579,18 @@ class ThreadViewDialog(ttk.Toplevel):
                     Operator.ID, Operator.NAME, self.post.message_id, content
                 )
             else:
-                self.board.create_reply(
-                    self.post.message_id, Operator.ID, Operator.NAME, content
+                safe_run_async(
+                    self.board.create_reply(
+                        Operator.ID,
+                        Operator.NAME,
+                        self.post.message_id,
+                        content,
+                    )
                 )
 
             self.reply_entry.delete(0, END)
             # Re-render to show new reply
-            self.board._load_data()
+            safe_run_async(self.board.refresh())
             updated_post = self.board.posts.get(self.post.message_id)
             if updated_post:
                 self.post = updated_post

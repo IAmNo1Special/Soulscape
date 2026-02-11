@@ -5,13 +5,16 @@ Manages a single transparent full-screen window and renders multiple souls withi
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import multiprocessing
 import random
 import sys
+import threading
 import time
 import winreg
 from pathlib import Path
-from typing import Any
+from typing import Any, Coroutine
 
 import pyglet
 from dotenv import load_dotenv
@@ -20,23 +23,29 @@ from pyglet.window import key
 from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
 from soulscape.core import MessageBoard, Soul
 from soulscape.system.input_router import InputRouter
-from soulscape.system.logger import log
+from soulscape.system.logger import log, setup_logging
 from soulscape.system.persistence import (
     load_settings,
     load_souls,
     save_settings,
-    save_souls,
 )
 from soulscape.system.tray import TrayController
 from soulscape.system.window_manager import get_window_manager
 from soulscape.ui.graphics.scene_renderer import SceneRenderer
 from soulscape.ui.gui.gui_service import GuiCommand, run_gui_service
 
-# Globals - now encapsulated in SoulscapeApp, but kept for type hinting if needed
-# active_souls: list[Soul] = []
 # Explicitly load dotenv
 env_path = Path.cwd() / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
+
+
+# Set up logging using the project's utility
+setup_logging(level=logging.DEBUG)
+# Suppress noisy library logs even in debug mode
+logging.getLogger("httpx").setLevel(logging.DEBUG)
+logging.getLogger("asyncio").setLevel(logging.DEBUG)
+logging.getLogger("pyglet").setLevel(logging.WARNING)
+logging.getLogger("google.adk").setLevel(logging.DEBUG)
 
 
 class SoulscapeApp:
@@ -57,13 +66,33 @@ class SoulscapeApp:
             "aura_visible", True
         )
         self.run_on_startup: bool = self._check_startup_registry()
+        self.instance_id: str = self.saved_settings.get(
+            "instance_id", "unknown"
+        )
 
         self.gui_command_queue: Any = None
         self.gui_result_queue: Any = None
         self.gui_process: Any = None
 
-        self.next_soul_id: int = 1
         self.last_save_time: float = time.time()
+        self.last_topmost_time: float = time.time()
+        self._is_saving_souls: bool = False  # Lock for background saves
+
+        # Persistent Background Event Loop for non-UI tasks (saves, net IO)
+        self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(
+            target=self._run_event_loop, daemon=True
+        )
+        self._loop_thread.start()
+
+    def _run_event_loop(self) -> None:
+        """Starts the background event loop."""
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run_coro(self, coro: Coroutine) -> Any:
+        """Helper to run a coroutine in the background loop."""
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def run(self) -> None:
         """Starts the application."""
@@ -100,6 +129,8 @@ class SoulscapeApp:
 
         # 4. Load Content
         self.load_initial_souls()
+
+        self.window_manager.window.set_visible(True)
 
         # 5. Tray Icon
         self._setup_tray()
@@ -218,15 +249,28 @@ class SoulscapeApp:
         log.info(f"Global Aura Visibility: {self.scene_renderer.aura_visible}")
         self.persist_souls_state()
 
-    def persist_souls_state(self) -> None:
-        """Saves current souls to disk."""
-        data = [soul.to_dict() for soul in self.active_souls]
-        save_souls(data)
+    async def async_persist_souls_state(self) -> None:
+        """Async version of persist_souls_state."""
+        if self._is_saving_souls:
+            return
 
-        # Also save global settings that affect souls (like aura visibility)
-        current_settings = load_settings()
-        current_settings["aura_visible"] = self.global_aura_visible
-        save_settings(current_settings)
+        self._is_saving_souls = True
+        try:
+            from soulscape.system.persistence import async_save_souls
+
+            data = [soul.to_dict() for soul in self.active_souls]
+            await async_save_souls(data)
+
+            # Also save global settings (local only, so sync is fine)
+            current_settings = load_settings()
+            current_settings["aura_visible"] = self.global_aura_visible
+            save_settings(current_settings)
+        finally:
+            self._is_saving_souls = False
+
+    def persist_souls_state(self) -> None:
+        """Saves current souls to disk via background loop."""
+        self._run_coro(self.async_persist_souls_state())
 
     def update_souls(self, dt: float) -> None:
         """Updates all active souls."""
@@ -238,6 +282,11 @@ class SoulscapeApp:
             log.debug("Performing periodic souls state persistence.")
             self.persist_souls_state()
             self.last_save_time = time.time()
+
+        # Periodic Topmost Enforcement (every 5 seconds)
+        if time.time() - self.last_topmost_time > 5:
+            self.window_manager.set_always_on_top()
+            self.last_topmost_time = time.time()
 
     def create_soul(
         self,
@@ -282,10 +331,12 @@ class SoulscapeApp:
             on_right_click=self.handle_soul_right_click,
             on_move_end=self.persist_souls_state,
             on_state_change=self.persist_souls_state,
+            on_async_state_change=self.async_persist_souls_state,
             initial_position=position,
             soul_registry=self.active_souls,
             screen_width=sw,
             screen_height=sh,
+            local_instance_id=self.instance_id,
         )
         soul.aura_visible = self.global_aura_visible
         self.active_souls.append(soul)
@@ -404,9 +455,11 @@ class SoulscapeApp:
                     on_right_click=self.handle_soul_right_click,
                     on_move_end=self.persist_souls_state,
                     on_state_change=self.persist_souls_state,
+                    on_async_state_change=self.async_persist_souls_state,
                     soul_registry=self.active_souls,
                     screen_width=sw,
                     screen_height=sh,
+                    local_instance_id=self.instance_id,
                 )
                 self.active_souls.append(soul)
         else:
@@ -475,11 +528,13 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_POST:
                     data = msg.get("data")
                     if data:
-                        MessageBoard().create_post(
-                            data["author_id"],
-                            data["author_name"],
-                            data["title"],
-                            data["content"],
+                        self._run_coro(
+                            MessageBoard().create_post(
+                                data["author_id"],
+                                data["author_name"],
+                                data["title"],
+                                data["content"],
+                            )
                         )
                         log.info(
                             f"Created operator post via GUI: {data['title']}"
@@ -488,11 +543,13 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_REPLY:
                     data = msg.get("data")
                     if data:
-                        MessageBoard().create_reply(
-                            data["author_id"],
-                            data["author_name"],
-                            data["parent_id"],
-                            data["content"],
+                        self._run_coro(
+                            MessageBoard().create_reply(
+                                data["author_id"],
+                                data["author_name"],
+                                data["parent_id"],
+                                data["content"],
+                            )
                         )
                         log.info(
                             f"Created operator reply via GUI: {data['content'][:20]}"
@@ -501,34 +558,28 @@ class SoulscapeApp:
                 elif cmd_type == GuiCommand.DELETE_SOCIAL_MESSAGE:
                     data = msg.get("data")
                     if data:
-                        success = MessageBoard().delete_message(
-                            data["requester_id"], data["message_id"]
+                        self._run_coro(
+                            MessageBoard().delete_message(
+                                data["requester_id"], data["message_id"]
+                            )
                         )
-                        if success:
-                            log.info(
-                                f"Deleted social message: {data['message_id']}"
-                            )
-                        else:
-                            log.warning(
-                                f"Failed to delete social message: {data['message_id']}"
-                            )
+                        log.info(
+                            f"Dispatched deletion for message: {data['message_id']}"
+                        )
 
                 elif cmd_type == GuiCommand.EDIT_SOCIAL_MESSAGE:
                     data = msg.get("data")
                     if data:
-                        success = MessageBoard().edit_message(
-                            data["requester_id"],
-                            data["message_id"],
-                            data["content"],
+                        self._run_coro(
+                            MessageBoard().edit_message(
+                                data["requester_id"],
+                                data["message_id"],
+                                data["content"],
+                            )
                         )
-                        if success:
-                            log.info(
-                                f"Edited social message: {data['message_id']}"
-                            )
-                        else:
-                            log.warning(
-                                f"Failed to edit social message: {data['message_id']}"
-                            )
+                        log.info(
+                            f"Dispatched edit for message: {data['message_id']}"
+                        )
 
                 elif cmd_type == GuiCommand.SHOW_SOUL_SETTINGS:
                     data = msg.get("data")

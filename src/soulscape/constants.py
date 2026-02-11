@@ -6,7 +6,7 @@ from soulscape.utils.helpers import resource_path
 # Window Dimensions
 SOUL_WIDTH: Final[int] = 50
 SOUL_HEIGHT: Final[int] = 80
-WINDOW_OVERSHOOT: Final[int] = 40
+WINDOW_OVERSHOOT: Final[int] = 0
 
 # Physics Parameters for Window Movement
 
@@ -28,7 +28,7 @@ ORB_Y_OFFSET: Final[float] = -0.28  # Y position adjustment for the orb
 AURA_RADIUS: Final[float] = 0.3
 AURA_LAT_SEGMENTS: Final[int] = 32
 AURA_LONG_SEGMENTS: Final[int] = 32
-AURA_BASE_BRIGHTNESS: Final[float] = 1.0  # Base brightness for the aura
+AURA_BASE_BRIGHTNESS: Final[float] = 0.8  # Base brightness for the aura
 AURA_BULGE_STRENGTH: Final[float] = 0.2  # Fixed bulge strength for the aura
 AURA_SCALE_X: Final[float] = 1.0  # X scale for the aura
 AURA_SCALE_Y: Final[float] = 1.0  # Y scale for the aura
