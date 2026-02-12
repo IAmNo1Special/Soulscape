@@ -4,6 +4,7 @@ physics-based movement, and AI-driven decision-making using the ADK.
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import time
@@ -263,6 +264,7 @@ class Soul:
             "soul_id": self.biology.soul_id,
             "owner_id": self.owner_id,
             **self.biology.to_flat_dict(),
+            "position": [self.x, self.y],
             "orb_color": self.orb_color_rgb,
             "aura_color": self.aura_color_rgb,
             "aura_visible": self.aura_visible,

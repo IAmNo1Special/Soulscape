@@ -44,9 +44,11 @@ class PresenceManager:
         # Case-insensitive replacement of HTTP scheme
         hub_url_lower = hub_url.lower()
         if hub_url_lower.startswith("https://"):
-            ws_url = "wss://" + hub_url[8:]  # Remove "https://" and add "wss://"
+            ws_url = (
+                "wss://" + hub_url[8:]
+            )  # Remove "https://" and add "wss://"
         elif hub_url_lower.startswith("http://"):
-            ws_url = "ws://" + hub_url[7:]   # Remove "http://" and add "ws://"
+            ws_url = "ws://" + hub_url[7:]  # Remove "http://" and add "ws://"
         else:
             ws_url = f"ws://{hub_url}"  # Default to ws if no scheme
         self._ws_url = ws_url + f"/ws/{owner_id}"
@@ -118,6 +120,9 @@ class PresenceManager:
                 elif msg_type == "soul_updated":
                     oid = message.get("owner_id")
                     souls = message.get("souls", [])
+                    log.debug(
+                        f"Received soul_updated from {oid} with {len(souls)} souls."
+                    )
                     await self.on_soul_updated(souls, oid)
 
             except Exception as e:
@@ -129,6 +134,7 @@ class PresenceManager:
             try:
                 import json
 
+                log.debug(f"Sending soul_update with {len(souls)} souls.")
                 await self._ws.send(
                     json.dumps({"type": "soul_update", "souls": souls})
                 )

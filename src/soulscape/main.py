@@ -347,6 +347,9 @@ class SoulscapeApp:
             sid = soul_data.get("soul_id")
             if sid in existing_map:
                 # Update existing soul in-place
+                log.debug(
+                    f"Updating existing soul {sid} ({existing_map[sid].biology.name}) via WebSocket."
+                )
                 existing_map[sid].update_from_dict(soul_data)
             else:
                 # Create new soul
@@ -363,7 +366,7 @@ class SoulscapeApp:
                 )
                 self.active_souls.append(soul)
                 log.info(
-                    f"Remote soul appeared via update: {soul.biology.name} (Owner: {owner_id})"
+                    f"Remote soul appeared via update: {soul.biology.name} (Owner: {owner_id}) ID: {sid}"
                 )
 
     async def _on_connect(self, online_owners: list[str]) -> None:
