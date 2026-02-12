@@ -25,6 +25,7 @@ from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
 from soulscape.core import MessageBoard, Soul
 from soulscape.system.input_router import InputRouter
 from soulscape.system.logger import log, setup_logging
+from soulscape.system.network.presence import PresenceManager
 from soulscape.system.persistence import (
     load_settings,
     load_souls,
@@ -142,8 +143,7 @@ class SoulscapeApp:
 
         # 5. Start WebSocket Presence
         if os.getenv("SOULSCAPE_HUB_URL"):
-            from soulscape.system.network.presence import PresenceManager
-
+            # Initialize presence manager
             self.presence_manager = PresenceManager(
                 owner_id=self.instance_id,
                 on_owner_online=self._on_owner_online,

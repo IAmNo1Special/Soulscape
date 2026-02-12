@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING, Any
 
 from soulscape.system.logger import log
 
+# Constants
+OPERATOR_ID = "999"
+
 if TYPE_CHECKING:
     from ..stores import DataStore
 
@@ -357,7 +360,7 @@ class MessageBoard:
 class Operator:
     """Represents the system operator/admin."""
 
-    ID = "999"
+    ID = OPERATOR_ID
     NAME = "Operator"
 
     @staticmethod

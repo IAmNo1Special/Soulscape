@@ -91,7 +91,6 @@ class PresenceManager:
         """Listen for presence events from the Hub."""
         async for raw_message in ws:
             try:
-                import json
 
                 message = json.loads(raw_message)
                 msg_type = message.get("type")

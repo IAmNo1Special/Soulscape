@@ -287,7 +287,11 @@ class Soul:
                 try:
                     pos_list = json.loads(position)
                     new_x, new_y = float(pos_list[0]), float(pos_list[1])
-                except Exception:
+                except Exception as e:
+                    import logging
+
+                    log = logging.getLogger("soulscape")
+                    log.warning(f"Failed to parse position '{position}': {e}")
                     new_x, new_y = self.x, self.y
 
             if self.physics:
@@ -301,11 +305,10 @@ class Soul:
                 self.draw_y = new_y
 
         # Update stats
-        if "stats" in data:  # or flat stats? SoulStats.from_dict handles flat
-            # Since SoulStats is complex, easier to rebuild it
-            # But rebuilding replaces the object.
-            # Let's check SoulStats structure.
-            # Assuming flat data for now as per to_dict
+        if "stats" in data:
+            # TODO: Implement robust stats update. Currently checking structure.
+            # Ideally, we should parse 'stats' into a SoulStats object or update
+            # the existing self.biology in place without replacing the object reference.
             pass
 
         # Update inventory
