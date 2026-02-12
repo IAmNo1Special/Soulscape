@@ -94,3 +94,6 @@ class NetworkClient:
     ) -> Any:
         payload = {"owner_id": owner_id, "souls": souls_data}
         return await self._post("/souls", payload)
+
+    async def deregister(self, owner_id: str) -> Any:
+        return await self._post("/deregister", {"owner_id": owner_id})
