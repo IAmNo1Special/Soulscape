@@ -124,6 +124,12 @@ class SoulscapeApp:
         self.scene_renderer = SceneRenderer()
         self.input_router = InputRouter()
 
+        # Real-time sync tracking
+        self.last_broadcast_time = time.time()
+        self.soul_last_broadcast_pos = (
+            {}
+        )  # type: dict[str, tuple[float, float]]
+
         # Apply initial aura visibility
         self.scene_renderer.aura_visible = self.global_aura_visible
 
@@ -411,6 +417,38 @@ class SoulscapeApp:
         """Updates all active souls."""
         for soul in self.active_souls:
             soul.update(dt)
+
+        # Real-time Position Broadcast (10Hz)
+        now = time.time()
+        if now - self.last_broadcast_time > 0.1:
+            local_souls = [
+                s for s in self.active_souls if s.owner_id == self.instance_id
+            ]
+            updates = []
+            for soul in local_souls:
+                # Check for significant movement (> 1 pixel to reduce jitter/traffic)
+                last_pos = self.soul_last_broadcast_pos.get(
+                    soul.biology.soul_id, (None, None)
+                )
+                if (
+                    last_pos[0] is None
+                    or abs(soul.x - last_pos[0]) > 1.0
+                    or abs(soul.y - last_pos[1]) > 1.0
+                ):
+                    updates.append(soul.to_dict())
+                    self.soul_last_broadcast_pos[soul.biology.soul_id] = (
+                        soul.x,
+                        soul.y,
+                    )
+
+            if (
+                updates
+                and hasattr(self, "presence_manager")
+                and self.presence_manager
+            ):
+                self._run_coro(self.presence_manager.send_update(updates))
+
+            self.last_broadcast_time = now
 
         # Periodic Save (every 60 seconds)
         if time.time() - self.last_save_time > 60:
