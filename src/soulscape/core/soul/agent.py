@@ -257,10 +257,9 @@ class SoulAgent(LlmAgent):
             img_w, img_h = screen.size
 
             # center
-            # Pyglet (state['y']) is bottom-left origin.
-            # Pillow (mask/screen) is top-left origin.
+            # Both simulation and Pillow use top-left origin.
             soul_x = state["x"] + (state.get("width", 100) / 2)
-            soul_y = img_h - (state["y"] + (state.get("height", 70) / 2))
+            soul_y = state["y"] + (state.get("height", 70) / 2)
 
             mask = Image.new("L", (img_w, img_h), 0)
             draw = ImageDraw.Draw(mask)
