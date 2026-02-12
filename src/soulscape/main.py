@@ -190,6 +190,10 @@ class SoulscapeApp:
             )
 
             if target_soul:
+                # Only allow interaction if we own this soul
+                if target_soul.owner_id != self.instance_id:
+                    return None
+
                 # Dispatch to target
                 target_soul.on_mouse_press(
                     x, y, button, modifiers, self.overlay_window.height
