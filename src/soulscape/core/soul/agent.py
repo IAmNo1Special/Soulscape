@@ -4,6 +4,7 @@ import asyncio
 import io
 import random
 import threading
+import time
 import uuid
 from pathlib import Path
 from types import MethodType
@@ -278,6 +279,17 @@ class SoulAgent(LlmAgent):
 
             # thumbnail for efficiency
             masked_img.thumbnail((800, 600))
+
+            # Debug Saving
+            if state.get("debug_vision"):
+                debug_dir = Path("debug_vision")
+                debug_dir.mkdir(exist_ok=True)
+                # Use timestamp + name for unique files
+                timestamp = int(time.time())
+                name = state.get("name", "Unknown").replace(" ", "_")
+                save_path = debug_dir / f"{name}_{timestamp}.png"
+                masked_img.save(save_path)
+
             img_byte_arr = io.BytesIO()
             masked_img.save(img_byte_arr, format="PNG")
             return img_byte_arr.getvalue()
