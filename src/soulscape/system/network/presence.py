@@ -41,7 +41,6 @@ class PresenceManager:
 
         # Build WS URL from Hub URL (http -> ws)
         hub_url = os.getenv("SOULSCAPE_HUB_URL", "http://localhost:8000")
-        log.info(f"Hub URL---------> {hub_url}")
         # Case-insensitive replacement of HTTP scheme
         hub_url_lower = hub_url.lower()
         if hub_url_lower.startswith("https://"):
@@ -51,7 +50,6 @@ class PresenceManager:
         else:
             ws_url = f"ws://{hub_url}"  # Default to ws if no scheme
         self._ws_url = ws_url + f"/ws/{owner_id}"
-        log.info(f"WS URL---------> {self._ws_url}")
 
     async def connect(self) -> None:
         """Start the WebSocket connection loop with auto-reconnect."""
