@@ -167,7 +167,7 @@ def load_souls() -> list[dict[str, Any]]:
             return []
 
 
-def __delete_souls_file() -> bool:
+def _delete_souls_file() -> bool:
     """Delete the souls.json file (for testing/reset)."""
     try:
         souls_file = get_souls_file()

@@ -2899,6 +2899,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "ttkbootstrap" },
     { name = "watchdog" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -2924,6 +2925,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ttkbootstrap", specifier = ">=1.20.1" },
     { name = "watchdog", specifier = ">=6.0.0" },
+    { name = "websockets", specifier = ">=15.0.1" },
 ]
 
 [package.metadata.requires-dev]

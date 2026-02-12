@@ -4,6 +4,7 @@ import asyncio
 import io
 import random
 import threading
+import time
 import uuid
 from pathlib import Path
 from types import MethodType
@@ -50,7 +51,7 @@ class SoulAgent(LlmAgent):
     _magetools_initialized: bool = False
 
     last_decision_time: float = 0.0
-    decision_interval: float = 30.0
+    decision_interval: float = 10.0
     session_service: InMemorySessionService | None = None
     session: Session | None = None
     runner: Runner | None = None
@@ -256,10 +257,9 @@ class SoulAgent(LlmAgent):
             img_w, img_h = screen.size
 
             # center
-            # Pyglet (state['y']) is bottom-left origin.
-            # Pillow (mask/screen) is top-left origin.
+            # Both simulation and Pillow use top-left origin.
             soul_x = state["x"] + (state.get("width", 100) / 2)
-            soul_y = img_h - (state["y"] + (state.get("height", 70) / 2))
+            soul_y = state["y"] + (state.get("height", 70) / 2)
 
             mask = Image.new("L", (img_w, img_h), 0)
             draw = ImageDraw.Draw(mask)
@@ -278,6 +278,17 @@ class SoulAgent(LlmAgent):
 
             # thumbnail for efficiency
             masked_img.thumbnail((800, 600))
+
+            # Debug Saving
+            if state.get("debug_vision"):
+                debug_dir = Path("debug_vision")
+                debug_dir.mkdir(exist_ok=True)
+                # Use timestamp + name for unique files
+                timestamp = int(time.time())
+                name = state.get("name", "Unknown").replace(" ", "_")
+                save_path = debug_dir / f"{name}_{timestamp}.png"
+                masked_img.save(save_path)
+
             img_byte_arr = io.BytesIO()
             masked_img.save(img_byte_arr, format="PNG")
             return img_byte_arr.getvalue()
@@ -301,7 +312,6 @@ class SoulAgent(LlmAgent):
         img_bytes = self._process_vision(state, screen_context)
 
         context_str = (
-            f"Name: {name}, "
             f"Current Location: ({state['x']:.0f}, {state['y']:.0f}). "
             f"World Boundaries: 0 to {state.get('screen_width', 1920)} (X), 0 to {state.get('screen_height', 1080)} (Y). "
             f"Status: "
@@ -310,7 +320,7 @@ class SoulAgent(LlmAgent):
             f"Hydration={state['hydration']:.1f}/100 "
             f"Essence={state['essence']:.1f} "
             f"Inventory: {state['inventory']} "
-            "Visual context attached. "
+            "Attached is an image of you and your visible surroundings. "
         )
         if sensations:
             context_str += "\nRecent Physical Sensations:\n" + "\n".join(

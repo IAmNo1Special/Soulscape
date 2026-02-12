@@ -4,6 +4,7 @@ physics-based movement, and AI-driven decision-making using the ADK.
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import time
@@ -263,12 +264,64 @@ class Soul:
             "soul_id": self.biology.soul_id,
             "owner_id": self.owner_id,
             **self.biology.to_flat_dict(),
+            "position": [self.x, self.y],
             "orb_color": self.orb_color_rgb,
             "aura_color": self.aura_color_rgb,
             "aura_visible": self.aura_visible,
             "essence": self.essence,
             "inventory": self.inventory.to_dict(),
         }
+
+    def update_from_dict(self, data: dict[str, Any]) -> None:
+        """Updates the soul's state from a serialized dictionary.
+
+        Used for syncing remote souls without recreating the instance.
+        """
+        # Updates position
+        position = data.get("position")
+        if position:
+            if isinstance(position, (list, tuple)):
+                new_x, new_y = float(position[0]), float(position[1])
+            elif isinstance(position, str):
+                # Handle potential stringified list from DB
+                try:
+                    pos_list = json.loads(position)
+                    new_x, new_y = float(pos_list[0]), float(pos_list[1])
+                except Exception as e:
+                    import logging
+
+                    log = logging.getLogger("soulscape")
+                    log.warning(f"Failed to parse position '{position}': {e}")
+                    new_x, new_y = self.x, self.y
+
+            if self.physics:
+                # Use LERP for smooth transition
+                self.physics.target_x = new_x
+                self.physics.target_y = new_y
+                self.physics.is_interpolating = True
+            else:
+                # No physics, snap immediately
+                self.x, self.y = new_x, new_y
+                self.draw_y = new_y
+
+        # Update stats
+        if "stats" in data:
+            # TODO: Implement robust stats update. Currently checking structure.
+            # Ideally, we should parse 'stats' into a SoulStats object or update
+            # the existing self.biology in place without replacing the object reference.
+            pass
+
+        # Update inventory
+        inventory_data = data.get("inventory")
+        if inventory_data:
+            self.inventory = Inventory.from_dict(inventory_data)
+
+        # Update essence
+        self.essence = float(data.get("essence", self.essence))
+
+        # Biology status? (satiety etc) is in to_flat_dict()
+        # Biology updates not critical for remote viewing unless displaying stats
+        # For now, position is the main thing.
 
     def update(self, dt: float) -> None:
         """Drives the soul's simulation and AI logic for a single frame.

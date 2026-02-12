@@ -52,14 +52,14 @@ class RemoteStore(DataStore):
         return res is not None and res.get("status") == "success"
 
     async def edit_post(
-        self, message_id: str, content: str, author_id: int
+        self, message_id: str, content: str, author_id: str
     ) -> bool:
         res = await self.client.edit_message(
             message_id, {"content": content, "author_id": author_id}
         )
         return res is not None and res.get("status") == "success"
 
-    async def delete_post(self, message_id: str, author_id: int) -> bool:
+    async def delete_post(self, message_id: str, author_id: str) -> bool:
         res = await self.client.delete_message(message_id, author_id)
         return res is not None and res.get("status") == "success"
 

@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import multiprocessing
 import os
 import random
 import sys
 import threading
 import time
 import winreg
+from multiprocessing import Process, Queue, queues
 from pathlib import Path
 from typing import Any, Coroutine
 
@@ -25,6 +25,7 @@ from soulscape.constants import SOUL_HEIGHT, SOUL_WIDTH
 from soulscape.core import MessageBoard, Soul
 from soulscape.system.input_router import InputRouter
 from soulscape.system.logger import log, setup_logging
+from soulscape.system.network.presence import PresenceManager
 from soulscape.system.persistence import (
     load_settings,
     load_souls,
@@ -79,7 +80,8 @@ class SoulscapeApp:
         self.last_save_time: float = time.time()
         self.last_topmost_time: float = time.time()
         self._is_saving_souls: bool = False  # Lock for background saves
-        self.last_remote_refresh_time: float = 0.0
+        self.presence_manager: Any = None
+        self._force_broadcast: bool = False  # Force sync when peers join
 
         # Persistent Background Event Loop for non-UI tasks (saves, net IO)
         self._loop = asyncio.new_event_loop()
@@ -99,19 +101,19 @@ class SoulscapeApp:
 
     def run(self) -> None:
         """Starts the application."""
-        log.debug("Starting Overlay Application...")
+        log.info("Starting Application...")
 
         # Initialize Persistent GUI Service
-        self.gui_command_queue = multiprocessing.Queue()
-        self.gui_result_queue = multiprocessing.Queue()
+        self.gui_command_queue = Queue()
+        self.gui_result_queue = Queue()
 
-        self.gui_process = multiprocessing.Process(
+        self.gui_process: Process = Process(
             target=run_gui_service,
             args=(self.gui_command_queue, self.gui_result_queue),
             daemon=True,
         )
         self.gui_process.start()
-        log.debug("GUI Service started.")
+        log.info("GUI Service started.")
 
         # 1. Setup Window Manager (Creates Overlay Window)
         self.window_manager = get_window_manager()
@@ -124,6 +126,12 @@ class SoulscapeApp:
         self.scene_renderer = SceneRenderer()
         self.input_router = InputRouter()
 
+        # Real-time sync tracking
+        self.last_broadcast_time = time.time()
+        self.soul_last_broadcast_pos = (
+            {}
+        )  # type: dict[str, tuple[float, float]]
+
         # Apply initial aura visibility
         self.scene_renderer.aura_visible = self.global_aura_visible
 
@@ -133,9 +141,21 @@ class SoulscapeApp:
         # 4. Load Content
         self.load_initial_souls()
 
+        # 5. Start WebSocket Presence
+        if os.getenv("SOULSCAPE_HUB_URL"):
+            # Initialize presence manager
+            self.presence_manager = PresenceManager(
+                owner_id=self.instance_id,
+                on_owner_online=self._on_owner_online,
+                on_owner_offline=self._on_owner_offline,
+                on_soul_updated=self._on_soul_updated,
+                on_connect=self._on_connect,
+            )
+            self._run_coro(self.presence_manager.connect())
+
         self.window_manager.window.set_visible(True)
 
-        # 5. Tray Icon
+        # 6. Tray Icon
         self._setup_tray()
 
         # 6. Run Loop
@@ -171,6 +191,10 @@ class SoulscapeApp:
             )
 
             if target_soul:
+                # Only allow interaction if we own this soul
+                if target_soul.owner_id != self.instance_id:
+                    return None
+
                 # Dispatch to target
                 target_soul.on_mouse_press(
                     x, y, button, modifiers, self.overlay_window.height
@@ -268,6 +292,11 @@ class SoulscapeApp:
                 if soul.owner_id == self.instance_id
             ]
             data = [soul.to_dict() for soul in owned_souls]
+
+            # Broadcast update via WebSocket for real-time sync
+            if self.presence_manager:
+                await self.presence_manager.send_update(data)
+
             await async_save_souls(data, owner_id=self.instance_id)
 
             # Also save global settings (local only, so sync is fine)
@@ -281,40 +310,23 @@ class SoulscapeApp:
         """Saves current souls to disk via background loop."""
         self._run_coro(self.async_persist_souls_state())
 
-    async def refresh_remote_souls(self) -> None:
-        """Polls the Hub for active souls and adds/removes remote souls."""
-        if not os.getenv("SOULSCAPE_HUB_URL"):
-            return
-
+    async def _on_owner_online(self, owner_id: str) -> None:
+        """Called when a remote owner comes online via WebSocket."""
         try:
-            from soulscape.system.persistence import async_load_souls
+            from soulscape.system.network.client import NetworkClient
 
-            hub_souls = await async_load_souls()
-            if hub_souls is None:
+            souls_data = await NetworkClient().get_souls_by_owner(owner_id)
+            if not souls_data or not isinstance(souls_data, list):
                 return
 
-            # Build a set of soul_ids currently from the Hub
-            hub_soul_ids = {s.get("soul_id") for s in hub_souls}
-
-            # Remove remote souls whose owners went offline
-            self.active_souls[:] = [
-                soul
-                for soul in self.active_souls
-                if soul.owner_id == self.instance_id  # Keep all local souls
-                or soul.biology.soul_id
-                in hub_soul_ids  # Keep active remote souls
-            ]
-
-            # Find new remote souls to add
             existing_ids = {soul.biology.soul_id for soul in self.active_souls}
 
             display = pyglet.display.get_display().get_default_screen()
             sw, sh = display.width, display.height
 
-            for soul_data in hub_souls:
+            for soul_data in souls_data:
                 sid = soul_data.get("soul_id")
-                owner = soul_data.get("owner_id")
-                if sid not in existing_ids and owner != self.instance_id:
+                if sid not in existing_ids:
                     soul = Soul.from_dict(
                         data=soul_data,
                         on_right_click=self.handle_soul_right_click,
@@ -328,26 +340,129 @@ class SoulscapeApp:
                     )
                     self.active_souls.append(soul)
                     log.info(
-                        f"Added remote soul: {soul.biology.name} (Owner: {owner})"
+                        f"Remote soul appeared: {soul.biology.name} (Owner: {owner_id})"
                     )
+                    # Force a broadcast of our own state so the new peer sees our live pos
+                    self._force_broadcast = True
         except Exception as e:
-            log.error(f"Error refreshing remote souls: {e}")
+            log.error(f"Error loading remote owner's souls: {e}")
+
+    async def _on_soul_updated(
+        self, souls_data: list[dict], owner_id: str
+    ) -> None:
+        """Called when a remote owner sends a state update."""
+        existing_map = {s.biology.soul_id: s for s in self.active_souls}
+
+        display = pyglet.display.get_display().get_default_screen()
+        sw, sh = display.width, display.height
+
+        for soul_data in souls_data:
+            sid = soul_data.get("soul_id")
+            if sid in existing_map:
+                # Update existing soul in-place
+                existing_map[sid].update_from_dict(soul_data)
+            else:
+                # Create new soul
+                soul = Soul.from_dict(
+                    data=soul_data,
+                    on_right_click=self.handle_soul_right_click,
+                    on_move_end=self.persist_souls_state,
+                    on_state_change=self.persist_souls_state,
+                    on_async_state_change=self.async_persist_souls_state,
+                    soul_registry=self.active_souls,
+                    screen_width=sw,
+                    screen_height=sh,
+                    local_instance_id=self.instance_id,
+                )
+                self.active_souls.append(soul)
+                log.info(
+                    f"Remote soul appeared via update: {soul.biology.name} (Owner: {owner_id}) ID: {sid}"
+                )
+
+    async def _on_connect(self, online_owners: list[str]) -> None:
+        """Called immediately after connecting to the Hub.
+
+        Reconciles local state with the Hub's truth.
+        Removes any souls belonging to owners who are NOT in the online_owners list.
+        """
+        # We only care about prune logic here.
+        # on_owner_online will be called for each online owner to ADD missing ones.
+        online_set = set(online_owners)
+
+        # Identify stale souls
+        stale_souls = [
+            soul
+            for soul in self.active_souls
+            if soul.owner_id != self.instance_id
+            and soul.owner_id not in online_set
+        ]
+
+        if stale_souls:
+            log.info(
+                f"Pruning {len(stale_souls)} stale souls from offline owners."
+            )
+            for soul in stale_souls:
+                soul.cleanup()
+                if soul in self.active_souls:
+                    self.active_souls.remove(soul)
+
+    def _on_owner_offline(self, owner_id: str) -> None:
+        """Called when a remote owner goes offline via WebSocket."""
+        removed = [
+            s.biology.name for s in self.active_souls if s.owner_id == owner_id
+        ]
+        self.active_souls[:] = [
+            soul for soul in self.active_souls if soul.owner_id != owner_id
+        ]
+        for name in removed:
+            log.info(f"Remote soul removed: {name} (Owner: {owner_id})")
 
     def update_souls(self, dt: float) -> None:
         """Updates all active souls."""
         for soul in self.active_souls:
             soul.update(dt)
 
+        # Real-time Position Broadcast (30Hz or forced)
+        now = time.time()
+        if self._force_broadcast or (now - self.last_broadcast_time > 0.033):
+            if self._force_broadcast:
+                self.soul_last_broadcast_pos.clear()
+                self._force_broadcast = False
+
+            local_souls = [
+                s for s in self.active_souls if s.owner_id == self.instance_id
+            ]
+            updates = []
+            for soul in local_souls:
+                # Check for significant movement (> 1 pixel to reduce jitter/traffic)
+                last_pos = self.soul_last_broadcast_pos.get(
+                    soul.biology.soul_id, (None, None)
+                )
+                if (
+                    last_pos[0] is None
+                    or abs(soul.x - last_pos[0]) > 1.0
+                    or abs(soul.y - last_pos[1]) > 1.0
+                ):
+                    updates.append(soul.to_dict())
+                    self.soul_last_broadcast_pos[soul.biology.soul_id] = (
+                        soul.x,
+                        soul.y,
+                    )
+
+            if (
+                updates
+                and hasattr(self, "presence_manager")
+                and self.presence_manager
+            ):
+                self._run_coro(self.presence_manager.send_update(updates))
+
+            self.last_broadcast_time = now
+
         # Periodic Save (every 60 seconds)
-        if time.time() - self.last_save_time > 60:
+        if time.time() - self.last_save_time > 30:
             log.debug("Performing periodic souls state persistence.")
             self.persist_souls_state()
             self.last_save_time = time.time()
-
-        # Periodic Remote Soul Refresh (every 30 seconds)
-        if time.time() - self.last_remote_refresh_time > 30:
-            self._run_coro(self.refresh_remote_souls())
-            self.last_remote_refresh_time = time.time()
 
         # Periodic Topmost Enforcement (every 5 seconds)
         if time.time() - self.last_topmost_time > 5:
@@ -689,7 +804,7 @@ class SoulscapeApp:
                         soul.aura_renderer.base_color_rgb = soul.aura_color_rgb
                         self.persist_souls_state()
 
-        except multiprocessing.queues.Empty:
+        except queues.Empty:
             pass
         except Exception as e:
             log.error(f"Error processing GUI results: {e}")
@@ -698,17 +813,13 @@ class SoulscapeApp:
         """Cleans up resources and exits the application."""
         log.debug("Shutting down...")
         self.persist_souls_state()
-        # Deregister from Hub so remote clients know we're offline
-        if os.getenv("SOULSCAPE_HUB_URL"):
+        # Close WebSocket (triggers server-side disconnect broadcast)
+        if self.presence_manager:
             try:
-                from soulscape.system.network.client import NetworkClient
-
-                future = self._run_coro(
-                    NetworkClient().deregister(self.instance_id)
-                )
+                future = self._run_coro(self.presence_manager.disconnect())
                 future.result(timeout=2)
             except Exception as e:
-                log.error(f"Error deregistering from Hub: {e}")
+                log.error(f"Error closing WebSocket: {e}")
         if self.tray_controller:
             self.tray_controller.stop()
         if self.overlay_window:
