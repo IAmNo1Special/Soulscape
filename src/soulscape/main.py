@@ -141,6 +141,7 @@ class SoulscapeApp:
                 owner_id=self.instance_id,
                 on_owner_online=self._on_owner_online,
                 on_owner_offline=self._on_owner_offline,
+                on_soul_updated=self._on_soul_updated,
             )
             self._run_coro(self.presence_manager.connect())
 
@@ -279,6 +280,11 @@ class SoulscapeApp:
                 if soul.owner_id == self.instance_id
             ]
             data = [soul.to_dict() for soul in owned_souls]
+
+            # Broadcast update via WebSocket for real-time sync
+            if self.presence_manager:
+                await self.presence_manager.send_update(data)
+
             await async_save_souls(data, owner_id=self.instance_id)
 
             # Also save global settings (local only, so sync is fine)
@@ -326,6 +332,38 @@ class SoulscapeApp:
                     )
         except Exception as e:
             log.error(f"Error loading remote owner's souls: {e}")
+
+    async def _on_soul_updated(
+        self, souls_data: list[dict], owner_id: str
+    ) -> None:
+        """Called when a remote owner sends a state update."""
+        existing_map = {s.biology.soul_id: s for s in self.active_souls}
+
+        display = pyglet.display.get_display().get_default_screen()
+        sw, sh = display.width, display.height
+
+        for soul_data in souls_data:
+            sid = soul_data.get("soul_id")
+            if sid in existing_map:
+                # Update existing soul in-place
+                existing_map[sid].update_from_dict(soul_data)
+            else:
+                # Create new soul
+                soul = Soul.from_dict(
+                    data=soul_data,
+                    on_right_click=self.handle_soul_right_click,
+                    on_move_end=self.persist_souls_state,
+                    on_state_change=self.persist_souls_state,
+                    on_async_state_change=self.async_persist_souls_state,
+                    soul_registry=self.active_souls,
+                    screen_width=sw,
+                    screen_height=sh,
+                    local_instance_id=self.instance_id,
+                )
+                self.active_souls.append(soul)
+                log.info(
+                    f"Remote soul appeared via update: {soul.biology.name} (Owner: {owner_id})"
+                )
 
     def _on_owner_offline(self, owner_id: str) -> None:
         """Called when a remote owner goes offline via WebSocket."""

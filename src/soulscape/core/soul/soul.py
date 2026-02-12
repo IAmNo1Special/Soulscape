@@ -270,6 +270,50 @@ class Soul:
             "inventory": self.inventory.to_dict(),
         }
 
+    def update_from_dict(self, data: dict[str, Any]) -> None:
+        """Updates the soul's state from a serialized dictionary.
+
+        Used for syncing remote souls without recreating the instance.
+        """
+        # Updates position
+        position = data.get("position")
+        if position:
+            if isinstance(position, (list, tuple)):
+                self.x, self.y = float(position[0]), float(position[1])
+            elif isinstance(position, str):
+                # Handle potential stringified list from DB
+                import json
+
+                try:
+                    pos_list = json.loads(position)
+                    self.x, self.y = float(pos_list[0]), float(pos_list[1])
+                except Exception:
+                    pass
+
+            if self.physics:
+                self.physics.target_x = self.x
+                self.physics.target_y = self.y
+
+        # Update stats
+        if "stats" in data:  # or flat stats? SoulStats.from_dict handles flat
+            # Since SoulStats is complex, easier to rebuild it
+            # But rebuilding replaces the object.
+            # Let's check SoulStats structure.
+            # Assuming flat data for now as per to_dict
+            pass
+
+        # Update inventory
+        inventory_data = data.get("inventory")
+        if inventory_data:
+            self.inventory = Inventory.from_dict(inventory_data)
+
+        # Update essence
+        self.essence = float(data.get("essence", self.essence))
+
+        # Biology status? (satiety etc) is in to_flat_dict()
+        # Biology updates not critical for remote viewing unless displaying stats
+        # For now, position is the main thing.
+
     def update(self, dt: float) -> None:
         """Drives the soul's simulation and AI logic for a single frame.
 

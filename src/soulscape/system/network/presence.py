@@ -26,10 +26,12 @@ class PresenceManager:
         owner_id: str,
         on_owner_online: Callable[[str], Coroutine[Any, Any, None]],
         on_owner_offline: Callable[[str], None],
+        on_soul_updated: Callable[[list[dict], str], Coroutine[Any, Any, None]],
     ):
         self.owner_id = owner_id
         self.on_owner_online = on_owner_online
         self.on_owner_offline = on_owner_offline
+        self.on_soul_updated = on_soul_updated
         self._ws: websockets.ClientConnection | None = None
         self._running = False
 
@@ -101,8 +103,25 @@ class PresenceManager:
                     log.info(f"Owner went offline: {oid}")
                     self.on_owner_offline(oid)
 
+                elif msg_type == "soul_updated":
+                    oid = message.get("owner_id")
+                    souls = message.get("souls", [])
+                    await self.on_soul_updated(souls, oid)
+
             except Exception as e:
                 log.error(f"Error processing WS message: {e}")
+
+    async def send_update(self, souls: list[dict[str, Any]]) -> None:
+        """Broadcasts local soul state updates to the Hub."""
+        if self._ws and self._ws.open:
+            try:
+                import json
+
+                await self._ws.send(
+                    json.dumps({"type": "soul_update", "souls": souls})
+                )
+            except Exception as e:
+                log.error(f"Error sending soul update: {e}")
 
     async def disconnect(self) -> None:
         """Gracefully close the WebSocket connection."""
