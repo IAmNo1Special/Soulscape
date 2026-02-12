@@ -79,7 +79,7 @@ class SoulscapeApp:
         self.last_save_time: float = time.time()
         self.last_topmost_time: float = time.time()
         self._is_saving_souls: bool = False  # Lock for background saves
-        self.last_remote_refresh_time: float = 0.0
+        self.presence_manager: Any = None
 
         # Persistent Background Event Loop for non-UI tasks (saves, net IO)
         self._loop = asyncio.new_event_loop()
@@ -133,9 +133,20 @@ class SoulscapeApp:
         # 4. Load Content
         self.load_initial_souls()
 
+        # 5. Start WebSocket Presence
+        if os.getenv("SOULSCAPE_HUB_URL"):
+            from soulscape.system.network.presence import PresenceManager
+
+            self.presence_manager = PresenceManager(
+                owner_id=self.instance_id,
+                on_owner_online=self._on_owner_online,
+                on_owner_offline=self._on_owner_offline,
+            )
+            self._run_coro(self.presence_manager.connect())
+
         self.window_manager.window.set_visible(True)
 
-        # 5. Tray Icon
+        # 6. Tray Icon
         self._setup_tray()
 
         # 6. Run Loop
@@ -281,40 +292,23 @@ class SoulscapeApp:
         """Saves current souls to disk via background loop."""
         self._run_coro(self.async_persist_souls_state())
 
-    async def refresh_remote_souls(self) -> None:
-        """Polls the Hub for active souls and adds/removes remote souls."""
-        if not os.getenv("SOULSCAPE_HUB_URL"):
-            return
-
+    async def _on_owner_online(self, owner_id: str) -> None:
+        """Called when a remote owner comes online via WebSocket."""
         try:
-            from soulscape.system.persistence import async_load_souls
+            from soulscape.system.network.client import NetworkClient
 
-            hub_souls = await async_load_souls()
-            if hub_souls is None:
+            souls_data = await NetworkClient().get_souls_by_owner(owner_id)
+            if not souls_data or not isinstance(souls_data, list):
                 return
 
-            # Build a set of soul_ids currently from the Hub
-            hub_soul_ids = {s.get("soul_id") for s in hub_souls}
-
-            # Remove remote souls whose owners went offline
-            self.active_souls[:] = [
-                soul
-                for soul in self.active_souls
-                if soul.owner_id == self.instance_id  # Keep all local souls
-                or soul.biology.soul_id
-                in hub_soul_ids  # Keep active remote souls
-            ]
-
-            # Find new remote souls to add
             existing_ids = {soul.biology.soul_id for soul in self.active_souls}
 
             display = pyglet.display.get_display().get_default_screen()
             sw, sh = display.width, display.height
 
-            for soul_data in hub_souls:
+            for soul_data in souls_data:
                 sid = soul_data.get("soul_id")
-                owner = soul_data.get("owner_id")
-                if sid not in existing_ids and owner != self.instance_id:
+                if sid not in existing_ids:
                     soul = Soul.from_dict(
                         data=soul_data,
                         on_right_click=self.handle_soul_right_click,
@@ -328,10 +322,21 @@ class SoulscapeApp:
                     )
                     self.active_souls.append(soul)
                     log.info(
-                        f"Added remote soul: {soul.biology.name} (Owner: {owner})"
+                        f"Remote soul appeared: {soul.biology.name} (Owner: {owner_id})"
                     )
         except Exception as e:
-            log.error(f"Error refreshing remote souls: {e}")
+            log.error(f"Error loading remote owner's souls: {e}")
+
+    def _on_owner_offline(self, owner_id: str) -> None:
+        """Called when a remote owner goes offline via WebSocket."""
+        removed = [
+            s.biology.name for s in self.active_souls if s.owner_id == owner_id
+        ]
+        self.active_souls[:] = [
+            soul for soul in self.active_souls if soul.owner_id != owner_id
+        ]
+        for name in removed:
+            log.info(f"Remote soul removed: {name} (Owner: {owner_id})")
 
     def update_souls(self, dt: float) -> None:
         """Updates all active souls."""
@@ -343,11 +348,6 @@ class SoulscapeApp:
             log.debug("Performing periodic souls state persistence.")
             self.persist_souls_state()
             self.last_save_time = time.time()
-
-        # Periodic Remote Soul Refresh (every 30 seconds)
-        if time.time() - self.last_remote_refresh_time > 30:
-            self._run_coro(self.refresh_remote_souls())
-            self.last_remote_refresh_time = time.time()
 
         # Periodic Topmost Enforcement (every 5 seconds)
         if time.time() - self.last_topmost_time > 5:
@@ -698,17 +698,13 @@ class SoulscapeApp:
         """Cleans up resources and exits the application."""
         log.debug("Shutting down...")
         self.persist_souls_state()
-        # Deregister from Hub so remote clients know we're offline
-        if os.getenv("SOULSCAPE_HUB_URL"):
+        # Close WebSocket (triggers server-side disconnect broadcast)
+        if self.presence_manager:
             try:
-                from soulscape.system.network.client import NetworkClient
-
-                future = self._run_coro(
-                    NetworkClient().deregister(self.instance_id)
-                )
+                future = self._run_coro(self.presence_manager.disconnect())
                 future.result(timeout=2)
             except Exception as e:
-                log.error(f"Error deregistering from Hub: {e}")
+                log.error(f"Error closing WebSocket: {e}")
         if self.tray_controller:
             self.tray_controller.stop()
         if self.overlay_window:

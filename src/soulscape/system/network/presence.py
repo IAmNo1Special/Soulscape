@@ -1,0 +1,116 @@
+"""WebSocket-based presence manager for real-time online/offline detection."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from collections.abc import Callable, Coroutine
+from typing import Any
+
+import websockets
+
+log = logging.getLogger("soulscape")
+
+
+class PresenceManager:
+    """Manages a persistent WebSocket connection to the Hub for presence.
+
+    Connects to the Hub's WS endpoint, listens for owner_online/owner_offline
+    events, and calls the provided callbacks to add/remove remote souls.
+    Automatically reconnects with exponential backoff on connection loss.
+    """
+
+    def __init__(
+        self,
+        owner_id: str,
+        on_owner_online: Callable[[str], Coroutine[Any, Any, None]],
+        on_owner_offline: Callable[[str], None],
+    ):
+        self.owner_id = owner_id
+        self.on_owner_online = on_owner_online
+        self.on_owner_offline = on_owner_offline
+        self._ws: websockets.ClientConnection | None = None
+        self._running = False
+
+        # Build WS URL from Hub URL (http -> ws)
+        hub_url = os.getenv("SOULSCAPE_HUB_URL", "http://localhost:8000")
+        self._ws_url = (
+            hub_url.replace("https://", "wss://").replace("http://", "ws://")
+            + f"/ws/{owner_id}"
+        )
+
+    async def connect(self) -> None:
+        """Start the WebSocket connection loop with auto-reconnect."""
+        self._running = True
+        backoff = 1
+
+        while self._running:
+            try:
+                log.info(f"Connecting to Hub WebSocket: {self._ws_url}")
+                async with websockets.connect(self._ws_url) as ws:
+                    self._ws = ws
+                    backoff = 1  # Reset backoff on successful connect
+                    log.info("WebSocket connected to Hub.")
+                    await self._listen(ws)
+            except (
+                ConnectionError,
+                OSError,
+                websockets.exceptions.WebSocketException,
+            ) as e:
+                if not self._running:
+                    break
+                log.warning(
+                    f"WebSocket connection lost: {e}. "
+                    f"Reconnecting in {backoff}s..."
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30)  # Cap at 30 seconds
+            except Exception as e:
+                if not self._running:
+                    break
+                log.error(f"Unexpected WebSocket error: {e}")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+
+    async def _listen(self, ws: websockets.ClientConnection) -> None:
+        """Listen for presence events from the Hub."""
+        async for raw_message in ws:
+            try:
+                import json
+
+                message = json.loads(raw_message)
+                msg_type = message.get("type")
+
+                if msg_type == "connected":
+                    # Initial connection — load all currently online owners
+                    online_owners = message.get("online_owners", [])
+                    log.info(
+                        f"Hub reports {len(online_owners)} online owner(s)."
+                    )
+                    for oid in online_owners:
+                        await self.on_owner_online(oid)
+
+                elif msg_type == "owner_online":
+                    oid = message.get("owner_id")
+                    log.info(f"Owner came online: {oid}")
+                    await self.on_owner_online(oid)
+
+                elif msg_type == "owner_offline":
+                    oid = message.get("owner_id")
+                    log.info(f"Owner went offline: {oid}")
+                    self.on_owner_offline(oid)
+
+            except Exception as e:
+                log.error(f"Error processing WS message: {e}")
+
+    async def disconnect(self) -> None:
+        """Gracefully close the WebSocket connection."""
+        self._running = False
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+        log.info("WebSocket disconnected from Hub.")

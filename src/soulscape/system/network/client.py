@@ -89,11 +89,11 @@ class NetworkClient:
     async def get_souls(self) -> Any:
         return await self._get("/souls")
 
+    async def get_souls_by_owner(self, owner_id: str) -> Any:
+        return await self._get(f"/souls?owner_id={owner_id}")
+
     async def post_souls(
         self, souls_data: list[dict[str, Any]], owner_id: str
     ) -> Any:
         payload = {"owner_id": owner_id, "souls": souls_data}
         return await self._post("/souls", payload)
-
-    async def deregister(self, owner_id: str) -> Any:
-        return await self._post("/deregister", {"owner_id": owner_id})
