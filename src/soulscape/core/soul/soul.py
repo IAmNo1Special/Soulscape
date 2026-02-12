@@ -284,8 +284,6 @@ class Soul:
                 self.x, self.y = float(position[0]), float(position[1])
             elif isinstance(position, str):
                 # Handle potential stringified list from DB
-                import json
-
                 try:
                     pos_list = json.loads(position)
                     self.x, self.y = float(pos_list[0]), float(pos_list[1])
@@ -293,8 +291,14 @@ class Soul:
                     pass
 
             if self.physics:
-                self.physics.target_x = self.x
-                self.physics.target_y = self.y
+                self.physics.x = self.x
+                self.physics.y = self.y
+                # Update last_x/y to prevent physics.update from seeing a 'large jump'
+                # and trying to trigger on_move_end or other logic.
+                self.physics.last_x = self.x
+                self.physics.last_y = self.y
+                # Synchronize visual draw position immediately to prevent flickering
+                self.draw_y = self.y
 
         # Update stats
         if "stats" in data:  # or flat stats? SoulStats.from_dict handles flat
