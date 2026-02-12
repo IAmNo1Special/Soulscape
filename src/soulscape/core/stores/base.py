@@ -49,12 +49,12 @@ class DataStore(ABC):
         return True
 
     async def edit_post(
-        self, message_id: str, content: str, author_id: int
+        self, message_id: str, content: str, author_id: str
     ) -> bool:
         """Updates an existing post/reply in the store."""
         return True
 
-    async def delete_post(self, message_id: str, author_id: int) -> bool:
+    async def delete_post(self, message_id: str, author_id: str) -> bool:
         """Removes a post/reply from the store."""
         return True
 
