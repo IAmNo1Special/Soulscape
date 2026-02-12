@@ -452,7 +452,7 @@ class SoulscapeApp:
             self.last_broadcast_time = now
 
         # Periodic Save (every 60 seconds)
-        if time.time() - self.last_save_time > 60:
+        if time.time() - self.last_save_time > 30:
             log.debug("Performing periodic souls state persistence.")
             self.persist_souls_state()
             self.last_save_time = time.time()
