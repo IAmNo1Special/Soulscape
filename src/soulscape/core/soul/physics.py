@@ -61,6 +61,12 @@ class SoulPhysics:
         self.drag_offset_x: float = 0
         self.drag_offset_y: float = 0
         self.target_location: tuple[float, float] | None = None
+
+        # Remote Movement Interpolation
+        self.is_interpolating: bool = False
+        self.target_x: float = self.x
+        self.target_y: float = self.y
+
         self.roaming_pause: float = 0.0
         self.roaming_enabled: bool = False  # Souls only move when instructed
         self.follow_mouse: bool = False
@@ -243,6 +249,28 @@ class SoulPhysics:
         if self.is_dragging:
             self.vx = 0.0
             self.vy = 0.0
+            return
+
+        # Remote Interpolation (Smooth Movement)
+        if self.is_interpolating:
+            # Simple LERP towards target
+            lerp_speed = 10.0 * dt  # Adjust for smoothness vs responsiveness
+            dx = self.target_x - self.x
+            dy = self.target_y - self.y
+
+            # If close enough, snap to target
+            if abs(dx) < 1.0 and abs(dy) < 1.0:
+                self.x = self.target_x
+                self.y = self.target_y
+                self.is_interpolating = False
+            else:
+                self.x += dx * lerp_speed
+                self.y += dy * lerp_speed
+
+            # Update Soul syncing
+            self.soul.x = self.x
+            self.soul.y = self.y
+            self.soul.draw_y = self.y
             return
 
         # Handle following the mouse

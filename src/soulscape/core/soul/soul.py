@@ -281,24 +281,24 @@ class Soul:
         position = data.get("position")
         if position:
             if isinstance(position, (list, tuple)):
-                self.x, self.y = float(position[0]), float(position[1])
+                new_x, new_y = float(position[0]), float(position[1])
             elif isinstance(position, str):
                 # Handle potential stringified list from DB
                 try:
                     pos_list = json.loads(position)
-                    self.x, self.y = float(pos_list[0]), float(pos_list[1])
+                    new_x, new_y = float(pos_list[0]), float(pos_list[1])
                 except Exception:
-                    pass
+                    new_x, new_y = self.x, self.y
 
             if self.physics:
-                self.physics.x = self.x
-                self.physics.y = self.y
-                # Update last_x/y to prevent physics.update from seeing a 'large jump'
-                # and trying to trigger on_move_end or other logic.
-                self.physics.last_x = self.x
-                self.physics.last_y = self.y
-                # Synchronize visual draw position immediately to prevent flickering
-                self.draw_y = self.y
+                # Use LERP for smooth transition
+                self.physics.target_x = new_x
+                self.physics.target_y = new_y
+                self.physics.is_interpolating = True
+            else:
+                # No physics, snap immediately
+                self.x, self.y = new_x, new_y
+                self.draw_y = new_y
 
         # Update stats
         if "stats" in data:  # or flat stats? SoulStats.from_dict handles flat
