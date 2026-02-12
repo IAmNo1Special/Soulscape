@@ -142,6 +142,7 @@ class SoulscapeApp:
                 on_owner_online=self._on_owner_online,
                 on_owner_offline=self._on_owner_offline,
                 on_soul_updated=self._on_soul_updated,
+                on_connect=self._on_connect,
             )
             self._run_coro(self.presence_manager.connect())
 
@@ -364,6 +365,33 @@ class SoulscapeApp:
                 log.info(
                     f"Remote soul appeared via update: {soul.biology.name} (Owner: {owner_id})"
                 )
+
+    async def _on_connect(self, online_owners: list[str]) -> None:
+        """Called immediately after connecting to the Hub.
+
+        Reconciles local state with the Hub's truth.
+        Removes any souls belonging to owners who are NOT in the online_owners list.
+        """
+        # We only care about prune logic here.
+        # on_owner_online will be called for each online owner to ADD missing ones.
+        online_set = set(online_owners)
+
+        # Identify stale souls
+        stale_souls = [
+            soul
+            for soul in self.active_souls
+            if soul.owner_id != self.instance_id
+            and soul.owner_id not in online_set
+        ]
+
+        if stale_souls:
+            log.info(
+                f"Pruning {len(stale_souls)} stale souls from offline owners."
+            )
+            for soul in stale_souls:
+                soul.cleanup()
+                if soul in self.active_souls:
+                    self.active_souls.remove(soul)
 
     def _on_owner_offline(self, owner_id: str) -> None:
         """Called when a remote owner goes offline via WebSocket."""
