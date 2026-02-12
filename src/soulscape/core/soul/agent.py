@@ -50,7 +50,7 @@ class SoulAgent(LlmAgent):
     _magetools_initialized: bool = False
 
     last_decision_time: float = 0.0
-    decision_interval: float = 30.0
+    decision_interval: float = 10.0
     session_service: InMemorySessionService | None = None
     session: Session | None = None
     runner: Runner | None = None
