@@ -27,11 +27,15 @@ class PresenceManager:
         on_owner_online: Callable[[str], Coroutine[Any, Any, None]],
         on_owner_offline: Callable[[str], None],
         on_soul_updated: Callable[[list[dict], str], Coroutine[Any, Any, None]],
+        on_connect: (
+            Callable[[list[str]], Coroutine[Any, Any, None]] | None
+        ) = None,
     ):
         self.owner_id = owner_id
         self.on_owner_online = on_owner_online
         self.on_owner_offline = on_owner_offline
         self.on_soul_updated = on_soul_updated
+        self.on_connect = on_connect
         self._ws: websockets.ClientConnection | None = None
         self._running = False
 
@@ -90,6 +94,9 @@ class PresenceManager:
                     log.info(
                         f"Hub reports {len(online_owners)} online owner(s)."
                     )
+                    if self.on_connect:
+                        await self.on_connect(online_owners)
+
                     for oid in online_owners:
                         await self.on_owner_online(oid)
 
@@ -113,7 +120,7 @@ class PresenceManager:
 
     async def send_update(self, souls: list[dict[str, Any]]) -> None:
         """Broadcasts local soul state updates to the Hub."""
-        if self._ws and self._ws.open:
+        if self._ws:
             try:
                 import json
 
