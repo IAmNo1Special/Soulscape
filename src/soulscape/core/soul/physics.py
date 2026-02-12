@@ -341,8 +341,8 @@ class SoulPhysics:
         Args:
             dt: Delta time.
         """
-        separation_radius = self.width * 1.2  # Personal space bubble
-        separation_force = 200.0  # Strength of push
+        separation_radius = self.width * 0.3  # Personal space bubble
+        separation_force = 100.0  # Strength of push
 
         my_center_x = self.x + self.width / 2
         my_center_y = self.y + self.height / 2
