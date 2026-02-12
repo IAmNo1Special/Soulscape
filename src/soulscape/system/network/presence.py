@@ -120,9 +120,6 @@ class PresenceManager:
                 elif msg_type == "soul_updated":
                     oid = message.get("owner_id")
                     souls = message.get("souls", [])
-                    log.debug(
-                        f"Received soul_updated from {oid} with {len(souls)} souls."
-                    )
                     await self.on_soul_updated(souls, oid)
 
             except Exception as e:

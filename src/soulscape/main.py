@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import multiprocessing
 import os
 import random
 import sys
 import threading
 import time
 import winreg
+from multiprocessing import Process, Queue, queues
 from pathlib import Path
 from typing import Any, Coroutine
 
@@ -99,19 +99,19 @@ class SoulscapeApp:
 
     def run(self) -> None:
         """Starts the application."""
-        log.debug("Starting Overlay Application...")
+        log.info("Starting Application...")
 
         # Initialize Persistent GUI Service
-        self.gui_command_queue = multiprocessing.Queue()
-        self.gui_result_queue = multiprocessing.Queue()
+        self.gui_command_queue = Queue()
+        self.gui_result_queue = Queue()
 
-        self.gui_process = multiprocessing.Process(
+        self.gui_process: Process = Process(
             target=run_gui_service,
             args=(self.gui_command_queue, self.gui_result_queue),
             daemon=True,
         )
         self.gui_process.start()
-        log.debug("GUI Service started.")
+        log.info("GUI Service started.")
 
         # 1. Setup Window Manager (Creates Overlay Window)
         self.window_manager = get_window_manager()
@@ -353,9 +353,6 @@ class SoulscapeApp:
             sid = soul_data.get("soul_id")
             if sid in existing_map:
                 # Update existing soul in-place
-                log.debug(
-                    f"Updating existing soul {sid} ({existing_map[sid].biology.name}) via WebSocket."
-                )
                 existing_map[sid].update_from_dict(soul_data)
             else:
                 # Create new soul
@@ -418,9 +415,9 @@ class SoulscapeApp:
         for soul in self.active_souls:
             soul.update(dt)
 
-        # Real-time Position Broadcast (10Hz)
+        # Real-time Position Broadcast (30Hz)
         now = time.time()
-        if now - self.last_broadcast_time > 0.1:
+        if now - self.last_broadcast_time > 0.033:
             local_souls = [
                 s for s in self.active_souls if s.owner_id == self.instance_id
             ]
@@ -796,7 +793,7 @@ class SoulscapeApp:
                         soul.aura_renderer.base_color_rgb = soul.aura_color_rgb
                         self.persist_souls_state()
 
-        except multiprocessing.queues.Empty:
+        except queues.Empty:
             pass
         except Exception as e:
             log.error(f"Error processing GUI results: {e}")

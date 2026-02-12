@@ -69,7 +69,6 @@ class GuiService:
         try:
             while True:
                 msg = self.command_queue.get_nowait()
-                print(f"DEBUG: GuiService received {msg.get('type')}")
                 self._handle_command(msg)
         except queue.Empty:
             pass

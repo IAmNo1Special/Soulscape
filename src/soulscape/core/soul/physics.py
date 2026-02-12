@@ -254,7 +254,7 @@ class SoulPhysics:
         # Remote Interpolation (Smooth Movement)
         if self.is_interpolating:
             # Simple LERP towards target
-            lerp_speed = 10.0 * dt  # Adjust for smoothness vs responsiveness
+            lerp_speed = 20.0 * dt  # Adjust for smoothness vs responsiveness
             dx = self.target_x - self.x
             dy = self.target_y - self.y
 
