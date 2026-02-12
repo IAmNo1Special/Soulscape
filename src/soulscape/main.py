@@ -80,6 +80,7 @@ class SoulscapeApp:
         self.last_topmost_time: float = time.time()
         self._is_saving_souls: bool = False  # Lock for background saves
         self.presence_manager: Any = None
+        self._force_broadcast: bool = False  # Force sync when peers join
 
         # Persistent Background Event Loop for non-UI tasks (saves, net IO)
         self._loop = asyncio.new_event_loop()
@@ -341,6 +342,8 @@ class SoulscapeApp:
                     log.info(
                         f"Remote soul appeared: {soul.biology.name} (Owner: {owner_id})"
                     )
+                    # Force a broadcast of our own state so the new peer sees our live pos
+                    self._force_broadcast = True
         except Exception as e:
             log.error(f"Error loading remote owner's souls: {e}")
 
@@ -419,9 +422,13 @@ class SoulscapeApp:
         for soul in self.active_souls:
             soul.update(dt)
 
-        # Real-time Position Broadcast (30Hz)
+        # Real-time Position Broadcast (30Hz or forced)
         now = time.time()
-        if now - self.last_broadcast_time > 0.033:
+        if self._force_broadcast or (now - self.last_broadcast_time > 0.033):
+            if self._force_broadcast:
+                self.soul_last_broadcast_pos.clear()
+                self._force_broadcast = False
+
             local_souls = [
                 s for s in self.active_souls if s.owner_id == self.instance_id
             ]
