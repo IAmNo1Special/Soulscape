@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import multiprocessing
+import os
 import random
 import sys
 import threading
@@ -78,6 +79,7 @@ class SoulscapeApp:
         self.last_save_time: float = time.time()
         self.last_topmost_time: float = time.time()
         self._is_saving_souls: bool = False  # Lock for background saves
+        self.last_remote_refresh_time: float = 0.0
 
         # Persistent Background Event Loop for non-UI tasks (saves, net IO)
         self._loop = asyncio.new_event_loop()
@@ -279,6 +281,58 @@ class SoulscapeApp:
         """Saves current souls to disk via background loop."""
         self._run_coro(self.async_persist_souls_state())
 
+    async def refresh_remote_souls(self) -> None:
+        """Polls the Hub for active souls and adds/removes remote souls."""
+        if not os.getenv("SOULSCAPE_HUB_URL"):
+            return
+
+        try:
+            from soulscape.system.persistence import async_load_souls
+
+            hub_souls = await async_load_souls()
+            if hub_souls is None:
+                return
+
+            # Build a set of soul_ids currently from the Hub
+            hub_soul_ids = {s.get("soul_id") for s in hub_souls}
+
+            # Remove remote souls whose owners went offline
+            self.active_souls[:] = [
+                soul
+                for soul in self.active_souls
+                if soul.owner_id == self.instance_id  # Keep all local souls
+                or soul.biology.soul_id
+                in hub_soul_ids  # Keep active remote souls
+            ]
+
+            # Find new remote souls to add
+            existing_ids = {soul.biology.soul_id for soul in self.active_souls}
+
+            display = pyglet.display.get_display().get_default_screen()
+            sw, sh = display.width, display.height
+
+            for soul_data in hub_souls:
+                sid = soul_data.get("soul_id")
+                owner = soul_data.get("owner_id")
+                if sid not in existing_ids and owner != self.instance_id:
+                    soul = Soul.from_dict(
+                        data=soul_data,
+                        on_right_click=self.handle_soul_right_click,
+                        on_move_end=self.persist_souls_state,
+                        on_state_change=self.persist_souls_state,
+                        on_async_state_change=self.async_persist_souls_state,
+                        soul_registry=self.active_souls,
+                        screen_width=sw,
+                        screen_height=sh,
+                        local_instance_id=self.instance_id,
+                    )
+                    self.active_souls.append(soul)
+                    log.info(
+                        f"Added remote soul: {soul.biology.name} (Owner: {owner})"
+                    )
+        except Exception as e:
+            log.error(f"Error refreshing remote souls: {e}")
+
     def update_souls(self, dt: float) -> None:
         """Updates all active souls."""
         for soul in self.active_souls:
@@ -289,6 +343,11 @@ class SoulscapeApp:
             log.debug("Performing periodic souls state persistence.")
             self.persist_souls_state()
             self.last_save_time = time.time()
+
+        # Periodic Remote Soul Refresh (every 30 seconds)
+        if time.time() - self.last_remote_refresh_time > 30:
+            self._run_coro(self.refresh_remote_souls())
+            self.last_remote_refresh_time = time.time()
 
         # Periodic Topmost Enforcement (every 5 seconds)
         if time.time() - self.last_topmost_time > 5:
@@ -639,6 +698,17 @@ class SoulscapeApp:
         """Cleans up resources and exits the application."""
         log.debug("Shutting down...")
         self.persist_souls_state()
+        # Deregister from Hub so remote clients know we're offline
+        if os.getenv("SOULSCAPE_HUB_URL"):
+            try:
+                from soulscape.system.network.client import NetworkClient
+
+                future = self._run_coro(
+                    NetworkClient().deregister(self.instance_id)
+                )
+                future.result(timeout=2)
+            except Exception as e:
+                log.error(f"Error deregistering from Hub: {e}")
         if self.tray_controller:
             self.tray_controller.stop()
         if self.overlay_window:
