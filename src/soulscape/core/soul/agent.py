@@ -313,7 +313,6 @@ class SoulAgent(LlmAgent):
         img_bytes = self._process_vision(state, screen_context)
 
         context_str = (
-            f"Name: {name}, "
             f"Current Location: ({state['x']:.0f}, {state['y']:.0f}). "
             f"World Boundaries: 0 to {state.get('screen_width', 1920)} (X), 0 to {state.get('screen_height', 1080)} (Y). "
             f"Status: "
@@ -322,7 +321,7 @@ class SoulAgent(LlmAgent):
             f"Hydration={state['hydration']:.1f}/100 "
             f"Essence={state['essence']:.1f} "
             f"Inventory: {state['inventory']} "
-            "Visual context attached. "
+            "Attached is an image of you and your visible surroundings. "
         )
         if sensations:
             context_str += "\nRecent Physical Sensations:\n" + "\n".join(
