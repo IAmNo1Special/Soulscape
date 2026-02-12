@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import Callable, Coroutine
@@ -129,9 +130,6 @@ class PresenceManager:
         """Broadcasts local soul state updates to the Hub."""
         if self._ws:
             try:
-                import json
-
-                log.debug(f"Sending soul_update with {len(souls)} souls.")
                 await self._ws.send(
                     json.dumps({"type": "soul_update", "souls": souls})
                 )
