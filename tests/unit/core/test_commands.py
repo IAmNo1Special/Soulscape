@@ -7,6 +7,7 @@ from soulscape.core.commands import (
     InventoryCommand,
     MoveCommand,
     OwnerPresenceCommand,
+    PresenceReconcileCommand,
     SellItemCommand,
     SpeakCommand,
     StateUpdateCommand,
@@ -145,6 +146,7 @@ def test_buy_item_command():
     mock_listing = MagicMock()
     mock_listing.price = 50.0
     mock_listing.item = mock_item
+    mock_listing.seller_id = "seller_sid"
 
     soul.marketplace.get_listing.return_value = mock_listing
     soul.marketplace.remove_listing.return_value = mock_item
@@ -162,6 +164,7 @@ def test_cancel_listing_command():
     mock_item.name = "TestItem"
     mock_listing = MagicMock()
     mock_listing.item = mock_item
+    mock_listing.seller_id = "test_sid"
 
     soul.marketplace.get_listing.return_value = mock_listing
     soul.marketplace.remove_listing.return_value = mock_item
@@ -170,3 +173,55 @@ def test_cancel_listing_command():
     cmd.execute(soul)
 
     soul.inventory.add_item.assert_called_with(mock_item)
+
+
+def test_buy_item_command_seller_credit():
+    soul = MockSoul()
+    soul.essence = 100.0
+
+    seller_soul = MockSoul()
+    seller_soul.soul_id = "seller_sid"
+    seller_soul.essence = 0.0
+    soul.soul_registry = [seller_soul]
+
+    mock_item = MagicMock()
+    mock_listing = MagicMock()
+    mock_listing.price = 100.0
+    mock_item.name = "TestItem"
+    mock_listing.item = mock_item
+    mock_listing.seller_id = "seller_sid"
+
+    soul.marketplace.get_listing.return_value = mock_listing
+    soul.marketplace.remove_listing.return_value = mock_item
+
+    cmd = BuyItemCommand(listing_id="listing_123")
+    cmd.execute(soul)
+
+    assert soul.essence == 0.0
+    # Seller gets 98%
+    assert seller_soul.essence == 98.0
+
+
+def test_presence_reconcile_command():
+    soul = MockSoul()
+    soul.instance_id = "local_owner"
+
+    # Remote soul 1 (online)
+    s1 = MockSoul()
+    s1.owner_id = "owner_online"
+    # Remote soul 2 (offline)
+    s2 = MockSoul()
+    s2.owner_id = "owner_offline"
+    # Local soul
+    s3 = MockSoul()
+    s3.owner_id = "local_owner"
+
+    soul.soul_registry = [s1, s2, s3]
+
+    cmd = PresenceReconcileCommand(online_owners=["owner_online"])
+    cmd.execute(soul)
+
+    assert len(soul.soul_registry) == 2
+    assert s1 in soul.soul_registry
+    assert s3 in soul.soul_registry
+    assert s2 not in soul.soul_registry

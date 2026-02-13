@@ -213,12 +213,30 @@ class BuyItemCommand(Command):
             return
 
         # Perform atomic transfer
-        soul.essence -= listing.price
         item = soul.marketplace.remove_listing(self.listing_id)
         if item:
+            soul.essence -= listing.price
+            soul.essence = round(soul.essence, 2)
+
+            # Credit seller (98% after tax)
+            seller_net = round(listing.price * 0.98, 2)
+            # Find seller in registry to update locally
+            if hasattr(soul, "soul_registry"):
+                seller_soul = next(
+                    (
+                        s
+                        for s in soul.soul_registry
+                        if s.soul_id == listing.seller_id
+                    ),
+                    None,
+                )
+                if seller_soul:
+                    seller_soul.essence += seller_net
+                    seller_soul.essence = round(seller_soul.essence, 2)
+
             soul.inventory.add_item(item)
             log.info(
-                f"Atomic Buy success for {soul.biology.name}: {item.name} purchased for {listing.price}"
+                f"Atomic Buy success for {soul.biology.name}: {item.name} purchased for {listing.price} (Seller {listing.seller_id} credited {seller_net})"
             )
         else:
             log.error(
@@ -238,6 +256,13 @@ class CancelListingCommand(Command):
 
         listing = soul.marketplace.get_listing(self.listing_id)
         if not listing:
+            return
+
+        # Security: Only the seller can cancel
+        if listing.seller_id != soul.soul_id:
+            log.warning(
+                f"Unauthorized Cancel attempt by {soul.soul_id} for listing {self.listing_id} (Seller: {listing.seller_id})"
+            )
             return
 
         item = soul.marketplace.remove_listing(self.listing_id)
@@ -282,3 +307,49 @@ class DrinkCommand(Command):
             log.info(
                 f"Atomic Drink success: {soul.biology.name} drank {self.item.name} (+{value} hydration)"
             )
+
+
+@dataclass
+class PresenceReconcileCommand(Command):
+    """Command to reconcile the local registry with online users."""
+
+    online_owners: List[str] = field(default_factory=list)
+    priority: int = 15  # Very high priority for consistency
+
+    def execute(self, context: Any) -> None:
+        """Reconciles souls in the registry or app level."""
+        # This command can be executed on a Soul (registry) or the App (active_souls)
+        registry = []
+        if hasattr(context, "soul_registry"):
+            registry = context.soul_registry
+        elif hasattr(context, "active_souls"):
+            registry = context.active_souls
+
+        if not registry:
+            return
+
+        online_set = set(self.online_owners)
+        initial_count = len(registry)
+
+        # Prune remote souls whose owners are no longer online
+        # We keep local souls (where owner_id == instance_id)
+        instance_id = getattr(context, "instance_id", None)
+        if not instance_id and hasattr(context, "biology"):
+            # If context is a Soul, we might need a way to identify 'local'
+            # For now, we assume StateUpdateCommand logic where local_instance_id is set
+            instance_id = getattr(context, "local_instance_id", None)
+
+        if hasattr(registry, "remove"):  # If it's a list we can mutate
+            to_remove = []
+            for s in registry:
+                owner = getattr(s, "owner_id", None)
+                if owner and owner != instance_id and owner not in online_set:
+                    to_remove.append(s)
+
+            for s in to_remove:
+                registry.remove(s)
+
+            if to_remove:
+                log.info(
+                    f"PresenceReconcile pruned {len(to_remove)} stale souls (from {initial_count})."
+                )

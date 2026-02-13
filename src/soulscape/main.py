@@ -327,32 +327,20 @@ class SoulscapeApp:
 
     def _handle_network_events(self) -> None:
         """Processes commands from the NetworkService command queue."""
-        # We need a context soul to execute network commands.
-        # If we have active souls, we can use the first one or a dummy.
-        # But wait, StateUpdateCommand logic uses soul.soul_registry.
-        # If we have no souls, these commands won't have a target anyway.
-        if not self.active_souls:
-            # We still want to process presence commands, but we need a soul reference.
-            # Usually, there's always a soul if we're online.
-            # Let's see if we can just pass 'self' if we make commands handle SoulscapeApp.
-            pass
-
-        # Since commands now follow a unified pattern, we process the queue.
-        # We'll use one of our souls as the execution context.
-        context_soul = self.active_souls[0] if self.active_souls else None
+        # Use first active soul for registry-based commands, or 'self' for app-level commands
+        context = self.active_souls[0] if self.active_souls else self
 
         while not self.network_service.command_queue.empty():
             command = self.network_service.command_queue.get()
-            if command and context_soul:
-                try:
-                    command.execute(context_soul)
-                except Exception as e:
-                    log.error(
-                        f"Error executing network command {type(command).__name__}: {e}"
-                    )
-            elif command:
-                log.warning(
-                    f"Network command {type(command).__name__} dropped: No active soul for context."
+            if not command:
+                continue
+
+            try:
+                # Commands like PresenceReconcile can handle the App context
+                command.execute(context)
+            except Exception as e:
+                log.error(
+                    f"Error executing network command {type(command).__name__}: {e}"
                 )
 
     def _on_connect_sync(self, online_owners: list[str]) -> None:

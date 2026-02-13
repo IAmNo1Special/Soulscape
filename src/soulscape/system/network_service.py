@@ -3,7 +3,11 @@ import re
 import threading
 from typing import Any, Dict, List, Optional
 
-from soulscape.core.commands import OwnerPresenceCommand, StateUpdateCommand
+from soulscape.core.commands import (
+    OwnerPresenceCommand,
+    PresenceReconcileCommand,
+    StateUpdateCommand,
+)
 from soulscape.system.command_queue import CommandQueue
 from soulscape.system.logger import log
 from soulscape.system.network.client import NetworkClient
@@ -83,12 +87,11 @@ class NetworkService:
     # These push events to the thread-safe queue for the Main Thread to consume
 
     async def _on_connect(self, online_owners: List[str]) -> None:
-        for owner_id in online_owners:
-            if not self._is_valid_owner(owner_id):
-                continue
-            self.command_queue.put(
-                OwnerPresenceCommand(owner_id=owner_id, action="online")
-            )
+        # Reconcile all remote souls at once instead of individual online events
+        valid_owners = [o for o in online_owners if self._is_valid_owner(o)]
+        self.command_queue.put(
+            PresenceReconcileCommand(online_owners=valid_owners)
+        )
 
     async def _on_owner_online(self, owner_id: str) -> None:
         if not self._is_valid_owner(owner_id):
