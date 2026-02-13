@@ -1,9 +1,10 @@
 import asyncio
-import queue
 import re
 import threading
 from typing import Any, Dict, List, Optional
 
+from soulscape.core.commands import OwnerPresenceCommand, StateUpdateCommand
+from soulscape.system.command_queue import CommandQueue
 from soulscape.system.logger import log
 from soulscape.system.network.client import NetworkClient
 from soulscape.system.network.presence import PresenceManager
@@ -20,9 +21,9 @@ class NetworkService:
         self.owner_id = owner_id
 
         # Upstream: Client -> Hub
-        # Downstream: Hub -> Client
+        # Downstream: Hub -> Client (Commands)
         self._upstream_queue: asyncio.Queue = asyncio.Queue()
-        self._downstream_queue: queue.Queue = queue.Queue()
+        self.command_queue: CommandQueue = CommandQueue()
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
@@ -70,28 +71,20 @@ class NetworkService:
                 self._upstream_queue.put(data), self._loop
             )
 
-    def get_events(self) -> List[Dict[str, Any]]:
-        """Non-blocking pop of all available events from downstream queue (called from Main Thread)."""
-        events = []
-        try:
-            while True:
-                event = self._downstream_queue.get_nowait()
-                events.append(event)
-        except queue.Empty:
-            pass
-        return events
+    # get_events removed in favor of command_queue access
 
     # --- Async Callbacks (Run in Background Loop) ---
     # These push events to the thread-safe queue for the Main Thread to consume
 
     async def _on_connect(self, online_owners: List[str]) -> None:
-        self._downstream_queue.put(
-            {"type": "connected", "online_owners": online_owners}
-        )
+        for owner_id in online_owners:
+            self.command_queue.put(
+                OwnerPresenceCommand(owner_id=owner_id, action="online")
+            )
 
     async def _on_owner_online(self, owner_id: str) -> None:
-        self._downstream_queue.put(
-            {"type": "owner_online", "owner_id": owner_id}
+        self.command_queue.put(
+            OwnerPresenceCommand(owner_id=owner_id, action="online")
         )
 
         # VALIDATION: Prevent path traversal or injection
@@ -103,24 +96,20 @@ class NetworkService:
             # Fetch remote souls directly here
             souls_data = await self.client.get_souls_by_owner(owner_id)
             if souls_data:
-                self._downstream_queue.put(
-                    {
-                        "type": "soul_updated",
-                        "souls": souls_data,
-                        "owner_id": owner_id,
-                    }
+                self.command_queue.put(
+                    StateUpdateCommand(souls_data=souls_data, owner_id=owner_id)
                 )
         except Exception as e:
             log.error(f"Error fetching remote souls for {owner_id}: {e}")
 
     def _on_owner_offline(self, owner_id: str) -> None:
-        self._downstream_queue.put(
-            {"type": "owner_offline", "owner_id": owner_id}
+        self.command_queue.put(
+            OwnerPresenceCommand(owner_id=owner_id, action="offline")
         )
 
     async def _on_soul_updated(self, souls: List[Dict], owner_id: str) -> None:
-        self._downstream_queue.put(
-            {"type": "soul_updated", "souls": souls, "owner_id": owner_id}
+        self.command_queue.put(
+            StateUpdateCommand(souls_data=souls, owner_id=owner_id)
         )
 
     # --- Internal Loop Logic ---

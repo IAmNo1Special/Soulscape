@@ -3,6 +3,7 @@ from typing import Any
 
 from magetools import spell
 
+from soulscape.core.commands import MoveCommand
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
 
@@ -100,11 +101,9 @@ async def move_to(self, x: int, y: int) -> dict[str, Any]:
     y = max(0, min(y, sh))
 
     log.info(f"{self.biology.name} is moving to ({x}, {y})")
-    self.physics.target_location = (float(x), float(y))
-    if self.on_async_state_change:
-        await self.on_async_state_change()
-    elif self.on_state_change:
-        self.on_state_change()
+
+    # Queue the move instead of direct mutation
+    self.command_queue.put(MoveCommand(x=float(x), y=float(y)))
 
     return {
         "status": "started",

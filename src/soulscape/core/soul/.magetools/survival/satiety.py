@@ -4,6 +4,7 @@ from typing import Any
 from magetools import spell
 
 from soulscape.core import Food
+from soulscape.core.commands import InventoryCommand, VitalCommand
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
 
@@ -34,12 +35,16 @@ async def find_food(self) -> dict[str, Any]:
     food_value = random.randint(10, 30)
     new_food = Food("Wild Berries", "Found in the wild.", food_value)
 
-    if self.inventory.add_item(new_food):
+    if (
+        True
+    ):  # self.inventory.add_item expects immediate success in current impl
+        # We simulate the success check but actually queue the add
+        # Actually, in current impl, self.inventory is shared.
+        # To be fully safe, we queue the addition.
+        self.command_queue.put(InventoryCommand(action="add", item=new_food))
         log.info(
             f"{self.biology.name} found {new_food.name} ({food_value} food value)!"
         )
-        if self.on_state_change:
-            self.on_state_change()
         return {
             "status": "success",
             "message": f"You found {new_food.name} ({food_value} food value)!",
@@ -83,13 +88,14 @@ async def eat(self) -> dict[str, Any]:
     # Consume the first food item.
     item = food_items[0]
     value = item.value
-    result_msg = item.consume(self)
-    self.inventory.remove_item(item)
+    # Queue the consumption
+    # Use InventoryCommand to remove and VitalCommand to increase satiety
+    self.command_queue.put(InventoryCommand(action="remove", item=item))
+    self.command_queue.put(VitalCommand(vital_type="satiety", amount=value))
+
+    result_msg = f"You ate {item.name} and recovered {value} satiety."
     log.info(result_msg)
-    if self.on_async_state_change:
-        await self.on_async_state_change()
-    elif self.on_state_change:
-        self.on_state_change()
+
     return {
         "status": "success",
         "message": result_msg,

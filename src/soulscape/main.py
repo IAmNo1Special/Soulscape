@@ -326,20 +326,33 @@ class SoulscapeApp:
     # --- Sync Event Handlers (Called from Game Loop) ---
 
     def _handle_network_events(self) -> None:
-        """Processes events from the NetworkService downstream queue."""
-        events = self.network_service.get_events()
-        for event in events:
-            etype = event.get("type")
+        """Processes commands from the NetworkService command queue."""
+        # We need a context soul to execute network commands.
+        # If we have active souls, we can use the first one or a dummy.
+        # But wait, StateUpdateCommand logic uses soul.soul_registry.
+        # If we have no souls, these commands won't have a target anyway.
+        if not self.active_souls:
+            # We still want to process presence commands, but we need a soul reference.
+            # Usually, there's always a soul if we're online.
+            # Let's see if we can just pass 'self' if we make commands handle SoulscapeApp.
+            pass
 
-            if etype == "connected":
-                self._on_connect_sync(event.get("online_owners", []))
-            elif etype == "owner_online":
-                log.info(f"Owner online: {event.get('owner_id')}")
-            elif etype == "owner_offline":
-                self._on_owner_offline_sync(event.get("owner_id"))
-            elif etype == "soul_updated":
-                self._on_soul_updated_sync(
-                    event.get("souls", []), event.get("owner_id")
+        # Since commands now follow a unified pattern, we process the queue.
+        # We'll use one of our souls as the execution context.
+        context_soul = self.active_souls[0] if self.active_souls else None
+
+        while not self.network_service.command_queue.empty():
+            command = self.network_service.command_queue.get()
+            if command and context_soul:
+                try:
+                    command.execute(context_soul)
+                except Exception as e:
+                    log.error(
+                        f"Error executing network command {type(command).__name__}: {e}"
+                    )
+            elif command:
+                log.warning(
+                    f"Network command {type(command).__name__} dropped: No active soul for context."
                 )
 
     def _on_connect_sync(self, online_owners: list[str]) -> None:

@@ -3,6 +3,7 @@ from typing import Any
 
 from magetools import spell
 
+from soulscape.core.commands import EssenceCommand, InventoryCommand
 from soulscape.core.interactions import Marketplace
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
@@ -36,8 +37,9 @@ async def market_sell(self, item_index: int, price: float) -> dict[str, Any]:
     if price < 0:
         return {"status": "fail", "message": "Price cannot be negative."}
 
-    # Remove item from inventory
-    item = self.inventory.items.pop(item_index)
+    # Remove item from inventory (Queued)
+    item = self.inventory.items[item_index]
+    self.command_queue.put(InventoryCommand(action="remove", item=item))
 
     # List on marketplace
     await Marketplace().initialize()
@@ -45,10 +47,7 @@ async def market_sell(self, item_index: int, price: float) -> dict[str, Any]:
         self.biology.soul_id, self.biology.name, item, price
     )
 
-    if self.on_async_state_change:
-        await self.on_async_state_change()
-    elif self.on_state_change:
-        self.on_state_change()
+    # State changes handled by command processing
 
     return {
         "status": "success",
@@ -161,18 +160,17 @@ async def market_buy(self, listing_id: str) -> dict[str, Any]:
     seller_net = round(listing.price - tax_amount, 2)
 
     # 3. Transfer Essence
-    self.essence -= listing.price
-    self.essence = round(self.essence, 2)
+    # Queue essence transfer
+    self.command_queue.put(EssenceCommand(amount=-listing.price))
 
-    # Add tax to marketplace fund (Only if NOT remote,
-    # as Hub's buy_item already does it)
+    # Add tax to marketplace fund (Only if NOT remote)
     if not os.getenv("SOULSCAPE_HUB_URL"):
         await Marketplace().add_funds(tax_amount)
 
-    # 4. Transfer Item
-    self.inventory.add_item(listing.item)
+    # Queue item retrieval
+    self.command_queue.put(InventoryCommand(action="add", item=listing.item))
 
-    # 5. Pay Seller
+    # Pay Seller (Queued if local)
     seller = None
     if self.soul_registry:
         for s in self.soul_registry:
@@ -181,8 +179,7 @@ async def market_buy(self, listing_id: str) -> dict[str, Any]:
                 break
 
     if seller:
-        seller.essence += seller_net
-        seller.essence = round(seller.essence, 2)
+        seller.command_queue.put(EssenceCommand(amount=seller_net))
         log.info(
             f"{self.biology.name} bought {listing.item.name} from {seller.biology.name} for {listing.price} Essence. Tax: {tax_amount}. Seller Net: {seller_net}"
         )
@@ -191,10 +188,7 @@ async def market_buy(self, listing_id: str) -> dict[str, Any]:
             f"Seller {listing.seller_id} not found for payment. Essence burned."
         )
 
-    if self.on_async_state_change:
-        await self.on_async_state_change()
-    elif self.on_state_change:
-        self.on_state_change()
+    # State changes are handled by the CommandQueue processing in the main loop
 
     return {
         "status": "success",
@@ -247,17 +241,16 @@ async def market_cancel(self, listing_id: str) -> dict[str, Any]:
             "message": "Listing was just sold or removed.",
         }
 
-    # Return item to inventory
-    self.inventory.add_item(removed_listing.item)
+    # Return item to inventory (Queued)
+    self.command_queue.put(
+        InventoryCommand(action="add", item=removed_listing.item)
+    )
 
     log.info(
         f"{self.biology.name} cancelled listing {listing_id} and retrieved {removed_listing.item.name}."
     )
 
-    if self.on_async_state_change:
-        await self.on_async_state_change()
-    elif self.on_state_change:
-        self.on_state_change()
+    # State changes handled by command processing
 
     return {
         "status": "success",

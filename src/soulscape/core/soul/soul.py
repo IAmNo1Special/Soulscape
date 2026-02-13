@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from ...constants import SOUL_HEIGHT, SOUL_WIDTH
+from ...system.command_queue import Command, CommandQueue
 from ...system.logger import log
 from ..biology import Gender, SoulBiology, SoulStats, Species
 from ..interactions import Inventory
@@ -183,6 +184,9 @@ class Soul:
 
         # Tool Tracking
         self._active_actions: set[str] = set()
+
+        # Command Queue for thread-safe state mutations
+        self.command_queue: CommandQueue = CommandQueue()
 
         # --- Visual / Physics Initialization ---
 
@@ -431,6 +435,21 @@ class Soul:
                 log.info(
                     f"Soul {self.biology.name} is currently PERISHED and awaiting revival."
                 )
+
+        # 5. Process thread-safe commands
+        self.process_commands()
+
+    def process_commands(self) -> None:
+        """Processes and executes all pending commands in the queue."""
+        while not self.command_queue.empty():
+            command = self.command_queue.get()
+            if command:
+                try:
+                    command.execute(self)
+                except Exception as e:
+                    log.error(
+                        f"Error executing command {type(command).__name__}: {e}"
+                    )
 
     def on_mouse_press(
         self, x: int, y: int, button: int, modifiers: int, screen_height: int
