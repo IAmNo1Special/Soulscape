@@ -272,6 +272,47 @@ class Soul:
             "inventory": self.inventory.to_dict(),
         }
 
+    def create_snapshot(self) -> dict[str, Any]:
+        """Creates a thread-safe snapshot of the soul's current state.
+
+        This method creates a deep copy of all data required by the AI agent,
+        ensuring that no live Pyglet objects or mutable shared state reference
+        leak into the background thread.
+
+        Returns:
+            A dictionary containing a completely decoupled snapshot of the soul.
+        """
+        # Reuse to_dict for the base data as it already serializes to primitives
+        snapshot = self.to_dict()
+
+        # Add volatile/runtime-only data that to_dict might skip but Agent needs
+        # (Currently to_dict is quite comprehensive, but we separate intent here)
+        snapshot.update(
+            {
+                "name": self.biology.name,
+                "x": self.x,
+                "y": self.y,
+                "species": self.biology.species.name,
+                "gender": self.biology.gender.gender_name,
+                "location": self.biology.current_location,
+                "hp": self.biology.current_health,
+                "max_hp": self.biology.stats.max_hp,
+                "satiety": self.biology.satiety,
+                "hydration": self.biology.hydration,
+                "vision_stat": float(self.biology.stats.vision),
+                "width": self.width,
+                "height": self.height,
+                "screen_width": self.screen_width,
+                "screen_height": self.screen_height,
+                "debug_vision": getattr(self, "DEBUG_VISION", True),
+                # Sensations are consumed by the agent, so we pop them here
+                # But create_snapshot might be called multiple times?
+                # ideally agent calls access_sensations() or we pass them in step.
+                # For now, we'll keep them out of here to avoid side effects in a "getter"
+            }
+        )
+        return snapshot
+
     def update_from_dict(self, data: dict[str, Any]) -> None:
         """Updates the soul's state from a serialized dictionary.
 
@@ -354,9 +395,20 @@ class Soul:
                 self.biology.decrease_hydration()
                 self.biology.check_status()
 
-            # Agent Decision Update
+            # 4. Agent Decision (Thread Safe)
             if self.agent:
-                self.agent.trigger_decision(self.time)
+                # OPTIMIZATION: Check if agent needs to run BEFORE creating heavy snapshot
+                if (
+                    not self.agent.is_busy
+                    and self.time - self.agent.last_decision_time
+                    > self.agent.decision_interval
+                ):
+                    snapshot = self.create_snapshot()
+                    sensations = list(self.biology.sensations)
+                    self.biology.sensations.clear()
+                    self.agent.trigger_decision(
+                        self.time, snapshot=snapshot, sensations=sensations
+                    )
 
             # Periodic Heartbeat for diagnostics
             if (

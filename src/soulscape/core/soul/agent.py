@@ -192,14 +192,27 @@ class SoulAgent(LlmAgent):
         )
         log.debug(f"Runner initialized for {self.soul.biology.name}")
 
-    def trigger_decision(self, current_time: float) -> None:
-        """Triggers the agent's decision-making process if the interval has passed."""
+    def trigger_decision(
+        self,
+        current_time: float,
+        snapshot: dict[str, Any] | None = None,
+        sensations: list[str] | None = None,
+    ) -> None:
+        """Triggers the agent's decision-making process if the interval has passed.
+
+        Args:
+            current_time: Current simulation time.
+            snapshot: Thread-safe state dictionary from Soul.create_snapshot().
+            sensations: List of recent sensory strings.
+        """
         if (
             not self.is_busy
             and current_time - self.last_decision_time > self.decision_interval
+            and snapshot is not None
         ):
             self.is_busy = True
-            self._start_agent_thread()
+            # Sensations default to empty loop if None
+            self._start_agent_thread(snapshot, sensations or [])
 
     async def _initialize_magetools(self) -> None:
         """Asynchronously initializes magetools and binds spells to the soul."""
@@ -467,57 +480,34 @@ class SoulAgent(LlmAgent):
         # Run resumption in the background loop
         self._run_coro(_resume_async())
 
-    def _start_agent_thread(self) -> None:
-        """Prepares data and starts the agent step in a separate thread."""
-        if not self._soul:
-            return
+    def _start_agent_thread(
+        self, state_snapshot: dict[str, Any], sensations: list[str]
+    ) -> None:
+        """Prepares data and starts the agent step in a separate thread.
 
-        # 1. Capture State Snapshot
-        state_snapshot = self._soul.to_dict()
-        state_snapshot.update(
-            {
-                "name": self._soul.biology.name,
-                "species": self._soul.biology.species.name,
-                "gender": self._soul.biology.gender.gender_name,
-                "location": self._soul.biology.current_location,
-                "hp": self._soul.biology.current_health,
-                "max_hp": self._soul.biology.stats.max_hp,
-                "satiety": self._soul.biology.satiety,
-                "hydration": self._soul.biology.hydration,
-                "inventory": self._soul.inventory.to_dict(),
-                "orb_color": self._soul.orb_color_rgb,
-                "aura_color": self._soul.aura_color_rgb,
-                # Geometry for vision
-                "x": self._soul.x,
-                "y": self._soul.y,
-                "width": self._soul.width,
-                "height": self._soul.height,
-                "vision_stat": (
-                    float(self._soul.biology.stats.vision)
-                    if self._soul.biology.stats
-                    else 0.0
-                ),
-                "debug_vision": getattr(self._soul, "DEBUG_VISION", True),
-                "soul_id": self._soul.biology.soul_id,
-                "screen_width": self._soul.screen_width,
-                "screen_height": self._soul.screen_height,
-            }
-        )
+        Args:
+            state_snapshot: The immutable state dictionary from the main thread.
+            sensations: The list of sensations popped from the main thread.
+        """
+        # 1. Capture Screen Context (Still potentially heavy, but Pyglet specific)
+        # Note: We still do this in the thread for now to avoid blocking Main Loop.
+        # Ideally, we'd pass image data too, but pyautogui is external.
+        # If pyautogui conflicts with Pyglet, this might need moving.
 
-        # 2. Capture Sensations
-        current_sensations = list(self._soul.biology.sensations)
-        self._soul.biology.sensations.clear()
+        # We wrap the thread target to handle the screenshot inside the thread
+        # to prevent Main Thread lag.
 
-        # 3. Capture Screen Context
-        try:
-            screen_context = pyautogui.screenshot()
-        except Exception as e:
-            log.error(f"Screenshot failed: {e}")
-            screen_context = None
+        def _threaded_entry_point():
+            try:
+                screen_context = pyautogui.screenshot()
+            except Exception as e:
+                log.error(f"Screenshot failed: {e}")
+                screen_context = None
+
+            self._run_agent_step(state_snapshot, sensations, screen_context)
 
         # 4. Spawn Thread
         threading.Thread(
-            target=self._run_agent_step,
-            args=(state_snapshot, current_sensations, screen_context),
+            target=_threaded_entry_point,
             daemon=True,
         ).start()
