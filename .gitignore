@@ -11,14 +11,13 @@ wheels/
 
 .env
 
-# Debug Vision
-debug_vision/
-
-# Protel
+# dev docs
 .protel/
-
+debug_vision/
 gradex_jsons/
-
 connecting_others.md
+HUB_INTEGRATION_UPDATE.md
 
 .chroma_db/
+.pytest_cache/
+
