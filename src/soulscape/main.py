@@ -149,7 +149,7 @@ class SoulscapeApp:
         self.load_initial_souls()
 
         # 5. Start Network Service
-        if os.getenv("SOULSCAPE_HUB_URL"):
+        if os.getenv("HUB_URL"):
             self.network_service.start()
 
         self.window_manager.window.set_visible(True)

@@ -14,13 +14,17 @@ class NetworkClient:
     """Async client wrapper for Soulscape backend services."""
 
     def __init__(
-        self, base_url: Optional[str] = None, api_key: Optional[str] = None
+        self, base_url: Optional[str] = None, secret_key: Optional[str] = None
     ):
-        self.base_url = base_url or os.getenv(
-            "SOULSCAPE_HUB_URL", "http://localhost:8000"
+        self.base_url = (
+            base_url
+            or os.getenv("HUB_URL")
+            or os.getenv("HUB_URL", "http://localhost:8000")
         )
-        self.api_key = api_key or os.getenv("SOULSCAPE_HUB_KEY", "")
-        self.headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        self.secret_key = secret_key or os.getenv("HUB_SECRET_KEY", "")
+        self.headers = (
+            {"X-Hub-Secret": self.secret_key} if self.secret_key else {}
+        )
 
     async def _get(self, endpoint: str) -> Any:
         try:
@@ -28,7 +32,17 @@ class NetworkClient:
                 base_url=self.base_url, headers=self.headers
             ) as client:
                 response = await client.get(endpoint)
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    try:
+                        detail = response.json().get("detail", "No detail")
+                        log.error(
+                            f"Hub GET error ({response.status_code}) at {endpoint}: {detail}"
+                        )
+                    except Exception:
+                        log.error(
+                            f"Hub GET error ({response.status_code}) at {endpoint}"
+                        )
+                    return None
                 return response.json()
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             log.debug(f"Network GET: Hub unreachable at {endpoint} ({e})")
@@ -43,7 +57,17 @@ class NetworkClient:
                 base_url=self.base_url, headers=self.headers
             ) as client:
                 response = await client.post(endpoint, json=data)
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    try:
+                        detail = response.json().get("detail", "No detail")
+                        log.error(
+                            f"Hub POST error ({response.status_code}) at {endpoint}: {detail}"
+                        )
+                    except Exception:
+                        log.error(
+                            f"Hub POST error ({response.status_code}) at {endpoint}"
+                        )
+                    return None
                 return response.json()
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             log.debug(f"Network POST: Hub unreachable at {endpoint} ({e})")

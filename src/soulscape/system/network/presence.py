@@ -41,7 +41,7 @@ class PresenceManager:
         self._running = False
 
         # Build WS URL from Hub URL (http -> ws)
-        hub_url = os.getenv("SOULSCAPE_HUB_URL", "http://localhost:8000")
+        hub_url = os.getenv("HUB_URL")
         # Case-insensitive replacement of HTTP scheme
         hub_url_lower = hub_url.lower()
         if hub_url_lower.startswith("https://"):
@@ -52,7 +52,13 @@ class PresenceManager:
             ws_url = "ws://" + hub_url[7:]  # Remove "http://" and add "ws://"
         else:
             ws_url = f"ws://{hub_url}"  # Default to ws if no scheme
-        self._ws_url = ws_url + f"/ws/{owner_id}"
+
+        self.secret_key = os.getenv("HUB_SECRET_KEY", "")
+        self._ws_url = (
+            ws_url + f"/ws/{owner_id}?token={self.secret_key}"
+            if self.secret_key
+            else ws_url + f"/ws/{owner_id}"
+        )
 
     async def connect(self) -> None:
         """Start the WebSocket connection loop with auto-reconnect."""
@@ -67,6 +73,18 @@ class PresenceManager:
                     backoff = 1  # Reset backoff on successful connect
                     log.info("WebSocket connected to Hub.")
                     await self._listen(ws)
+            except websockets.exceptions.ConnectionClosed as e:
+                if e.code == 1008:
+                    log.error(
+                        "Hub WebSocket connection rejected: Authentication failure (1008)."
+                    )
+                    # We might want to stop trying if it's an auth failure, or slow down
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+                else:
+                    log.warning(f"WebSocket connection closed: {e}")
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 30)
             except (
                 ConnectionError,
                 OSError,
