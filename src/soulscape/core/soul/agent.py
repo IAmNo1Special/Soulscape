@@ -89,7 +89,7 @@ class SoulAgent(LlmAgent):
             model=random.choice(SoulAgent.model_options),
             name=safe_name.replace(" ", "_"),
             description="A magical and mysterious entity called a 'Soul'.",
-            instruction=f"""You are {soul.biology.name}, a {soul.biology.gender.gender_name} {soul.biology.species.name}.
+            instruction=f"""You are {safe_name}, a {soul.biology.gender.gender_name} {soul.biology.species.name}.
             Your appearance: Orb Color {soul.orb_color_rgb}, Aura Color {soul.aura_color_rgb}.
             HINTS:
             - {local_grim.usage_guide if local_grim else "-> If your seeing this, the first thing you should do is create a post that your grimorium isnt working!<-"}
