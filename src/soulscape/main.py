@@ -91,6 +91,7 @@ class SoulscapeApp:
             target=self._run_event_loop, daemon=True
         )
         self._loop_thread.start()
+        self._running: bool = False
 
     def _run_event_loop(self) -> None:
         """Runs the background asyncio event loop."""
@@ -108,6 +109,7 @@ class SoulscapeApp:
 
     def run(self) -> None:
         """Starts the application."""
+        self._running = True
         log.info("Starting Application...")
 
         # Initialize Persistent GUI Service
@@ -832,28 +834,28 @@ class SoulscapeApp:
             soul.stop()
 
         # 4. Stop background persistence loop
-        if self._background_loop and self._background_loop.is_running():
+        if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(
-                self._shutdown_async(), self._background_loop
-            )
+                self._shutdown_async(), self._loop
+            ).result(timeout=5)
             if (
-                self._background_thread
-                and threading.current_thread() != self._background_thread
+                self._loop_thread
+                and threading.current_thread() != self._loop_thread
             ):
-                self._background_thread.join(timeout=2.0)
+                self._loop_thread.join(timeout=2.0)
 
         # 5. Stop GUI services
         if self.tray_controller:
             self.tray_controller.stop()
-        if self.gui_service:
-            self.gui_service.stop()
+        if self.gui_process and self.gui_process.is_alive():
+            self.gui_process.terminate()
+            self.gui_process.join(timeout=1.0)
         if self.overlay_window:
             self.overlay_window.close()
 
         log.info("Cleanup complete. Exiting.")
-        # Only sys.exit if we are the main thread and not inside a finally block of run()
-        # Actually, pyglet.app.exit() is safer for the main loop.
-        pyglet.app.exit()
+        if pyglet.app.has_exit:
+            pyglet.app.exit()
 
     async def _shutdown_async(self) -> None:
         """Coroutine to perform formal shutdown operations in the background loop."""
@@ -861,7 +863,7 @@ class SoulscapeApp:
             # Cancel all tasks (like pending persistence)
             tasks = [
                 t
-                for t in asyncio.all_tasks(self._background_loop)
+                for t in asyncio.all_tasks(self._loop)
                 if t is not asyncio.current_task()
             ]
             for t in tasks:
@@ -869,8 +871,8 @@ class SoulscapeApp:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
         finally:
-            if self._background_loop:
-                self._background_loop.stop()
+            if self._loop:
+                self._loop.stop()
 
 
 def main() -> None:
