@@ -63,15 +63,25 @@ class NetworkService:
         """Stops the network service."""
         self._running = False
         if self._loop:
-            # Schedule the disconnect coroutine safely
-            asyncio.run_coroutine_threadsafe(
-                self.presence_manager.disconnect(), self._loop
-            )
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            # We schedule the formal shutdown coroutine in the loop
+            asyncio.run_coroutine_threadsafe(self._shutdown_async(), self._loop)
 
         if self._thread:
-            self._thread.join(timeout=1.0)
+            # Wait for the thread to actually finish
+            self._thread.join(timeout=2.0)
         log.info("NetworkService stopped.")
+
+    async def _shutdown_async(self) -> None:
+        """Coroutine to perform formal shutdown operations in the loop."""
+        try:
+            # 1. Disconnect presence (WebSocket)
+            await self.presence_manager.disconnect()
+        except Exception as e:
+            log.error(f"Error during network shutdown: {e}")
+        finally:
+            # 2. Stop the loop once everything is closed
+            if self._loop:
+                self._loop.stop()
 
     def enqueue_update(self, data: Dict[str, Any]) -> None:
         """Non-blocking push of data to the upstream queue (called from Main Thread)."""

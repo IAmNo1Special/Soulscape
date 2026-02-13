@@ -42,12 +42,12 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 
 # Set up logging using the project's utility
-setup_logging(level=logging.DEBUG)
+setup_logging(level=logging.INFO)
 # Suppress noisy library logs even in debug mode
-logging.getLogger("httpx").setLevel(logging.DEBUG)
-logging.getLogger("asyncio").setLevel(logging.DEBUG)
+logging.getLogger("httpx").setLevel(logging.INFO)
+logging.getLogger("asyncio").setLevel(logging.INFO)
 logging.getLogger("pyglet").setLevel(logging.WARNING)
-logging.getLogger("google").setLevel(logging.DEBUG)
+logging.getLogger("google").setLevel(logging.INFO)
 
 
 class SoulscapeApp:
@@ -163,7 +163,8 @@ class SoulscapeApp:
         try:
             pyglet.app.run()
         finally:
-            self.network_service.stop()
+            # Robust final cleanup
+            self.quit_app()
 
     def _setup_window_events(self) -> None:
         """Sets up Pyglet window event handlers."""
@@ -811,16 +812,62 @@ class SoulscapeApp:
 
     def quit_app(self) -> None:
         """Cleans up resources and exits the application."""
-        log.debug("Shutting down...")
+        if not self._running:
+            return  # Avoid double shutdown
+
+        log.info("Shutting down Soulscape...")
+        self._running = False
+
+        # 1. Save final state
         self.persist_souls_state()
 
+        # 2. Stop Network Service (Graceful WebSocket closure)
+        self.network_service.stop()
+
+        # 3. Stop all Souls and their Agents
+        for soul in list(self.active_souls):
+            soul.stop()
+
+        # 4. Stop background persistence loop
+        if self._background_loop and self._background_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._shutdown_async(), self._background_loop
+            )
+            if (
+                self._background_thread
+                and threading.current_thread() != self._background_thread
+            ):
+                self._background_thread.join(timeout=2.0)
+
+        # 5. Stop GUI services
         if self.tray_controller:
             self.tray_controller.stop()
+        if self.gui_service:
+            self.gui_service.stop()
         if self.overlay_window:
             self.overlay_window.close()
 
+        log.info("Cleanup complete. Exiting.")
+        # Only sys.exit if we are the main thread and not inside a finally block of run()
+        # Actually, pyglet.app.exit() is safer for the main loop.
         pyglet.app.exit()
-        sys.exit(0)
+
+    async def _shutdown_async(self) -> None:
+        """Coroutine to perform formal shutdown operations in the background loop."""
+        try:
+            # Cancel all tasks (like pending persistence)
+            tasks = [
+                t
+                for t in asyncio.all_tasks(self._background_loop)
+                if t is not asyncio.current_task()
+            ]
+            for t in tasks:
+                t.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            if self._background_loop:
+                self._background_loop.stop()
 
 
 def main() -> None:

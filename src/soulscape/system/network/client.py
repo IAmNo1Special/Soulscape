@@ -30,6 +30,9 @@ class NetworkClient:
                 response = await client.get(endpoint)
                 response.raise_for_status()
                 return response.json()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            log.debug(f"Network GET: Hub unreachable at {endpoint} ({e})")
+            return None
         except Exception as e:
             log.error(f"Network GET error at {endpoint}: {e}")
             return None
@@ -42,6 +45,9 @@ class NetworkClient:
                 response = await client.post(endpoint, json=data)
                 response.raise_for_status()
                 return response.json()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            log.debug(f"Network POST: Hub unreachable at {endpoint} ({e})")
+            return None
         except Exception as e:
             log.error(f"Network POST error at {endpoint}: {e}")
             return None

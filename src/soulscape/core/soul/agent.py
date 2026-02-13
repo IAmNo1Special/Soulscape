@@ -172,7 +172,8 @@ class SoulAgent(LlmAgent):
     def stop(self) -> None:
         """Gracefully shuts down the agent's event loop and background thread."""
         if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            # Schedule the formal shutdown coroutine in the loop
+            asyncio.run_coroutine_threadsafe(self._shutdown_async(), self._loop)
 
         if self._loop_thread and self._loop_thread.is_alive():
             # Don't join from the loop thread itself
@@ -182,10 +183,43 @@ class SoulAgent(LlmAgent):
                     f"Agent thread joined for {self._soul.biology.name if self._soul else 'unknown'}"
                 )
 
+    async def _shutdown_async(self) -> None:
+        """Coroutine to perform formal shutdown operations in the loop."""
+        try:
+            # Cancel all pending tasks in this loop
+            tasks = [
+                t
+                for t in asyncio.all_tasks(self._loop)
+                if t is not asyncio.current_task()
+            ]
+            for t in tasks:
+                t.cancel()
+
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Any specific ADK cleanup could go here if needed
+        except Exception as e:
+            log.error(f"Error during agent shutdown: {e}")
+        finally:
+            if self._loop:
+                self._loop.stop()
+
     def _run_coro(self, coro: Any) -> Any:
         """Helper to run a coroutine in the background loop."""
         if self._loop and self._loop.is_running():
-            return asyncio.run_coroutine_threadsafe(coro, self._loop)
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+            def _log_on_done(f):
+                try:
+                    f.result()
+                except Exception as e:
+                    log.error(
+                        f"Background task failed for {self.soul.biology.name if self.soul else 'unknown'}: {e}"
+                    )
+
+            future.add_done_callback(_log_on_done)
+            return future
 
         # If the loop is not running, we MUST close the coroutine to avoid
         # "coroutine was never awaited" warnings.
@@ -198,6 +232,7 @@ class SoulAgent(LlmAgent):
 
     async def _setup_runner(self) -> None:
         """Initializes the App and Runner once in the loop context."""
+        log.debug(f"Runner setup: Creating session for {self.session_user_id}")
         await self.session_service.create_session(
             app_name="soulscape",
             user_id=self.session_user_id,
@@ -205,8 +240,15 @@ class SoulAgent(LlmAgent):
         )
 
         # Ensure singletons are initialized asynchronously in the loop
+        log.debug(
+            f"Runner setup: Initializing Marketplace/MessageBoard for {self.soul.biology.name}"
+        )
         await Marketplace().initialize()
         await MessageBoard().initialize()
+
+        log.debug(
+            f"Runner setup: Initializing Magetools for {self.soul.biology.name}"
+        )
         await self._initialize_magetools()
 
         app = App(
@@ -219,7 +261,7 @@ class SoulAgent(LlmAgent):
             app=app,
             session_service=self.session_service,
         )
-        log.debug(f"Runner initialized for {self.soul.biology.name}")
+        log.info(f"Runner fully initialized for {self.soul.biology.name}")
 
     def trigger_decision(
         self,
@@ -249,6 +291,9 @@ class SoulAgent(LlmAgent):
 
         try:
             # Ensure Grimorium is fully async-initialized
+            log.debug(
+                f"Magetools: Initializing Grimorium for {self._soul.biology.name}"
+            )
             await self._grimorium.initialize()
 
             # Attach discovered spells to the soul as instance methods
@@ -279,11 +324,11 @@ class SoulAgent(LlmAgent):
 
             self._magetools_initialized = True
             log.info(
-                f"Initialized Magetools for agent {self._soul.biology.name}"
+                f"Magetools: Grimorium initialized for {self._soul.biology.name}"
             )
         except Exception as e:
             log.error(
-                f"Failed to initialize Magetools for agent {self._soul.biology.name}: {e}"
+                f"Magetools: Failed to initialize Grimorium for {self._soul.biology.name}: {e}"
             )
 
     def _process_vision(
@@ -325,7 +370,9 @@ class SoulAgent(LlmAgent):
                 debug_dir = Path("debug_vision")
                 debug_dir.mkdir(exist_ok=True)
                 # Use timestamp + name for unique files
-                timestamp = int(time.time())
+                timestamp = (
+                    int(self._soul.time) if self._soul else int(time.time())
+                )
                 name = state.get("name", "Unknown").replace(" ", "_")
                 save_path = debug_dir / f"{name}_{timestamp}.png"
                 masked_img.save(save_path)
@@ -346,7 +393,9 @@ class SoulAgent(LlmAgent):
     ) -> None:
         """Coroutine to execute a single agent turn."""
         if not self.runner:
-            log.warning(f"Runner not ready for {name}, skipping turn.")
+            # Downgrade to debug and update time to prevent interval-based spam
+            log.debug(f"Runner not ready for {name}, skipping turn.")
+            self.last_decision_time = self._soul.time if self._soul else 0.0
             self.is_busy = False
             return
 
@@ -367,7 +416,7 @@ class SoulAgent(LlmAgent):
             context_str += "\nRecent Physical Sensations:\n" + "\n".join(
                 f"- {s}" for s in sensations
             )
-        log.debug(f"Context for {name}: {context_str}")
+        log.info(f"Context for {name}: {context_str}")
         parts = [types.Part(text=context_str)]
         if img_bytes:
             parts.append(
@@ -390,6 +439,9 @@ class SoulAgent(LlmAgent):
                 )
             ) as events:
                 async for event in events:
+                    # TRACE: Log every event type to see what's coming through
+                    log.debug(f"Agent event received: {type(event).__name__}")
+
                     # Capture invocation_id for potential resumption
                     if event.invocation_id:
                         self._pending_invocation_id = event.invocation_id
@@ -397,14 +449,14 @@ class SoulAgent(LlmAgent):
                     # 1. Handle Tool Calls (Logging only)
                     if event.get_function_calls():
                         for call in event.get_function_calls():
-                            log.debug(
+                            log.info(
                                 f"Soul {name} called {call.name}({call.args})"
                             )
 
                     # 2. Handle Responses/Results
                     if event.get_function_responses():
                         for response in event.get_function_responses():
-                            log.debug(
+                            log.info(
                                 f"Tool {response.name} response for {name}: {response.response}"
                             )
                             # If this is the response to our long-running move, capture it
@@ -412,24 +464,36 @@ class SoulAgent(LlmAgent):
                                 self._pending_function_response = response
 
                     # 3. Handle Text Responses
+                    # Support multiple event structures for robustness
+                    text_to_log = None
                     if event.content and event.content.parts:
                         for part in event.content.parts:
                             if part.text:
-                                if event.is_final_response():
-                                    log.debug(
-                                        f"Soul {name} finally decided: {part.text}"
-                                    )
-                                else:
-                                    log.debug(
-                                        f"Soul {name} is thinking: {part.text}"
-                                    )
+                                text_to_log = part.text
+                                break
+                    elif hasattr(event, "text") and event.text:
+                        text_to_log = event.text
+                    elif (
+                        hasattr(event, "delta")
+                        and hasattr(event.delta, "text")
+                        and event.delta.text
+                    ):
+                        text_to_log = event.delta.text
+
+                    if text_to_log:
+                        if event.is_final_response():
+                            log.info(
+                                f"Soul {name} finally decided: {text_to_log}"
+                            )
+                        else:
+                            log.info(f"Soul {name} is thinking: {text_to_log}")
 
         except Exception as e:
             log.error(f"Error during agent turn for {name}: {e}")
         finally:
             # Keep busy if we are waiting for a long-running tool
             if self._pending_invocation_id and self._pending_function_response:
-                log.debug(f"Agent {name} paused turn for long-running move.")
+                log.info(f"Agent {name} paused turn for long-running move.")
             else:
                 self.is_busy = False
                 self.last_decision_time = self._soul.time if self._soul else 0.0
@@ -455,7 +519,7 @@ class SoulAgent(LlmAgent):
             # Not in a long-running turn
             return
 
-        log.debug(
+        log.info(
             f"Agent {self.soul.biology.name} arrived at ({x}, {y}). Resuming turn."
         )
 
@@ -492,13 +556,20 @@ class SoulAgent(LlmAgent):
                     )
                 ) as events:
                     async for event in events:
+                        log.debug(
+                            f"Resumption event received: {type(event).__name__}"
+                        )
                         # Handle final text responses after arrival
                         if event.content and event.content.parts:
                             for part in event.content.parts:
                                 if part.text:
-                                    log.debug(
+                                    log.info(
                                         f"Soul {self.soul.biology.name} (Reflex): {part.text}"
                                     )
+                        elif hasattr(event, "text") and event.text:
+                            log.info(
+                                f"Soul {self.soul.biology.name} (Reflex): {event.text}"
+                            )
             except Exception as e:
                 log.error(f"Error during agent resumption: {e}")
             finally:
