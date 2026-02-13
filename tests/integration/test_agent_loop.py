@@ -6,9 +6,7 @@ from soulscape.core.soul.soul import Soul
 
 
 @pytest.mark.asyncio
-async def test_agent_context_generation(
-    mock_network_service, mock_grimorium, mocker
-):
+async def test_agent_context_generation(mock_network_service, mock_grimorium):
     """
     Verifies that the Agent correctly captures state/sensations and sends them to the Runner.
     """
@@ -59,7 +57,7 @@ async def test_agent_context_generation(
 
 
 @pytest.mark.asyncio
-async def test_tool_wiring(mock_network_service, mock_grimorium, mocker):
+async def test_tool_wiring(mock_network_service, mock_grimorium):
     """
     Verifies that _initialize_magetools correctly binds tools to the Soul instance.
     """
