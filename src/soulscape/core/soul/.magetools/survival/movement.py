@@ -3,8 +3,10 @@ from typing import Any
 
 from magetools import spell
 
+from soulscape.core.commands import MoveCommand
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
+from soulscape.utils.security import sanitize_name
 
 
 @action_guard
@@ -48,7 +50,7 @@ async def look_around(self) -> dict[str, Any]:
 
         nearby_souls_info.append(
             {
-                "name": other.biology.name,
+                "name": sanitize_name(other.biology.name),
                 "distance": round(dist, 1),
                 "direction": f"{abs(dx):.1f}px {dir_x}, {abs(dy):.1f}px {dir_y}",
                 "status": "Alive" if other.biology.is_alive() else "Perished",
@@ -100,11 +102,9 @@ async def move_to(self, x: int, y: int) -> dict[str, Any]:
     y = max(0, min(y, sh))
 
     log.info(f"{self.biology.name} is moving to ({x}, {y})")
-    self.physics.target_location = (float(x), float(y))
-    if self.on_async_state_change:
-        await self.on_async_state_change()
-    elif self.on_state_change:
-        self.on_state_change()
+
+    # Queue the move instead of direct mutation
+    self.command_queue.put(MoveCommand(x=float(x), y=float(y)))
 
     return {
         "status": "started",

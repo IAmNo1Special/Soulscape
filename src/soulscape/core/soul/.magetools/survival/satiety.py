@@ -4,6 +4,7 @@ from typing import Any
 from magetools import spell
 
 from soulscape.core import Food
+from soulscape.core.commands import EatCommand, InventoryCommand
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
 
@@ -34,12 +35,12 @@ async def find_food(self) -> dict[str, Any]:
     food_value = random.randint(10, 30)
     new_food = Food("Wild Berries", "Found in the wild.", food_value)
 
-    if self.inventory.add_item(new_food):
+    if len(self.inventory.items) < self.inventory.capacity:
+        # We queue the addition for execution on the main thread.
+        self.command_queue.put(InventoryCommand(action="add", item=new_food))
         log.info(
             f"{self.biology.name} found {new_food.name} ({food_value} food value)!"
         )
-        if self.on_state_change:
-            self.on_state_change()
         return {
             "status": "success",
             "message": f"You found {new_food.name} ({food_value} food value)!",
@@ -83,13 +84,12 @@ async def eat(self) -> dict[str, Any]:
     # Consume the first food item.
     item = food_items[0]
     value = item.value
-    result_msg = item.consume(self)
-    self.inventory.remove_item(item)
+    # Atomic Eat: Enqueue the command and return early.
+    self.command_queue.put(EatCommand(item=item))
+
+    result_msg = f"You ate {item.name} and recovered {value} satiety."
     log.info(result_msg)
-    if self.on_async_state_change:
-        await self.on_async_state_change()
-    elif self.on_state_change:
-        self.on_state_change()
+
     return {
         "status": "success",
         "message": result_msg,

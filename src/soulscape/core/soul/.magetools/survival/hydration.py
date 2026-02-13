@@ -4,6 +4,7 @@ from typing import Any
 from magetools import spell
 
 from soulscape.core import Drink
+from soulscape.core.commands import DrinkCommand, InventoryCommand
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
 
@@ -34,12 +35,12 @@ async def find_water(self) -> dict[str, Any]:
     water_value = random.randint(10, 30)
     new_drink = Drink("Water Bottle", "Collected from a stream.", water_value)
 
-    if self.inventory.add_item(new_drink):
+    if len(self.inventory.items) < self.inventory.capacity:
+        # Queue item addition
+        self.command_queue.put(InventoryCommand(action="add", item=new_drink))
         log.info(
             f"{self.biology.name} found {new_drink.name} ({water_value} water value)!"
         )
-        if self.on_state_change:
-            self.on_state_change()
         return {
             "status": "success",
             "message": f"You found {new_drink.name} ({water_value} water value)!",
@@ -83,13 +84,11 @@ async def drink(self) -> dict[str, Any]:
     # Consume the first drink item.
     item = drink_items[0]
     value = item.value
-    result_msg = item.consume(self)
-    self.inventory.remove_item(item)
+    # Atomic Drink: Enqueue moving the item removal and hydration boost to the main thread.
+    self.command_queue.put(DrinkCommand(item=item))
+
+    result_msg = f"You drank {item.name} and recovered {value} hydration."
     log.info(result_msg)
-    if self.on_async_state_change:
-        await self.on_async_state_change()
-    elif self.on_state_change:
-        self.on_state_change()
     return {
         "status": "success",
         "message": result_msg,

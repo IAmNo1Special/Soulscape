@@ -5,6 +5,7 @@ from magetools import spell
 from soulscape.core.interactions import MessageBoard
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
+from soulscape.utils.security import sanitize_content, sanitize_name
 
 
 @action_guard
@@ -28,6 +29,7 @@ async def social_post(self, title: str, content: str) -> dict[str, Any]:
             "message": "Title cannot be empty.",
         }
     cost = 20.00
+    # Client-side check only (for UX/feedback), deduction happens at Hub
     if self.essence < cost:
         log.info(
             f"{self.biology.name} tried to post but has insufficient essence ({self.essence:.2f} < {cost})"
@@ -38,7 +40,6 @@ async def social_post(self, title: str, content: str) -> dict[str, Any]:
             "data": {"current_essence": self.essence},
         }
 
-    self.essence -= cost
     await MessageBoard().initialize()
     post = await MessageBoard().create_post(
         self.biology.soul_id, self.biology.name, title, content
@@ -72,6 +73,7 @@ async def social_reply(self, message_id: str, content: str) -> dict[str, Any]:
         A dictionary with feedback on the interaction.
     """
     cost = 8.00
+    # Client-side check only (for UX/feedback), deduction happens at Hub
     if self.essence < cost:
         log.info(
             f"{self.biology.name} tried to reply but has insufficient essence ({self.essence:.2f} < {cost})"
@@ -82,7 +84,6 @@ async def social_reply(self, message_id: str, content: str) -> dict[str, Any]:
             "data": {"current_essence": self.essence},
         }
 
-    self.essence -= cost
     await MessageBoard().initialize()
     reply = await MessageBoard().create_reply(
         self.biology.soul_id, self.biology.name, message_id, content
@@ -133,9 +134,9 @@ async def social_read(
             }
 
         formatted_thread = (
-            f"THREAD: {thread.title}\n"
-            f"Author: {thread.author_name} [ID: {thread.message_id}]\n"
-            f"Content: {thread.content}\n"
+            f"THREAD: {sanitize_content(thread.title)}\n"
+            f"Author: {sanitize_name(thread.author_name)} [ID: {thread.message_id}]\n"
+            f"Content: {sanitize_content(thread.content)}\n"
             "--- REPLIES ---"
         )
 
@@ -143,7 +144,7 @@ async def social_read(
             res = ""
             for r in replies:
                 indent = "  " * level
-                res += f"\n{indent}- [{r.author_name}]: {r.content} [ID: {r.message_id}]"
+                res += f"\n{indent}- [{sanitize_name(r.author_name)}]: {sanitize_content(r.content)} [ID: {r.message_id}]"
                 res += format_replies(r.replies, level + 1)
             return res
 
@@ -163,7 +164,7 @@ async def social_read(
     formatted_posts = []
     for post in posts:
         thread_summary = (
-            f"[ID: {post.message_id}] Title: {post.title} | Author: {post.author_name}"
+            f"[ID: {post.message_id}] Title: {sanitize_content(post.title)} | Author: {sanitize_name(post.author_name)}"
             f" ({len(post.replies)} replies)"
         )
         formatted_posts.append(thread_summary)
@@ -193,6 +194,7 @@ async def social_edit(
         A dictionary status regarding the edit attempt.
     """
     cost = 8.00
+    # Client-side check only (for UX/feedback), deduction happens at Hub
     if self.essence < cost:
         log.info(
             f"{self.biology.name} tried to edit but has insufficient essence ({self.essence:.2f} < {cost})"
@@ -203,7 +205,6 @@ async def social_edit(
             "data": {"current_essence": self.essence},
         }
 
-    self.essence -= cost
     await MessageBoard().initialize()
     success = await MessageBoard().edit_message(
         self.biology.soul_id, message_id, new_content
@@ -222,8 +223,6 @@ async def social_edit(
             "data": {"current_essence": self.essence},
         }
 
-    # Refund if failed (e.g. not yours)
-    self.essence += cost
     return {
         "status": "fail",
         "message": "Failed to edit. Message not found or not yours.",

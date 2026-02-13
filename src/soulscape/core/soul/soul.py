@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from ...constants import SOUL_HEIGHT, SOUL_WIDTH
+from ...system.command_queue import CommandQueue
 from ...system.logger import log
 from ..biology import Gender, SoulBiology, SoulStats, Species
 from ..interactions import Inventory
@@ -46,6 +47,7 @@ class Soul:
         on_state_change: Any = None,
         on_async_state_change: Any = None,
         soul_registry: list[Soul] | None = None,
+        task_scheduler: Any = None,
         **kwargs: Any,
     ) -> Soul:
         """Reconstructs a Soul instance from its serialized representation.
@@ -95,6 +97,7 @@ class Soul:
             owner_id=data.get("owner_id"),
             local_instance_id=kwargs.get("local_instance_id"),
             soul_id=data.get("soul_id"),
+            task_scheduler=task_scheduler,
         )
 
         # Restore soul instance features using biology helper (handles flat/nested)
@@ -137,6 +140,7 @@ class Soul:
         owner_id: str | None = None,
         local_instance_id: str | None = None,
         soul_id: str | None = None,
+        task_scheduler: Any = None,
     ) -> None:
         """Initializes a new Soul entity.
 
@@ -174,6 +178,7 @@ class Soul:
         self.soul_registry: list[Soul] = soul_registry or []
         self.screen_width: int = screen_width
         self.screen_height: int = screen_height
+        self.task_scheduler: Any = task_scheduler
 
         self.citizenship: list[str] = []
 
@@ -183,6 +188,9 @@ class Soul:
 
         # Tool Tracking
         self._active_actions: set[str] = set()
+
+        # Command Queue for thread-safe state mutations
+        self.command_queue: CommandQueue = CommandQueue()
 
         # --- Visual / Physics Initialization ---
 
@@ -432,6 +440,30 @@ class Soul:
                     f"Soul {self.biology.name} is currently PERISHED and awaiting revival."
                 )
 
+        # 5. Process thread-safe commands
+        self.process_commands()
+
+    def process_commands(self) -> None:
+        """Processes and executes all pending commands in the queue."""
+        while not self.command_queue.empty():
+            command = self.command_queue.get()
+            if command:
+                try:
+                    command.execute(self)
+                except Exception as e:
+                    log.error(
+                        f"Error executing command {type(command).__name__}: {e}"
+                    )
+
+    def schedule_task(self, coro: Any) -> None:
+        """Schedules an async task on the background loop via the scheduler callback."""
+        if self.task_scheduler:
+            self.task_scheduler(coro)
+        else:
+            log.warning(
+                f"Soul {self.biology.name} attempted to schedule task commands but has no scheduler."
+            )
+
     def on_mouse_press(
         self, x: int, y: int, button: int, modifiers: int, screen_height: int
     ) -> bool | None:
@@ -531,6 +563,8 @@ class Soul:
 
     def cleanup(self) -> None:
         """Gracefully releases all system resources held by this soul."""
+        if self.agent:
+            self.agent.stop()
         log.debug(f"Cleaned up resources for soul: {self.biology.name}")
 
 

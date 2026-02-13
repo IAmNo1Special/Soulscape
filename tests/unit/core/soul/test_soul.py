@@ -9,15 +9,15 @@ class TestSoul:
     @pytest.fixture
     def soul(self, mock_network_service, mock_grimorium):
         # Initialize a soul with default args
-        # The mocks from conftest.py should be active
         soul = Soul(
             orb_color_rgb=(1.0, 0.0, 0.0),
             aura_color_rgb=(0.0, 1.0, 0.0),
             name="Test Soul",
             owner_id="test_owner",
-            local_instance_id="test_owner",  # Local soul
+            local_instance_id="test_owner",
         )
-        return soul
+        yield soul
+        soul.cleanup()
 
     def test_initialization(self, soul):
         assert soul.biology.name == "Test Soul"

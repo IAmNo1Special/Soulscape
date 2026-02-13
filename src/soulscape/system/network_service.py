@@ -1,9 +1,14 @@
 import asyncio
-import queue
 import re
 import threading
 from typing import Any, Dict, List, Optional
 
+from soulscape.core.commands import (
+    OwnerPresenceCommand,
+    PresenceReconcileCommand,
+    StateUpdateCommand,
+)
+from soulscape.system.command_queue import CommandQueue
 from soulscape.system.logger import log
 from soulscape.system.network.client import NetworkClient
 from soulscape.system.network.presence import PresenceManager
@@ -20,9 +25,9 @@ class NetworkService:
         self.owner_id = owner_id
 
         # Upstream: Client -> Hub
-        # Downstream: Hub -> Client
+        # Downstream: Hub -> Client (Commands)
         self._upstream_queue: asyncio.Queue = asyncio.Queue()
-        self._downstream_queue: queue.Queue = queue.Queue()
+        self.command_queue: CommandQueue = CommandQueue()
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
@@ -38,6 +43,12 @@ class NetworkService:
             on_connect=self._on_connect,
         )
 
+    def _is_valid_owner(self, owner_id: str) -> bool:
+        """Validates that an owner_id is safe and well-formed."""
+        if not owner_id or not isinstance(owner_id, str):
+            return False
+        return bool(re.match(r"^[a-zA-Z0-9_-]+$", owner_id))
+
     def start(self) -> None:
         """Starts the background network thread and event loop."""
         if self._running:
@@ -52,15 +63,25 @@ class NetworkService:
         """Stops the network service."""
         self._running = False
         if self._loop:
-            # Schedule the disconnect coroutine safely
-            asyncio.run_coroutine_threadsafe(
-                self.presence_manager.disconnect(), self._loop
-            )
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            # We schedule the formal shutdown coroutine in the loop
+            asyncio.run_coroutine_threadsafe(self._shutdown_async(), self._loop)
 
         if self._thread:
-            self._thread.join(timeout=1.0)
+            # Wait for the thread to actually finish
+            self._thread.join(timeout=2.0)
         log.info("NetworkService stopped.")
+
+    async def _shutdown_async(self) -> None:
+        """Coroutine to perform formal shutdown operations in the loop."""
+        try:
+            # 1. Disconnect presence (WebSocket)
+            await self.presence_manager.disconnect()
+        except Exception as e:
+            log.error(f"Error during network shutdown: {e}")
+        finally:
+            # 2. Stop the loop once everything is closed
+            if self._loop:
+                self._loop.stop()
 
     def enqueue_update(self, data: Dict[str, Any]) -> None:
         """Non-blocking push of data to the upstream queue (called from Main Thread)."""
@@ -70,57 +91,51 @@ class NetworkService:
                 self._upstream_queue.put(data), self._loop
             )
 
-    def get_events(self) -> List[Dict[str, Any]]:
-        """Non-blocking pop of all available events from downstream queue (called from Main Thread)."""
-        events = []
-        try:
-            while True:
-                event = self._downstream_queue.get_nowait()
-                events.append(event)
-        except queue.Empty:
-            pass
-        return events
+    # get_events removed in favor of command_queue access
 
     # --- Async Callbacks (Run in Background Loop) ---
     # These push events to the thread-safe queue for the Main Thread to consume
 
     async def _on_connect(self, online_owners: List[str]) -> None:
-        self._downstream_queue.put(
-            {"type": "connected", "online_owners": online_owners}
+        # Reconcile all remote souls at once instead of individual online events
+        valid_owners = [o for o in online_owners if self._is_valid_owner(o)]
+        self.command_queue.put(
+            PresenceReconcileCommand(online_owners=valid_owners)
         )
 
     async def _on_owner_online(self, owner_id: str) -> None:
-        self._downstream_queue.put(
-            {"type": "owner_online", "owner_id": owner_id}
-        )
-
-        # VALIDATION: Prevent path traversal or injection
-        if not re.match(r"^[a-zA-Z0-9_-]+$", owner_id):
-            log.warning(f"Invalid owner_id received: {owner_id}")
+        if not self._is_valid_owner(owner_id):
+            log.warning(
+                f"Invalid owner_id received in online event: {owner_id}"
+            )
             return
+
+        self.command_queue.put(
+            OwnerPresenceCommand(owner_id=owner_id, action="online")
+        )
 
         try:
             # Fetch remote souls directly here
             souls_data = await self.client.get_souls_by_owner(owner_id)
             if souls_data:
-                self._downstream_queue.put(
-                    {
-                        "type": "soul_updated",
-                        "souls": souls_data,
-                        "owner_id": owner_id,
-                    }
+                self.command_queue.put(
+                    StateUpdateCommand(souls_data=souls_data, owner_id=owner_id)
                 )
         except Exception as e:
             log.error(f"Error fetching remote souls for {owner_id}: {e}")
 
     def _on_owner_offline(self, owner_id: str) -> None:
-        self._downstream_queue.put(
-            {"type": "owner_offline", "owner_id": owner_id}
+        if not self._is_valid_owner(owner_id):
+            return
+        self.command_queue.put(
+            OwnerPresenceCommand(owner_id=owner_id, action="offline")
         )
 
     async def _on_soul_updated(self, souls: List[Dict], owner_id: str) -> None:
-        self._downstream_queue.put(
-            {"type": "soul_updated", "souls": souls, "owner_id": owner_id}
+        if not self._is_valid_owner(owner_id):
+            return
+        self.command_queue.put(
+            StateUpdateCommand(souls_data=souls, owner_id=owner_id)
         )
 
     # --- Internal Loop Logic ---
