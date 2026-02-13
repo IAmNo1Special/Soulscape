@@ -1,11 +1,8 @@
 import asyncio
-import sys
-from unittest.mock import MagicMock
 
 import pytest
 
-# Ensure the src directory is in the path for imports
-sys.path.insert(0, "./src")
+# Ensure imports work (handled by pyproject.toml now)
 
 
 @pytest.fixture(scope="session")

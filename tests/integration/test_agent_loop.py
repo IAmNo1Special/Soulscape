@@ -24,10 +24,10 @@ async def test_agent_context_generation(
     mock_runner = AsyncMock()
     soul.agent.runner = mock_runner
 
-    # Mock run_async to return empty generator to avoid iteration error
     async def mock_run_async(*args, **kwargs):
+        """An empty async generator that does nothing."""
         if False:
-            yield  # make it a generator
+            yield
 
     mock_runner.run_async.side_effect = mock_run_async
 

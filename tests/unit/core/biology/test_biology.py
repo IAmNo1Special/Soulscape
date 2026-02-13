@@ -3,7 +3,6 @@ import pytest
 from soulscape.core.biology.biology import SoulBiology
 from soulscape.core.biology.gender import Gender
 from soulscape.core.biology.species import Species
-from soulscape.core.biology.stats import SoulStats
 
 
 class TestSoulBiology:
@@ -50,17 +49,18 @@ class TestSoulBiology:
         assert bio.current_health < initial_hp
         assert bio.is_alive()
 
-    def test_death(self, mock_logger):
+    def test_death(self, mock_logger, mocker):
         bio = SoulBiology()
         bio.current_health = 1
         bio.satiety = 0
 
+        # Mock random to return a value that guarantees death
+        mocker.patch("random.randint", return_value=5)
+
         # Force penalty
         bio.apply_health_penalty()
 
-        # Depending on random damage (1-5), it might die.
-        # Let's force it to ensure test determinism
-        bio.current_health = 0
+        assert bio.current_health <= 0
         assert bio.is_dead()
         assert not bio.is_alive()
 

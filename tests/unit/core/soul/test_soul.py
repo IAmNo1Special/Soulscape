@@ -32,22 +32,18 @@ class TestSoul:
         soul.physics.update.assert_called_once()
 
     def test_biology_tick(self, soul):
-        # Check if biology stats decrease over time
-        # soul.biology.satiety # Unused access to initial satiety
-
-        # Simulate 1 second (stats decrease every 1s usually)
-        # We need to check how biology.decrease_satiety is called in `update`
-        # In `Soul.update`, it calls `biology.is_alive()`
-        # If I mock `biology`, I can verify calls.
-
+        # Mock biology methods to verify calls
         soul.biology.decrease_satiety = MagicMock()
         soul.biology.decrease_hydration = MagicMock()
+        soul.biology.check_status = MagicMock()
 
-        # Advance time significantly (1.1s) to trigger the 1s interval checks if they exist
-        # Wait, looking at `biology.py` there is no time check *inside* biology.py,
-        # it seems `Soul.update` handles the loop.
-        # Let's assume it does call it or check it.
-        pass
+        # Simulate > 1 second (stats decrease every 1s usually)
+        # Soul.update_interval is default 1.0s
+        soul.update(1.1)
+
+        soul.biology.decrease_satiety.assert_called_once()
+        soul.biology.decrease_hydration.assert_called_once()
+        soul.biology.check_status.assert_called_once()
 
     def test_agent_trigger(self, soul, mock_grimorium, mocker):
         # Mock agent to be not busy and ready
@@ -72,8 +68,9 @@ class TestSoul:
         assert "y" in snapshot
         assert snapshot["hp"] == soul.biology.current_health
 
-    def test_cleanup(self, soul, mock_network_service):
+    def test_cleanup(self, soul, mock_network_service, mocker):
+        mock_log = mocker.patch("soulscape.core.soul.soul.log")
         soul.cleanup()
-        # Should persist state to DB/Network
-        # This depends on implementation of cleanup
-        pass
+        mock_log.debug.assert_called_with(
+            f"Cleaned up resources for soul: {soul.biology.name}"
+        )
