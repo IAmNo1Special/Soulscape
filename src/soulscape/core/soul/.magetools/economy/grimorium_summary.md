@@ -1,14 +1,14 @@
 # Domains
-Marketplace Operations, Digital Commerce, Inventory Management
+Marketplace Operations, Economic Transactions, Inventory Management, Digital Commerce
 
 # Summary
-This suite of tools provides a comprehensive interface for interacting with a global digital marketplace. Agents can list items from their inventory for sale, discover items listed by others through targeted searches, purchase desired goods using a specified currency (Essence), and manage their own active listings by reclaiming unsold items. The system facilitates item transfer, price setting, and transaction processing within a structured economic framework.
+This toolset provides a complete framework for engaging with a global economic marketplace. It allows agents to participate in buying and selling operations, manage their own trade listings, and explore available goods. The system facilitates the exchange of items for 'Essence' (a digital currency), handles inventory transitions between agents and the marketplace, and incorporates a transaction tax mechanism.
 
 # Major Capabilities
--   **Item Listing**: Allows agents to place items from their personal inventory onto the global marketplace for sale at a specified Essence price, temporarily removing them from the agent's possession until sold or cancelled.
--   **Market Browsing**: Enables agents to search the marketplace for available items, with filtering options based on item name and maximum Essence price, facilitating discovery and comparative shopping.
--   **Item Acquisition**: Facilitates the purchase of items from existing marketplace listings using Essence, instantly transferring the acquired item to the agent's inventory.
--   **Listing Management**: Provides functionality for agents to cancel their active listings, reclaiming unsold items from the marketplace back into their personal inventory.
+-   **Item Listing (`market_sell`)**: Enables an agent to place an item from their inventory onto the global marketplace for sale, specifying an 'Essence' price. The item is temporarily removed from the agent's inventory and held by the marketplace until sold or cancelled.
+-   **Market Search (`market_browse`)**: Allows agents to query the global marketplace for available items, with options to filter results by partial item name or a maximum 'Essence' price, providing visibility into current trade offerings.
+-   **Item Acquisition (`market_buy`)**: Facilitates the purchase of listed items using 'Essence'. This action instantly transfers the acquired item to the agent's inventory and processes payment to the seller, including a marketplace-imposed tax deduction from the seller's proceeds.
+-   **Listing Management (`market_cancel`)**: Provides the functionality for an agent to remove their own active sale listing from the marketplace, returning the unsold item directly to their personal inventory.
 
 # Key Search Keywords
-Marketplace, Trade, Sell, Buy, Browse, Listing, Inventory, Commerce, Essence, Economy
+Marketplace, Trade, Commerce, Buy, Sell, Listing, Economic Exchange, Item Transfer, Essence, Inventory, Transaction
