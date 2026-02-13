@@ -78,7 +78,7 @@ async def market_browse(
         listing_data.append(
             {
                 "id": listing.listing_id,
-                "item": sanitize_content(listing.item.name),
+                "item": sanitize_name(listing.item.name),
                 "price": listing.price,
                 "seller": sanitize_name(listing.seller_name),
             }
