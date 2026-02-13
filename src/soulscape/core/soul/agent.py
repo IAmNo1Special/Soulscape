@@ -80,9 +80,14 @@ class SoulAgent(LlmAgent):
         )
 
         # 2. Initialize the LlmAgent base class
+        # SANITIZATION: Prevent prompt injection via name
+        safe_name = "".join(
+            c for c in soul.biology.name if c.isalnum() or c in " -_"
+        )[:50]
+
         super().__init__(
             model=random.choice(SoulAgent.model_options),
-            name=soul.biology.name.replace(" ", "_"),
+            name=safe_name.replace(" ", "_"),
             description="A magical and mysterious entity called a 'Soul'.",
             instruction=f"""You are {soul.biology.name}, a {soul.biology.gender.gender_name} {soul.biology.species.name}.
             Your appearance: Orb Color {soul.orb_color_rgb}, Aura Color {soul.aura_color_rgb}.

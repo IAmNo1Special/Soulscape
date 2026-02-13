@@ -1,5 +1,6 @@
 import asyncio
 import queue
+import re
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -92,6 +93,25 @@ class NetworkService:
         self._downstream_queue.put(
             {"type": "owner_online", "owner_id": owner_id}
         )
+
+        # VALIDATION: Prevent path traversal or injection
+        if not re.match(r"^[a-zA-Z0-9_-]+$", owner_id):
+            log.warning(f"Invalid owner_id received: {owner_id}")
+            return
+
+        try:
+            # Fetch remote souls directly here
+            souls_data = await self.client.get_souls_by_owner(owner_id)
+            if souls_data:
+                self._downstream_queue.put(
+                    {
+                        "type": "soul_updated",
+                        "souls": souls_data,
+                        "owner_id": owner_id,
+                    }
+                )
+        except Exception as e:
+            log.error(f"Error fetching remote souls for {owner_id}: {e}")
 
     def _on_owner_offline(self, owner_id: str) -> None:
         self._downstream_queue.put(

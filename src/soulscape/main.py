@@ -334,7 +334,7 @@ class SoulscapeApp:
             if etype == "connected":
                 self._on_connect_sync(event.get("online_owners", []))
             elif etype == "owner_online":
-                self._on_owner_online_sync(event.get("owner_id"))
+                log.info(f"Owner online: {event.get('owner_id')}")
             elif etype == "owner_offline":
                 self._on_owner_offline_sync(event.get("owner_id"))
             elif etype == "soul_updated":
@@ -359,50 +359,6 @@ class SoulscapeApp:
                 if soul in self.active_souls:
                     self.active_souls.remove(soul)
 
-    def _on_owner_online_sync(self, owner_id: str) -> None:
-        """Handle owner coming online."""
-        # For full sync, we might need to fetch their souls via HTTP?
-        # Or wait for them to broadcast.
-        # But 'presence.py' logic for 'owner_online' was to call callback.
-        # Original called `get_souls_by_owner`.
-        # We can schedule that via _run_coro
-        self._run_coro(self._fetch_remote_souls(owner_id))
-
-    async def _fetch_remote_souls(self, owner_id: str) -> None:
-        """Fetches remote souls via HTTP."""
-        if (
-            not owner_id.isalnum()
-            and "_" not in owner_id
-            and "-" not in owner_id
-        ):
-            log.warning(f"Invalid owner_id received: {owner_id}")
-            return
-
-        try:
-            # Use NetworkService's client or create new?
-            # Creating new helper for now to avoid threading issues with main client?
-            from soulscape.system.network.client import NetworkClient
-
-            souls_data = await NetworkClient().get_souls_by_owner(owner_id)
-            if souls_data:
-                # We can just push this data into our own queue to process via _on_soul_updated_sync
-                # OR better, since we are in background loop, push to main loop?
-                # Actually, modifying active_souls from background loop is UNSAFE.
-                # We MUST marshal back to main thread.
-                # But we don't have a queue for THAT direction from app loop to main loop?
-                # App loop IS self._loop.
-                # NetworkService has downstream queue.
-                # We can push to NetworkService downstream queue!
-                self.network_service._downstream_queue.put(
-                    {
-                        "type": "soul_updated",
-                        "souls": souls_data,
-                        "owner_id": owner_id,
-                    }
-                )
-        except Exception as e:
-            log.error(f"Error fetching remote souls: {e}")
-
     def _on_owner_offline_sync(self, owner_id: str) -> None:
         """Handle owner going offline."""
         active_len = len(self.active_souls)
@@ -416,6 +372,13 @@ class SoulscapeApp:
         self, souls_data: list[dict], owner_id: str
     ) -> None:
         """Handle soul updates."""
+        # SECURITY: Prevent spoofing of local souls by remote/Hub
+        if owner_id == self.instance_id:
+            log.warning(
+                "Received soul update for SELF from network. Ignoring to prevent spoofing."
+            )
+            return
+
         existing_map = {s.biology.soul_id: s for s in self.active_souls}
         display = pyglet.display.get_display().get_default_screen()
 
