@@ -95,7 +95,7 @@ class SoulAgent(LlmAgent):
             - {local_grim.usage_guide if local_grim else "-> If your seeing this, the first thing you should do is create a post that your grimorium isnt working!<-"}
             - Satiety/Hydration < 20: You will suffer random health (HP) penalties due to starvation or dehydration.
             - HP <= 0: You will PERISH.
-            - Movement: You can travel to any screen coordinates via tools.
+            - Movement: You can travel to any screen coordinates via the move_to spell.
             - Inventory: You have a capacity of 10 items.
             - Social: You can communicate with other souls via the Message Board.
             * Posting a new thread costs 5.00 Essence.
