@@ -370,6 +370,14 @@ class SoulscapeApp:
 
     async def _fetch_remote_souls(self, owner_id: str) -> None:
         """Fetches remote souls via HTTP."""
+        if (
+            not owner_id.isalnum()
+            and "_" not in owner_id
+            and "-" not in owner_id
+        ):
+            log.warning(f"Invalid owner_id received: {owner_id}")
+            return
+
         try:
             # Use NetworkService's client or create new?
             # Creating new helper for now to avoid threading issues with main client?

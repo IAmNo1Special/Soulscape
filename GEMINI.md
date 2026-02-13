@@ -18,7 +18,7 @@ The project is a Python application with the following key components:
 
 ## 3. Technologies Used
 
-*   **Programming Language:** Python 3.13+
+*   **Programming Language:** Python 3.11+
 *   **Graphics:** `pyglet` for creating the transparent, always-on-top window and rendering.
 *   **AI:** `google-genai` and `google-adk` for the LLM-powered agent.
 *   **GUI:** `ttkbootstrap` and `pystray` for the settings windows and system tray icon.

@@ -195,7 +195,7 @@ class SoulAgent(LlmAgent):
     def trigger_decision(
         self,
         current_time: float,
-        snapshot: dict[str, Any] | None = None,
+        snapshot: dict[str, Any],
         sensations: list[str] | None = None,
     ) -> None:
         """Triggers the agent's decision-making process if the interval has passed.
@@ -208,7 +208,6 @@ class SoulAgent(LlmAgent):
         if (
             not self.is_busy
             and current_time - self.last_decision_time > self.decision_interval
-            and snapshot is not None
         ):
             self.is_busy = True
             # Sensations default to empty loop if None

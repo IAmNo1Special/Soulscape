@@ -289,7 +289,10 @@ class Soul:
         # (Currently to_dict is quite comprehensive, but we separate intent here)
         snapshot.update(
             {
-                "name": self.biology.name,
+                # SANITIZATION: Prevent prompt injection via name
+                "name": "".join(
+                    c for c in self.biology.name if c.isalnum() or c in " -_"
+                )[:50],
                 "x": self.x,
                 "y": self.y,
                 "species": self.biology.species.name,
@@ -305,10 +308,8 @@ class Soul:
                 "screen_width": self.screen_width,
                 "screen_height": self.screen_height,
                 "debug_vision": getattr(self, "DEBUG_VISION", True),
-                # Sensations are consumed by the agent, so we pop them here
-                # But create_snapshot might be called multiple times?
-                # ideally agent calls access_sensations() or we pass them in step.
-                # For now, we'll keep them out of here to avoid side effects in a "getter"
+                # Sensations are handled explicitly in the update loop to ensure
+                # they are consumed only once per decision cycle.
             }
         )
         return snapshot
