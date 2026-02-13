@@ -164,12 +164,36 @@ class SoulAgent(LlmAgent):
     def _run_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Background thread target to run the event loop."""
         asyncio.set_event_loop(loop)
-        loop.run_forever()
+        try:
+            loop.run_forever()
+        finally:
+            loop.close()
+
+    def stop(self) -> None:
+        """Gracefully shuts down the agent's event loop and background thread."""
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+
+        if self._loop_thread and self._loop_thread.is_alive():
+            # Don't join from the loop thread itself
+            if threading.current_thread() != self._loop_thread:
+                self._loop_thread.join(timeout=2.0)
+                log.debug(
+                    f"Agent thread joined for {self._soul.biology.name if self._soul else 'unknown'}"
+                )
 
     def _run_coro(self, coro: Any) -> Any:
         """Helper to run a coroutine in the background loop."""
         if self._loop and self._loop.is_running():
             return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+        # If the loop is not running, we MUST close the coroutine to avoid
+        # "coroutine was never awaited" warnings.
+        if asyncio.iscoroutine(coro):
+            try:
+                coro.close()
+            except Exception:
+                pass
         return None
 
     async def _setup_runner(self) -> None:

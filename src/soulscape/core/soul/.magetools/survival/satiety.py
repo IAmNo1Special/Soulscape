@@ -4,7 +4,7 @@ from typing import Any
 from magetools import spell
 
 from soulscape.core import Food
-from soulscape.core.commands import InventoryCommand, VitalCommand
+from soulscape.core.commands import EatCommand, InventoryCommand
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
 
@@ -88,10 +88,8 @@ async def eat(self) -> dict[str, Any]:
     # Consume the first food item.
     item = food_items[0]
     value = item.value
-    # Queue the consumption
-    # Use InventoryCommand to remove and VitalCommand to increase satiety
-    self.command_queue.put(InventoryCommand(action="remove", item=item))
-    self.command_queue.put(VitalCommand(vital_type="satiety", amount=value))
+    # Atomic Eat: Enqueue the command and return early.
+    self.command_queue.put(EatCommand(item=item))
 
     result_msg = f"You ate {item.name} and recovered {value} satiety."
     log.info(result_msg)

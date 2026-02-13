@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,7 +19,9 @@ async def test_agent_context_generation(mock_network_service, mock_grimorium):
     )
 
     # Mock Runner
-    mock_runner = AsyncMock()
+    mock_runner = (
+        MagicMock()
+    )  # Use MagicMock instead of AsyncMock to avoid auto-awaitable behavior on generator
     soul.agent.runner = mock_runner
 
     async def mock_run_async(*args, **kwargs):
@@ -38,6 +40,7 @@ async def test_agent_context_generation(mock_network_service, mock_grimorium):
         sensations=sensations,
         screen_context=None,
     )
+    soul.cleanup()
 
     # Assert Runner called
     mock_runner.run_async.assert_called_once()
@@ -92,3 +95,5 @@ async def test_tool_wiring(mock_network_service, mock_grimorium):
 
     # Verify it called the original tool function with the soul as self
     mock_tool.assert_called_with(soul, 1, 2, 3)
+
+    soul.cleanup()

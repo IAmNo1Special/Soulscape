@@ -1,10 +1,8 @@
-import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 from soulscape.system.command_queue import Command
-
-log = logging.getLogger("soulscape.commands")
+from soulscape.system.logger import log
 
 
 @dataclass
@@ -36,7 +34,7 @@ class SpeakCommand(Command):
 class InventoryCommand(Command):
     """Command to modify inventory."""
 
-    action: str = "add"  # add, remove
+    action: Literal["add", "remove"] = "add"
     item: Any = None
 
     def execute(self, soul: Any) -> None:
@@ -64,7 +62,7 @@ class InventoryCommand(Command):
 class VitalCommand(Command):
     """Command to modify soul biological vitals (satiety, hydration, hp)."""
 
-    vital_type: str = "satiety"  # satiety, hydration, hp
+    vital_type: Literal["satiety", "hydration", "hp"] = "satiety"
     amount: float = 0.0
 
     def execute(self, soul: Any) -> None:
@@ -108,13 +106,27 @@ class StateUpdateCommand(Command):
     priority: int = 5
 
     def execute(self, soul: Any) -> None:
-        """Updates remote souls in the registry."""
+        """Updates remote souls in the registry.
+
+        Includes spoofing protection to prevent remote updates from
+        overwriting the local soul's state.
+        """
         if not hasattr(soul, "soul_registry"):
             return
+
+        # Security: The hub should never be updating the local soul's state
+        # in a way that overwrites authoritative local physics/biology.
+        # Local soul is defined by having local_instance_id matching owner_id.
+        local_id = getattr(soul, "local_instance_id", None)
 
         for data in self.souls_data:
             sid = data.get("soul_id")
             if not sid:
+                continue
+
+            # Spoofing Protection: Skip if this data targets the local soul
+            if local_id and sid == local_id:
+                log.warning(f"Prevented spoofing attempt for local soul: {sid}")
                 continue
 
             # Find in registry
@@ -131,7 +143,7 @@ class OwnerPresenceCommand(Command):
     """Command to handle owner presence changes."""
 
     owner_id: str = ""
-    action: str = "online"  # online, offline
+    action: Literal["online", "offline"] = "online"
     priority: int = 10  # High priority
 
     def execute(self, soul: Any) -> None:
@@ -140,7 +152,126 @@ class OwnerPresenceCommand(Command):
         # reach out to the app or registry.
         log.info(f"Owner {self.owner_id} is now {self.action}")
         if self.action == "offline" and hasattr(soul, "soul_registry"):
-            # Remove souls for offline owner
             soul.soul_registry[:] = [
                 s for s in soul.soul_registry if s.owner_id != self.owner_id
             ]
+
+
+@dataclass
+class SellItemCommand(Command):
+    """Atomic command to sell an item on the marketplace."""
+
+    item_index: int = 0
+    price: float = 0.0
+
+    def execute(self, soul: Any) -> None:
+        if not hasattr(soul, "inventory") or not hasattr(soul, "marketplace"):
+            return
+
+        if self.item_index < 0 or self.item_index >= len(soul.inventory.items):
+            log.warning(
+                f"Atomic Sell failed: Index {self.item_index} out of range"
+            )
+            return
+
+        item = soul.inventory.items.pop(self.item_index)
+        soul.marketplace.list_item(item, self.price, soul.soul_id)
+        log.info(f"Atomic Sell success: {item.name} for {self.price}")
+
+
+@dataclass
+class BuyItemCommand(Command):
+    """Atomic command to buy an item from the marketplace."""
+
+    listing_id: str = ""
+
+    def execute(self, soul: Any) -> None:
+        if not hasattr(soul, "marketplace") or not hasattr(soul, "inventory"):
+            log.warning(
+                f"Atomic Buy failed: Soul {soul.biology.name} lacks marketplace or inventory."
+            )
+            return
+
+        listing = soul.marketplace.get_listing(self.listing_id)
+        if not listing:
+            log.warning(
+                f"Atomic Buy failed for {soul.biology.name}: Listing {self.listing_id} not found"
+            )
+            return
+
+        if soul.essence < listing.price:
+            log.warning(
+                f"Atomic Buy failed for {soul.biology.name}: Not enough essence for {listing.item.name} (needed {listing.price}, has {soul.essence})"
+            )
+            return
+
+        # Perform atomic transfer
+        soul.essence -= listing.price
+        item = soul.marketplace.remove_listing(self.listing_id)
+        if item:
+            soul.inventory.add_item(item)
+            log.info(
+                f"Atomic Buy success for {soul.biology.name}: {item.name} purchased for {listing.price}"
+            )
+        else:
+            log.error(
+                f"Atomic Buy failed for {soul.biology.name}: Listing {self.listing_id} disappeared during transaction."
+            )
+
+
+@dataclass
+class CancelListingCommand(Command):
+    """Atomic command to cancel a marketplace listing."""
+
+    listing_id: str = ""
+
+    def execute(self, soul: Any) -> None:
+        if not hasattr(soul, "marketplace") or not hasattr(soul, "inventory"):
+            return
+
+        listing = soul.marketplace.get_listing(self.listing_id)
+        if not listing:
+            return
+
+        item = soul.marketplace.remove_listing(self.listing_id)
+        if item:
+            soul.inventory.add_item(item)
+            log.info(f"Atomic Cancel success: {item.name}")
+
+
+@dataclass
+class EatCommand(Command):
+    """Atomic command to eat a food item."""
+
+    item: Any = None
+
+    def execute(self, soul: Any) -> None:
+        if not hasattr(soul, "inventory") or not hasattr(soul, "biology"):
+            return
+        if self.item and self.item in soul.inventory.items:
+            soul.inventory.items.remove(self.item)
+            value = getattr(self.item, "value", 0)
+            soul.biology.satiety += value
+            soul.biology.satiety = max(0, min(100, soul.biology.satiety))
+            log.info(
+                f"Atomic Eat success: {soul.biology.name} ate {self.item.name} (+{value} satiety)"
+            )
+
+
+@dataclass
+class DrinkCommand(Command):
+    """Atomic command to drink a liquid."""
+
+    item: Any = None
+
+    def execute(self, soul: Any) -> None:
+        if not hasattr(soul, "inventory") or not hasattr(soul, "biology"):
+            return
+        if self.item and self.item in soul.inventory.items:
+            soul.inventory.items.remove(self.item)
+            value = getattr(self.item, "value", 0)
+            soul.biology.hydration += value
+            soul.biology.hydration = max(0, min(100, soul.biology.hydration))
+            log.info(
+                f"Atomic Drink success: {soul.biology.name} drank {self.item.name} (+{value} hydration)"
+            )

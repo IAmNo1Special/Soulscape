@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 from ...constants import SOUL_HEIGHT, SOUL_WIDTH
-from ...system.command_queue import Command, CommandQueue
+from ...system.command_queue import CommandQueue
 from ...system.logger import log
 from ..biology import Gender, SoulBiology, SoulStats, Species
 from ..interactions import Inventory
@@ -550,6 +550,8 @@ class Soul:
 
     def cleanup(self) -> None:
         """Gracefully releases all system resources held by this soul."""
+        if self.agent:
+            self.agent.stop()
         log.debug(f"Cleaned up resources for soul: {self.biology.name}")
 
 

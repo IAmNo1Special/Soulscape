@@ -4,7 +4,7 @@ from typing import Any
 from magetools import spell
 
 from soulscape.core import Drink
-from soulscape.core.commands import InventoryCommand, VitalCommand
+from soulscape.core.commands import DrinkCommand, InventoryCommand
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
 
@@ -84,9 +84,8 @@ async def drink(self) -> dict[str, Any]:
     # Consume the first drink item.
     item = drink_items[0]
     value = item.value
-    # Queue consumption
-    self.command_queue.put(InventoryCommand(action="remove", item=item))
-    self.command_queue.put(VitalCommand(vital_type="hydration", amount=value))
+    # Atomic Drink: Enqueue moving the item removal and hydration boost to the main thread.
+    self.command_queue.put(DrinkCommand(item=item))
 
     result_msg = f"You drank {item.name} and recovered {value} hydration."
     log.info(result_msg)

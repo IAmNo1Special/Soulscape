@@ -39,6 +39,12 @@ class NetworkService:
             on_connect=self._on_connect,
         )
 
+    def _is_valid_owner(self, owner_id: str) -> bool:
+        """Validates that an owner_id is safe and well-formed."""
+        if not owner_id or not isinstance(owner_id, str):
+            return False
+        return bool(re.match(r"^[a-zA-Z0-9_-]+$", owner_id))
+
     def start(self) -> None:
         """Starts the background network thread and event loop."""
         if self._running:
@@ -78,19 +84,22 @@ class NetworkService:
 
     async def _on_connect(self, online_owners: List[str]) -> None:
         for owner_id in online_owners:
+            if not self._is_valid_owner(owner_id):
+                continue
             self.command_queue.put(
                 OwnerPresenceCommand(owner_id=owner_id, action="online")
             )
 
     async def _on_owner_online(self, owner_id: str) -> None:
+        if not self._is_valid_owner(owner_id):
+            log.warning(
+                f"Invalid owner_id received in online event: {owner_id}"
+            )
+            return
+
         self.command_queue.put(
             OwnerPresenceCommand(owner_id=owner_id, action="online")
         )
-
-        # VALIDATION: Prevent path traversal or injection
-        if not re.match(r"^[a-zA-Z0-9_-]+$", owner_id):
-            log.warning(f"Invalid owner_id received: {owner_id}")
-            return
 
         try:
             # Fetch remote souls directly here
@@ -103,11 +112,15 @@ class NetworkService:
             log.error(f"Error fetching remote souls for {owner_id}: {e}")
 
     def _on_owner_offline(self, owner_id: str) -> None:
+        if not self._is_valid_owner(owner_id):
+            return
         self.command_queue.put(
             OwnerPresenceCommand(owner_id=owner_id, action="offline")
         )
 
     async def _on_soul_updated(self, souls: List[Dict], owner_id: str) -> None:
+        if not self._is_valid_owner(owner_id):
+            return
         self.command_queue.put(
             StateUpdateCommand(souls_data=souls, owner_id=owner_id)
         )
