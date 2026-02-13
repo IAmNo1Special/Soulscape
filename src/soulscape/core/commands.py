@@ -366,16 +366,18 @@ class PresenceReconcileCommand(Command):
             instance_id = getattr(context, "local_instance_id", None)
 
         if hasattr(registry, "remove"):  # If it's a list we can mutate
-            to_remove = []
-            for s in registry:
-                owner = getattr(s, "owner_id", None)
-                if owner and owner != instance_id and owner not in online_set:
-                    to_remove.append(s)
-
-            for s in to_remove:
-                registry.remove(s)
-
-            if to_remove:
+            to_keep = [
+                s
+                for s in registry
+                if not (
+                    (owner := getattr(s, "owner_id", None))
+                    and owner != instance_id
+                    and owner not in online_set
+                )
+            ]
+            pruned_count = len(registry) - len(to_keep)
+            if pruned_count > 0:
+                registry[:] = to_keep
                 log.info(
-                    f"PresenceReconcile pruned {len(to_remove)} stale souls (from {initial_count})."
+                    f"PresenceReconcile pruned {pruned_count} stale souls (from {initial_count})."
                 )

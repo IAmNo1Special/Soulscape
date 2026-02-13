@@ -155,8 +155,8 @@ def item_from_dict(data: dict[str, Any]) -> Item:
         ValueError: If 'type' is unknown.
     """
     item_type = data.get("type")
-    name = sanitize_content(data.get("name", "Unknown Item"))
-    desc = data.get("description", "")
+    name = sanitize_name(data.get("name", "Unknown Item"))
+    desc = sanitize_content(data.get("description", ""))
     val = data.get("value", 0)
 
     if item_type == "Food":
