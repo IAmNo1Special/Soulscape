@@ -6,6 +6,7 @@ from magetools import spell
 from soulscape.core.commands import MoveCommand
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
+from soulscape.utils.security import sanitize_name
 
 
 @action_guard
@@ -49,7 +50,7 @@ async def look_around(self) -> dict[str, Any]:
 
         nearby_souls_info.append(
             {
-                "name": other.biology.name,
+                "name": sanitize_name(other.biology.name),
                 "distance": round(dist, 1),
                 "direction": f"{abs(dx):.1f}px {dir_x}, {abs(dy):.1f}px {dir_y}",
                 "status": "Alive" if other.biology.is_alive() else "Perished",

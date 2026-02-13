@@ -9,6 +9,7 @@ from soulscape.core.commands import (
 )
 from soulscape.core.interactions import Marketplace
 from soulscape.utils.helpers import action_guard
+from soulscape.utils.security import sanitize_content, sanitize_name
 
 
 @action_guard
@@ -77,9 +78,9 @@ async def market_browse(
         listing_data.append(
             {
                 "id": listing.listing_id,
-                "item": listing.item.name,
+                "item": sanitize_content(listing.item.name),
                 "price": listing.price,
-                "seller": listing.seller_name,
+                "seller": sanitize_name(listing.seller_name),
             }
         )
 

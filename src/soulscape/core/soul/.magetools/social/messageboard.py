@@ -5,6 +5,7 @@ from magetools import spell
 from soulscape.core.interactions import MessageBoard
 from soulscape.system.logger import log
 from soulscape.utils.helpers import action_guard
+from soulscape.utils.security import sanitize_content, sanitize_name
 
 
 @action_guard
@@ -133,9 +134,9 @@ async def social_read(
             }
 
         formatted_thread = (
-            f"THREAD: {thread.title}\n"
-            f"Author: {thread.author_name} [ID: {thread.message_id}]\n"
-            f"Content: {thread.content}\n"
+            f"THREAD: {sanitize_content(thread.title)}\n"
+            f"Author: {sanitize_name(thread.author_name)} [ID: {thread.message_id}]\n"
+            f"Content: {sanitize_content(thread.content)}\n"
             "--- REPLIES ---"
         )
 
@@ -143,7 +144,7 @@ async def social_read(
             res = ""
             for r in replies:
                 indent = "  " * level
-                res += f"\n{indent}- [{r.author_name}]: {r.content} [ID: {r.message_id}]"
+                res += f"\n{indent}- [{sanitize_name(r.author_name)}]: {sanitize_content(r.content)} [ID: {r.message_id}]"
                 res += format_replies(r.replies, level + 1)
             return res
 
@@ -163,7 +164,7 @@ async def social_read(
     formatted_posts = []
     for post in posts:
         thread_summary = (
-            f"[ID: {post.message_id}] Title: {post.title} | Author: {post.author_name}"
+            f"[ID: {post.message_id}] Title: {sanitize_content(post.title)} | Author: {sanitize_name(post.author_name)}"
             f" ({len(post.replies)} replies)"
         )
         formatted_posts.append(thread_summary)

@@ -24,6 +24,7 @@ from magetools import Grimorium
 from PIL import Image, ImageDraw
 
 from soulscape.system.logger import log
+from soulscape.utils.security import sanitize_name
 
 from ..interactions.marketplace import Marketplace
 from ..interactions.social import MessageBoard
@@ -392,6 +393,7 @@ class SoulAgent(LlmAgent):
         screen_context: Image.Image | None,
     ) -> None:
         """Coroutine to execute a single agent turn."""
+        name = sanitize_name(name)
         if not self.runner:
             # Downgrade to debug and update time to prevent interval-based spam
             log.debug(f"Runner not ready for {name}, skipping turn.")
