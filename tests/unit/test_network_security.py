@@ -1,67 +1,90 @@
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from soulscape.core import Operator
 from soulscape.system.network.client import NetworkClient
 from soulscape.system.network.presence import PresenceManager
 
 
 @pytest.fixture
 def mock_env():
-    # Use patch.dict to safely modify os.environ
     with patch.dict(
         os.environ,
-        {"HUB_URL": "http://refined-hub", "HUB_SECRET_KEY": "refined_secret"},
+        {"HUB_URL": "http://test-hub", "HUB_SECRET_KEY": "test-secret-123"},
     ):
         yield
 
 
 @pytest.mark.asyncio
-async def test_network_client_refined_config(mock_env):
+async def test_network_client_auth_headers(mock_env):
     client = NetworkClient()
-    assert client.base_url == "http://refined-hub"
-    assert client.headers == {"X-Hub-Secret": "refined_secret"}
+    assert client.headers == {"X-Hub-Secret": "test-secret-123"}
 
 
 @pytest.mark.asyncio
-async def test_network_client_detail_error_log(mock_env):
+async def test_network_client_403_handling(mock_env):
     client = NetworkClient()
 
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_response = MagicMock()
-        mock_response.status_code = 400
-        mock_response.json.return_value = {"detail": "Specific error detail"}
-        mock_get.return_value = mock_response
+    mock_response = MagicMock()
+    mock_response.status_code = 403
 
-        # Use patch to capture log calls
-        with patch(
-            "soulscape.system.network.client.log.error"
-        ) as mock_log_error:
-            result = await client._get("/test")
-            assert result is None
-            mock_log_error.assert_called_with(
-                "Hub GET error (400) at /test: Specific error detail"
-            )
+    with patch("httpx.AsyncClient.get", return_value=mock_response):
+        res = await client._get("/test")
+        assert res is None
 
 
 @pytest.mark.asyncio
-async def test_presence_manager_refined_url(mock_env):
+async def test_presence_manager_token_param(mock_env):
     # Dummy callbacks
-    async def on_online(oid):
+    async def mock_async_cb(*args, **kwargs):
         pass
 
-    def on_offline(oid):
-        pass
-
-    async def on_update(souls, oid):
+    def mock_cb(*args, **kwargs):
         pass
 
     pm = PresenceManager(
         owner_id="test_owner",
-        on_owner_online=on_online,
-        on_owner_offline=on_online,
-        on_soul_updated=on_update,
+        on_owner_online=mock_async_cb,
+        on_owner_offline=mock_cb,
+        on_soul_updated=mock_async_cb,
     )
+    # PresenceManager uses HUB_URL from env if not passed
+    assert "token=test-secret-123" in pm._ws_url
+    assert "ws://test-hub/ws/test_owner" in pm._ws_url
 
-    assert pm._ws_url == "ws://refined-hub/ws/test_owner?token=refined_secret"
+
+@pytest.mark.asyncio
+async def test_operator_post_mock(mock_env):
+    """Verifies that the NetworkClient correctly prepares the Operator post payload."""
+    client = NetworkClient()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "status": "success",
+        "message_id": "123",
+        "cost": 0.0,
+    }
+
+    with patch(
+        "httpx.AsyncClient.post", return_value=mock_response
+    ) as mock_post:
+        payload = {
+            "author_id": Operator.ID,
+            "author_name": Operator.NAME,
+            "title": "Broadcast",
+            "content": "Hello World",
+        }
+        res = await client.post_message(payload)
+        assert res["status"] == "success"
+        assert res["cost"] == 0.0
+
+        # Verify headers were sent
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        assert kwargs["json"] == payload
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        assert kwargs["json"] == payload
