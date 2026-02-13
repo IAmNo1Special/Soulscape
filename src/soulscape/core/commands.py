@@ -181,9 +181,29 @@ class SellItemCommand(Command):
             )
             return
 
+        # Optimistic local update (Main Thread)
         item = soul.inventory.items.pop(self.item_index)
-        soul.marketplace.add_listing(item, self.price, soul.soul_id)
-        log.info(f"Atomic Sell success: {item.name} for {self.price}")
+
+        async def _do_sell():
+            try:
+                await soul.marketplace.add_listing(
+                    soul.soul_id, soul.biology.name, item, self.price
+                )
+                log.info(f"Marketplace listing confirmed: {item.name}")
+            except Exception as e:
+                log.error(f"Marketplace listing failed for {item.name}: {e}")
+                # Rollback
+                soul.command_queue.put(
+                    InventoryCommand(action="add", item=item)
+                )
+
+        if hasattr(soul, "schedule_task"):
+            soul.schedule_task(_do_sell())
+            log.info(f"Atomic Sell initiated: {item.name} for {self.price}")
+        else:
+            log.error("Sell failed: Soul has no task scheduler.")
+            # Immediate rollback if no scheduler (e.g. strict test environment)
+            soul.inventory.items.insert(self.item_index, item)
 
 
 @dataclass
@@ -212,18 +232,31 @@ class BuyItemCommand(Command):
             )
             return
 
-        # Perform atomic transfer
-        # Essence is NOT deducted here; the Hub handles it and sends a StateUpdateCommand.
-        item = soul.marketplace.remove_listing(self.listing_id)
-        if item:
-            soul.inventory.add_item(item)
-            log.info(
-                f"Atomic Buy success for {soul.biology.name}: {item.name} purchased (Essence transfer handled by Hub)"
-            )
+        # Perform atomic transfer via Hub asynchronously
+        async def _do_buy():
+            try:
+                # Essence is deducted by Hub upon successful buy_listing
+                listing = await soul.marketplace.buy_listing(
+                    self.listing_id, soul.soul_id, soul.biology.name
+                )
+                if listing and listing.item:
+                    soul.command_queue.put(
+                        InventoryCommand(action="add", item=listing.item)
+                    )
+                    log.info(
+                        f"Atomic Buy success for {soul.biology.name}: {listing.item.name} purchased"
+                    )
+                else:
+                    log.warning(
+                        f"Atomic Buy failed for {soul.biology.name}: Listing {self.listing_id} disappeared."
+                    )
+            except Exception as e:
+                log.error(f"Atomic Buy error for {soul.biology.name}: {e}")
+
+        if hasattr(soul, "schedule_task"):
+            soul.schedule_task(_do_buy())
         else:
-            log.error(
-                f"Atomic Buy failed for {soul.biology.name}: Listing {self.listing_id} disappeared during transaction."
-            )
+            log.error("Buy failed: Soul has no task scheduler.")
 
 
 @dataclass
@@ -247,10 +280,21 @@ class CancelListingCommand(Command):
             )
             return
 
-        item = soul.marketplace.remove_listing(self.listing_id)
-        if item:
-            soul.inventory.add_item(item)
-            log.info(f"Atomic Cancel success: {item.name}")
+        async def _do_cancel():
+            try:
+                listing = await soul.marketplace.remove_listing(self.listing_id)
+                if listing and listing.item:
+                    soul.command_queue.put(
+                        InventoryCommand(action="add", item=listing.item)
+                    )
+                    log.info(f"Atomic Cancel success: {listing.item.name}")
+            except Exception as e:
+                log.error(f"Atomic Cancel error: {e}")
+
+        if hasattr(soul, "schedule_task"):
+            soul.schedule_task(_do_cancel())
+        else:
+            log.error("Cancel failed: Soul has no task scheduler.")
 
 
 @dataclass

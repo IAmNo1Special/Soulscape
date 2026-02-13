@@ -1,4 +1,5 @@
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 from soulscape.core.commands import (
     BuyItemCommand,
@@ -28,10 +29,15 @@ class MockSoul:
         self.inventory.items = []
         self.inventory.capacity = 100
         self.marketplace = MagicMock()
+        self.marketplace.add_listing = AsyncMock()
+        self.marketplace.buy_listing = AsyncMock()
+        self.marketplace.remove_listing = AsyncMock()
         self.essence = 100.0
         self.soul_registry = []
         self.soul_id = "test_sid"
         self.local_instance_id = "test_sid"
+        self.schedule_task = MagicMock()
+        self.command_queue = MagicMock()
 
 
 def test_move_command():
@@ -135,8 +141,16 @@ def test_sell_item_command():
     cmd.execute(soul)
 
     assert len(soul.inventory.items) == 0
-    soul.marketplace.add_listing.assert_called_with(
-        mock_item, 50.0, soul.soul_id
+
+    # Verify async task scheduled
+    soul.schedule_task.assert_called_once()
+    coro = soul.schedule_task.call_args[0][0]
+
+    # Run coroutine
+    asyncio.run(coro)
+
+    soul.marketplace.add_listing.assert_awaited_with(
+        soul.soul_id, soul.biology.name, mock_item, 50.0
     )
 
 
@@ -151,14 +165,27 @@ def test_buy_item_command():
     mock_listing.seller_id = "seller_sid"
 
     soul.marketplace.get_listing.return_value = mock_listing
-    soul.marketplace.remove_listing.return_value = mock_item
+
+    # Mock return of buy_listing (async)
+    # It returns a listing object, not just item
+    soul.marketplace.buy_listing.return_value = mock_listing
 
     cmd = BuyItemCommand(listing_id="listing_123")
     cmd.execute(soul)
 
-    # Essence change is handled by Hub via StateUpdateCommand, so we don't assert change here
-    # assert soul.essence == 50.0
-    soul.inventory.add_item.assert_called_with(mock_item)
+    # Verify task scheduled
+    soul.schedule_task.assert_called_once()
+    coro = soul.schedule_task.call_args[0][0]
+
+    asyncio.run(coro)
+
+    # Verify CommandQueue push
+    # We expect an InventoryCommand to be put in the queue
+    assert soul.command_queue.put.called
+    args = soul.command_queue.put.call_args[0][0]
+    assert isinstance(args, InventoryCommand)
+    assert args.action == "add"
+    assert args.item == mock_item
 
 
 def test_cancel_listing_command():
@@ -170,12 +197,23 @@ def test_cancel_listing_command():
     mock_listing.seller_id = "test_sid"
 
     soul.marketplace.get_listing.return_value = mock_listing
-    soul.marketplace.remove_listing.return_value = mock_item
+    # remove_listing returns the listing, not item directly?
+    # Let's check Marketplace code. remove_listing returns MarketListing.
+    soul.marketplace.remove_listing.return_value = mock_listing
 
     cmd = CancelListingCommand(listing_id="listing_123")
     cmd.execute(soul)
 
-    soul.inventory.add_item.assert_called_with(mock_item)
+    # Verify task scheduled
+    soul.schedule_task.assert_called_once()
+    coro = soul.schedule_task.call_args[0][0]
+
+    asyncio.run(coro)
+
+    assert soul.command_queue.put.called
+    args = soul.command_queue.put.call_args[0][0]
+    assert isinstance(args, InventoryCommand)
+    assert args.item == mock_item
 
 
 def test_presence_reconcile_command():

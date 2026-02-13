@@ -400,6 +400,7 @@ class SoulscapeApp:
                     screen_width=display.width,
                     screen_height=display.height,
                     local_instance_id=self.instance_id,
+                    task_scheduler=self._run_coro,
                 )
                 self.active_souls.append(soul)
                 log.info(f"New remote soul: {soul.biology.name}")
@@ -503,6 +504,7 @@ class SoulscapeApp:
             screen_width=sw,
             screen_height=sh,
             local_instance_id=self.instance_id,
+            task_scheduler=self._run_coro,
         )
         soul.aura_visible = self.global_aura_visible
         self.active_souls.append(soul)
@@ -642,6 +644,7 @@ class SoulscapeApp:
                     screen_width=sw,
                     screen_height=sh,
                     local_instance_id=self.instance_id,
+                    task_scheduler=self._run_coro,
                 )
                 self.active_souls.append(soul)
 
