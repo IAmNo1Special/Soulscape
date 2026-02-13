@@ -135,7 +135,9 @@ def test_sell_item_command():
     cmd.execute(soul)
 
     assert len(soul.inventory.items) == 0
-    soul.marketplace.list_item.assert_called_with(mock_item, 50.0, soul.soul_id)
+    soul.marketplace.add_listing.assert_called_with(
+        mock_item, 50.0, soul.soul_id
+    )
 
 
 def test_buy_item_command():
@@ -154,7 +156,8 @@ def test_buy_item_command():
     cmd = BuyItemCommand(listing_id="listing_123")
     cmd.execute(soul)
 
-    assert soul.essence == 50.0
+    # Essence change is handled by Hub via StateUpdateCommand, so we don't assert change here
+    # assert soul.essence == 50.0
     soul.inventory.add_item.assert_called_with(mock_item)
 
 
@@ -173,33 +176,6 @@ def test_cancel_listing_command():
     cmd.execute(soul)
 
     soul.inventory.add_item.assert_called_with(mock_item)
-
-
-def test_buy_item_command_seller_credit():
-    soul = MockSoul()
-    soul.essence = 100.0
-
-    seller_soul = MockSoul()
-    seller_soul.soul_id = "seller_sid"
-    seller_soul.essence = 0.0
-    soul.soul_registry = [seller_soul]
-
-    mock_item = MagicMock()
-    mock_listing = MagicMock()
-    mock_listing.price = 100.0
-    mock_item.name = "TestItem"
-    mock_listing.item = mock_item
-    mock_listing.seller_id = "seller_sid"
-
-    soul.marketplace.get_listing.return_value = mock_listing
-    soul.marketplace.remove_listing.return_value = mock_item
-
-    cmd = BuyItemCommand(listing_id="listing_123")
-    cmd.execute(soul)
-
-    assert soul.essence == 0.0
-    # Seller gets 98%
-    assert seller_soul.essence == 98.0
 
 
 def test_presence_reconcile_command():

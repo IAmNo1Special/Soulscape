@@ -182,7 +182,7 @@ class SellItemCommand(Command):
             return
 
         item = soul.inventory.items.pop(self.item_index)
-        soul.marketplace.list_item(item, self.price, soul.soul_id)
+        soul.marketplace.add_listing(item, self.price, soul.soul_id)
         log.info(f"Atomic Sell success: {item.name} for {self.price}")
 
 
@@ -213,30 +213,12 @@ class BuyItemCommand(Command):
             return
 
         # Perform atomic transfer
+        # Essence is NOT deducted here; the Hub handles it and sends a StateUpdateCommand.
         item = soul.marketplace.remove_listing(self.listing_id)
         if item:
-            soul.essence -= listing.price
-            soul.essence = round(soul.essence, 2)
-
-            # Credit seller (98% after tax)
-            seller_net = round(listing.price * 0.98, 2)
-            # Find seller in registry to update locally
-            if hasattr(soul, "soul_registry"):
-                seller_soul = next(
-                    (
-                        s
-                        for s in soul.soul_registry
-                        if s.soul_id == listing.seller_id
-                    ),
-                    None,
-                )
-                if seller_soul:
-                    seller_soul.essence += seller_net
-                    seller_soul.essence = round(seller_soul.essence, 2)
-
             soul.inventory.add_item(item)
             log.info(
-                f"Atomic Buy success for {soul.biology.name}: {item.name} purchased for {listing.price} (Seller {listing.seller_id} credited {seller_net})"
+                f"Atomic Buy success for {soul.biology.name}: {item.name} purchased (Essence transfer handled by Hub)"
             )
         else:
             log.error(

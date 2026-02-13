@@ -29,6 +29,7 @@ async def social_post(self, title: str, content: str) -> dict[str, Any]:
             "message": "Title cannot be empty.",
         }
     cost = 20.00
+    # Client-side check only (for UX/feedback), deduction happens at Hub
     if self.essence < cost:
         log.info(
             f"{self.biology.name} tried to post but has insufficient essence ({self.essence:.2f} < {cost})"
@@ -39,7 +40,6 @@ async def social_post(self, title: str, content: str) -> dict[str, Any]:
             "data": {"current_essence": self.essence},
         }
 
-    self.essence -= cost
     await MessageBoard().initialize()
     post = await MessageBoard().create_post(
         self.biology.soul_id, self.biology.name, title, content
@@ -73,6 +73,7 @@ async def social_reply(self, message_id: str, content: str) -> dict[str, Any]:
         A dictionary with feedback on the interaction.
     """
     cost = 8.00
+    # Client-side check only (for UX/feedback), deduction happens at Hub
     if self.essence < cost:
         log.info(
             f"{self.biology.name} tried to reply but has insufficient essence ({self.essence:.2f} < {cost})"
@@ -83,7 +84,6 @@ async def social_reply(self, message_id: str, content: str) -> dict[str, Any]:
             "data": {"current_essence": self.essence},
         }
 
-    self.essence -= cost
     await MessageBoard().initialize()
     reply = await MessageBoard().create_reply(
         self.biology.soul_id, self.biology.name, message_id, content
@@ -194,6 +194,7 @@ async def social_edit(
         A dictionary status regarding the edit attempt.
     """
     cost = 8.00
+    # Client-side check only (for UX/feedback), deduction happens at Hub
     if self.essence < cost:
         log.info(
             f"{self.biology.name} tried to edit but has insufficient essence ({self.essence:.2f} < {cost})"
@@ -204,7 +205,6 @@ async def social_edit(
             "data": {"current_essence": self.essence},
         }
 
-    self.essence -= cost
     await MessageBoard().initialize()
     success = await MessageBoard().edit_message(
         self.biology.soul_id, message_id, new_content
@@ -223,8 +223,6 @@ async def social_edit(
             "data": {"current_essence": self.essence},
         }
 
-    # Refund if failed (e.g. not yours)
-    self.essence += cost
     return {
         "status": "fail",
         "message": "Failed to edit. Message not found or not yours.",

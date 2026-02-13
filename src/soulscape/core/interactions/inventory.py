@@ -9,6 +9,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+from soulscape.utils.security import sanitize_content
+
 if TYPE_CHECKING:
     from ..soul.soul import Soul
 
@@ -153,7 +155,7 @@ def item_from_dict(data: dict[str, Any]) -> Item:
         ValueError: If 'type' is unknown.
     """
     item_type = data.get("type")
-    name = data.get("name", "Unknown Item")
+    name = sanitize_content(data.get("name", "Unknown Item"))
     desc = data.get("description", "")
     val = data.get("value", 0)
 
