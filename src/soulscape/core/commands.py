@@ -43,10 +43,17 @@ class InventoryCommand(Command):
             return
 
         if self.action == "add" and self.item:
-            soul.inventory.add_item(self.item)
-            log.debug(
-                f"Applied InventoryCommand (add) to {soul.biology.name}: {self.item.name}"
-            )
+            # Check capacity atomically on the main thread
+            capacity = getattr(soul.inventory, "capacity", 100)
+            if len(soul.inventory.items) < capacity:
+                soul.inventory.add_item(self.item)
+                log.debug(
+                    f"Applied InventoryCommand (add) to {soul.biology.name}: {self.item.name}"
+                )
+            else:
+                log.warning(
+                    f"Applied InventoryCommand (add) FAILED: Inventory full for {soul.biology.name}"
+                )
         elif self.action == "remove" and self.item:
             soul.inventory.remove_item(self.item)
             log.debug(

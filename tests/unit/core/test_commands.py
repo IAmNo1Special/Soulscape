@@ -25,6 +25,7 @@ class MockSoul:
         self.physics = MagicMock()
         self.inventory = MagicMock()
         self.inventory.items = []
+        self.inventory.capacity = 100
         self.marketplace = MagicMock()
         self.essence = 100.0
         self.soul_registry = []

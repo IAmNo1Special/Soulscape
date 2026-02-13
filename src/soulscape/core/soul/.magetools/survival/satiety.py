@@ -35,12 +35,8 @@ async def find_food(self) -> dict[str, Any]:
     food_value = random.randint(10, 30)
     new_food = Food("Wild Berries", "Found in the wild.", food_value)
 
-    if (
-        True
-    ):  # self.inventory.add_item expects immediate success in current impl
-        # We simulate the success check but actually queue the add
-        # Actually, in current impl, self.inventory is shared.
-        # To be fully safe, we queue the addition.
+    if len(self.inventory.items) < self.inventory.capacity:
+        # We queue the addition for execution on the main thread.
         self.command_queue.put(InventoryCommand(action="add", item=new_food))
         log.info(
             f"{self.biology.name} found {new_food.name} ({food_value} food value)!"

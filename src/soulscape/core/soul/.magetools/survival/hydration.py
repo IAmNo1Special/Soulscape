@@ -35,7 +35,7 @@ async def find_water(self) -> dict[str, Any]:
     water_value = random.randint(10, 30)
     new_drink = Drink("Water Bottle", "Collected from a stream.", water_value)
 
-    if True:
+    if len(self.inventory.items) < self.inventory.capacity:
         # Queue item addition
         self.command_queue.put(InventoryCommand(action="add", item=new_drink))
         log.info(
