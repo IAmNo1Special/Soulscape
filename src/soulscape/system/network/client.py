@@ -24,6 +24,20 @@ class NetworkClient:
             {"X-Hub-Secret": self.secret_key} if self.secret_key else {}
         )
 
+    def _handle_error_response(
+        self, response: httpx.Response, method: str, endpoint: str
+    ) -> None:
+        """Logs detailed error information for failed requests."""
+        try:
+            detail = response.json().get("detail", "No detail")
+            log.error(
+                f"Hub {method} error ({response.status_code}) at {endpoint}: {detail}"
+            )
+        except Exception:
+            log.error(
+                f"Hub {method} error ({response.status_code}) at {endpoint}"
+            )
+
     async def _get(self, endpoint: str, token: Optional[str] = None) -> Any:
         try:
             headers = {"X-Hub-Secret": token} if token else self.headers
@@ -32,15 +46,7 @@ class NetworkClient:
             ) as client:
                 response = await client.get(endpoint)
                 if response.status_code >= 400:
-                    try:
-                        detail = response.json().get("detail", "No detail")
-                        log.error(
-                            f"Hub GET error ({response.status_code}) at {endpoint}: {detail}"
-                        )
-                    except Exception:
-                        log.error(
-                            f"Hub GET error ({response.status_code}) at {endpoint}"
-                        )
+                    self._handle_error_response(response, "GET", endpoint)
                     return None
                 return response.json()
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
@@ -60,15 +66,7 @@ class NetworkClient:
             ) as client:
                 response = await client.post(endpoint, json=data)
                 if response.status_code >= 400:
-                    try:
-                        detail = response.json().get("detail", "No detail")
-                        log.error(
-                            f"Hub POST error ({response.status_code}) at {endpoint}: {detail}"
-                        )
-                    except Exception:
-                        log.error(
-                            f"Hub POST error ({response.status_code}) at {endpoint}"
-                        )
+                    self._handle_error_response(response, "POST", endpoint)
                     return None
                 return response.json()
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
