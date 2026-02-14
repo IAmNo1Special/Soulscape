@@ -24,6 +24,21 @@ class NetworkClient:
         self.headers = (
             {"X-Hub-Secret": self.secret_key} if self.secret_key else {}
         )
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Lazily initializes and returns the shared httpx.AsyncClient."""
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url, headers=self.headers
+            )
+        return self._client
+
+    async def close(self) -> None:
+        """Closes the shared httpx.AsyncClient."""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
 
     def _handle_error_response(
         self, response: httpx.Response, method: str, endpoint: str
@@ -53,14 +68,12 @@ class NetworkClient:
     async def _get(self, endpoint: str, token: Optional[str] = None) -> Any:
         try:
             headers = {"X-Hub-Secret": token} if token else self.headers
-            async with httpx.AsyncClient(
-                base_url=self.base_url, headers=headers
-            ) as client:
-                response = await client.get(endpoint)
-                if response.status_code >= 400:
-                    self._handle_error_response(response, "GET", endpoint)
-                    return None
-                return response.json()
+            client = await self._get_client()
+            response = await client.get(endpoint, headers=headers)
+            if response.status_code >= 400:
+                self._handle_error_response(response, "GET", endpoint)
+                return None
+            return response.json()
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             log.debug(f"Network GET: Hub unreachable at {endpoint} ({e})")
             return None
@@ -73,14 +86,12 @@ class NetworkClient:
     ) -> Any:
         try:
             headers = {"X-Hub-Secret": token} if token else self.headers
-            async with httpx.AsyncClient(
-                base_url=self.base_url, headers=headers
-            ) as client:
-                response = await client.post(endpoint, json=data)
-                if response.status_code >= 400:
-                    self._handle_error_response(response, "POST", endpoint)
-                    return None
-                return response.json()
+            client = await self._get_client()
+            response = await client.post(endpoint, json=data, headers=headers)
+            if response.status_code >= 400:
+                self._handle_error_response(response, "POST", endpoint)
+                return None
+            return response.json()
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             log.debug(f"Network POST: Hub unreachable at {endpoint} ({e})")
             return None
@@ -96,15 +107,15 @@ class NetworkClient:
     ) -> Any:
         try:
             headers = {"X-Hub-Secret": token} if token else self.headers
-            async with httpx.AsyncClient(
-                base_url=self.base_url, headers=headers
-            ) as client:
-                # Some APIs expect DELETE data in the body
-                response = await client.request("DELETE", endpoint, json=data)
-                if response.status_code >= 400:
-                    self._handle_error_response(response, "DELETE", endpoint)
-                    return None
-                return response.json()
+            client = await self._get_client()
+            # Some APIs expect DELETE data in the body
+            response = await client.request(
+                "DELETE", endpoint, json=data, headers=headers
+            )
+            if response.status_code >= 400:
+                self._handle_error_response(response, "DELETE", endpoint)
+                return None
+            return response.json()
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             log.debug(f"Network DELETE: Hub unreachable at {endpoint} ({e})")
             return None

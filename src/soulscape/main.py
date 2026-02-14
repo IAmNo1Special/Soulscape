@@ -6,6 +6,7 @@ Manages a single transparent full-screen window and renders multiple souls withi
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import random
@@ -874,9 +875,14 @@ class SoulscapeApp:
 
         # 4. Stop background persistence loop
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                self._shutdown_async(), self._loop
-            ).result(timeout=5)
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._shutdown_async(), self._loop
+                ).result(timeout=5)
+            except (concurrent.futures.TimeoutError, Exception) as e:
+                log.warning(
+                    f"Background loop shutdown timed out or failed: {e}"
+                )
             if (
                 self._loop_thread
                 and threading.current_thread() != self._loop_thread
@@ -902,8 +908,7 @@ class SoulscapeApp:
             self.overlay_window.close()
 
         log.info("Cleanup complete. Exiting.")
-        if pyglet.app.has_exit:
-            pyglet.app.exit()
+        pyglet.app.exit()
 
     async def _shutdown_async(self) -> None:
         """Coroutine to perform formal shutdown operations in the background loop."""
