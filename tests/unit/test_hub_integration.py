@@ -91,10 +91,10 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
             mock_client_cls.return_value.__aenter__.return_value = (
                 mock_client_instance
             )
-            mock_client_instance.post.return_value.status_code = 200
-            mock_client_instance.post.return_value.json.return_value = {
-                "status": "success"
-            }
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json = MagicMock(return_value={"status": "success"})
+            mock_client_instance.post.return_value = mock_response
 
             # Action with token
             await client.post_message({"content": "hello"}, token="soul-secret")
