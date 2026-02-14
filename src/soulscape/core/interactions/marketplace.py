@@ -113,8 +113,13 @@ class Marketplace:
                 return
 
             # Load Essence Fund
-            essence_fund_data = data.get("essence_fund", 0.0)
-            self.essence_fund = float(essence_fund_data)
+            try:
+                self.essence_fund = float(data.get("essence_fund", 0.0))
+            except (ValueError, TypeError):
+                log.warning(
+                    "Invalid essence_fund in data store. Defaulting to 0.0"
+                )
+                self.essence_fund = 0.0
 
             # Load Listings
             listings_data = data.get("listings", [])

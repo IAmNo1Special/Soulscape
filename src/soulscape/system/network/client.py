@@ -88,13 +88,19 @@ class NetworkClient:
             log.error(f"Network POST error at {endpoint}: {e}")
             return None
 
-    async def _delete(self, endpoint: str, token: Optional[str] = None) -> Any:
+    async def _delete(
+        self,
+        endpoint: str,
+        data: Optional[dict[str, Any]] = None,
+        token: Optional[str] = None,
+    ) -> Any:
         try:
             headers = {"X-Hub-Secret": token} if token else self.headers
             async with httpx.AsyncClient(
                 base_url=self.base_url, headers=headers
             ) as client:
-                response = await client.delete(endpoint)
+                # Some APIs expect DELETE data in the body
+                response = await client.request("DELETE", endpoint, json=data)
                 if response.status_code >= 400:
                     self._handle_error_response(response, "DELETE", endpoint)
                     return None
@@ -151,8 +157,10 @@ class NetworkClient:
     async def delete_message(
         self, message_id: str, author_id: str, token: Optional[str] = None
     ) -> Any:
+        """Deletes a message from the board. Passes author_id in body for REST consistency."""
         return await self._delete(
-            f"/social/delete/{quote(message_id)}?author_id={quote(author_id)}",
+            f"/social/delete/{quote(message_id)}",
+            data={"author_id": author_id},
             token=token,
         )
 

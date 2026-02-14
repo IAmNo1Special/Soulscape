@@ -276,8 +276,8 @@ class Soul:
 
         Args:
             include_secret: Whether to include the authentication secret.
-                            Defaults to True for backward compatibility and persistence.
-                            Set to False for network broadcasts and public data.
+                            Defaults to `False` for security. Set this to `True` only
+                            for persistence or secure registration with the Hub.
         """
         data = {
             "soul_id": self.biology.soul_id,
