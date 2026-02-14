@@ -204,7 +204,23 @@ class SoulAgent(LlmAgent):
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Any specific ADK cleanup could go here if needed
+            # 2. Cleanup Magetools/ADK Resources
+            # This releases ChromaDB connections and AI clients
+            if self._grimorium:
+                log.debug(
+                    f"Shutting down Grimorium for {self._soul.biology.name if self._soul else 'unknown'}"
+                )
+                await self._grimorium.close()
+
+            if self.runner:
+                # Runner cleanup (if applicable in current ADK version)
+                try:
+                    await self.runner.close()
+                except (AttributeError, TypeError):
+                    log.warning(
+                        f"Failed to close runner for {self._soul.biology.name if self._soul else 'unknown'}"
+                    )
+
         except Exception as e:
             log.error(f"Error during agent shutdown: {e}")
         finally:
