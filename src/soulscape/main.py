@@ -153,6 +153,8 @@ class SoulscapeApp:
         # 5. Start Network Service
         if os.getenv("HUB_URL"):
             self.network_service.start()
+            # Force initial sync of loaded souls to ensure Hub has their secrets
+            self.persist_souls_state()
 
         self.window_manager.window.set_visible(True)
         self._setup_tray()

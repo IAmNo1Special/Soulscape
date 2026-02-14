@@ -152,7 +152,12 @@ class Marketplace:
         await self._save_data()
 
     async def add_listing(
-        self, seller_id: int, seller_name: str, item: Item, price: float
+        self,
+        seller_id: int,
+        seller_name: str,
+        item: Item,
+        price: float,
+        token: str | None = None,
     ) -> str:
         """Creates a new listing and adds it to the marketplace.
 
@@ -177,29 +182,37 @@ class Marketplace:
         )
         self.listings[listing_id] = listing
         # Granular Hub update
-        await self.store.add_listing(listing.to_dict())
+        await self.store.add_listing(listing.to_dict(), token=token)
         # For local fallback, we still usually save everything
         await self._save_data()
         return listing_id
 
-    async def remove_listing(self, listing_id: str) -> MarketListing | None:
+    async def remove_listing(
+        self, listing_id: str, token: str | None = None
+    ) -> MarketListing | None:
         """Removes a listing from the marketplace (Cancellation)."""
         listing = self.listings.pop(listing_id, None)
         if listing:
             # Granular Hub update (pure delete)
-            await self.store.delete_listing(listing_id)
+            await self.store.delete_listing(listing_id, token=token)
             await self._save_data()
         return listing
 
     async def buy_listing(
-        self, listing_id: str, buyer_id: int, buyer_name: str
+        self,
+        listing_id: str,
+        buyer_id: int,
+        buyer_name: str,
+        token: str | None = None,
     ) -> MarketListing | None:
         """Executes a purchase of a listing (Buying)."""
         listing = self.listings.pop(listing_id, None)
         if listing:
             # Granular Hub update (trigger tax)
             await self.store.buy_listing(
-                listing_id, {"buyer_id": buyer_id, "buyer_name": buyer_name}
+                listing_id,
+                {"buyer_id": buyer_id, "buyer_name": buyer_name},
+                token=token,
             )
             await self._save_data()
         return listing

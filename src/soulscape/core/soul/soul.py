@@ -8,6 +8,7 @@ import json
 import math
 import random
 import time
+import uuid
 from typing import Any
 
 from ...constants import SOUL_HEIGHT, SOUL_WIDTH
@@ -36,6 +37,7 @@ class Soul:
         inventory: An Inventory instance for holding items.
         essence: The currency used for social and magical actions.
         window_physics: A SoulPhysics instance handling screen movement.
+        secret: A private UUID key used for Hub authentication (V3).
     """
 
     @classmethod
@@ -98,6 +100,7 @@ class Soul:
             local_instance_id=kwargs.get("local_instance_id"),
             soul_id=data.get("soul_id"),
             task_scheduler=task_scheduler,
+            secret=data.get("secret"),
         )
 
         # Restore soul instance features using biology helper (handles flat/nested)
@@ -141,6 +144,7 @@ class Soul:
         local_instance_id: str | None = None,
         soul_id: str | None = None,
         task_scheduler: Any = None,
+        secret: str | None = None,
     ) -> None:
         """Initializes a new Soul entity.
 
@@ -179,6 +183,9 @@ class Soul:
         self.screen_width: int = screen_width
         self.screen_height: int = screen_height
         self.task_scheduler: Any = task_scheduler
+
+        # Hub V3 Authentication
+        self.secret: str = secret or str(uuid.uuid4())
 
         self.citizenship: list[str] = []
 
@@ -278,6 +285,7 @@ class Soul:
             "aura_visible": self.aura_visible,
             "essence": self.essence,
             "inventory": self.inventory.to_dict(),
+            "secret": self.secret,
         }
 
     def create_snapshot(self) -> dict[str, Any]:

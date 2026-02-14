@@ -26,10 +26,11 @@ class NetworkClient:
             {"X-Hub-Secret": self.secret_key} if self.secret_key else {}
         )
 
-    async def _get(self, endpoint: str) -> Any:
+    async def _get(self, endpoint: str, token: Optional[str] = None) -> Any:
         try:
+            headers = {"X-Hub-Secret": token} if token else self.headers
             async with httpx.AsyncClient(
-                base_url=self.base_url, headers=self.headers
+                base_url=self.base_url, headers=headers
             ) as client:
                 response = await client.get(endpoint)
                 if response.status_code >= 400:
@@ -51,10 +52,13 @@ class NetworkClient:
             log.error(f"Network GET error at {endpoint}: {e}")
             return None
 
-    async def _post(self, endpoint: str, data: dict[str, Any]) -> Any:
+    async def _post(
+        self, endpoint: str, data: dict[str, Any], token: Optional[str] = None
+    ) -> Any:
         try:
+            headers = {"X-Hub-Secret": token} if token else self.headers
             async with httpx.AsyncClient(
-                base_url=self.base_url, headers=self.headers
+                base_url=self.base_url, headers=headers
             ) as client:
                 response = await client.post(endpoint, json=data)
                 if response.status_code >= 400:
@@ -80,38 +84,62 @@ class NetworkClient:
     async def get_marketplace(self) -> Any:
         return await self._get("/marketplace")
 
-    async def post_listing(self, listing_data: dict[str, Any]) -> Any:
-        return await self._post("/marketplace/list", listing_data)
+    async def post_listing(
+        self, listing_data: dict[str, Any], token: Optional[str] = None
+    ) -> Any:
+        return await self._post("/marketplace/list", listing_data, token=token)
 
     async def buy_item(
-        self, listing_id: str, buyer_data: dict[str, Any]
+        self,
+        listing_id: str,
+        buyer_data: dict[str, Any],
+        token: Optional[str] = None,
     ) -> Any:
-        return await self._post(f"/marketplace/buy/{listing_id}", buyer_data)
+        return await self._post(
+            f"/marketplace/buy/{listing_id}", buyer_data, token=token
+        )
 
     async def get_messages(self) -> Any:
         return await self._get("/social")
 
-    async def post_message(self, message_data: dict[str, Any]) -> Any:
-        return await self._post("/social/post", message_data)
+    async def post_message(
+        self, message_data: dict[str, Any], token: Optional[str] = None
+    ) -> Any:
+        return await self._post("/social/post", message_data, token=token)
 
-    async def post_reply(self, reply_data: dict[str, Any]) -> Any:
-        return await self._post("/social/reply", reply_data)
+    async def post_reply(
+        self, reply_data: dict[str, Any], token: Optional[str] = None
+    ) -> Any:
+        return await self._post("/social/reply", reply_data, token=token)
 
     async def edit_message(
-        self, message_id: str, edit_data: dict[str, Any]
+        self,
+        message_id: str,
+        edit_data: dict[str, Any],
+        token: Optional[str] = None,
     ) -> Any:
-        return await self._post(f"/social/edit/{message_id}", edit_data)
+        return await self._post(
+            f"/social/edit/{message_id}", edit_data, token=token
+        )
 
-    async def delete_message(self, message_id: str, author_id: int) -> Any:
+    async def delete_message(
+        self, message_id: str, author_id: int, token: Optional[str] = None
+    ) -> Any:
         # Pydantic expect author_id in some way? Or query param?
         # Hub expects it in delete_message(message_id, author_id)
         # We'll pass it as query param or extra data if we want
         return await self._post(
-            f"/social/delete/{message_id}?author_id={author_id}", {}
+            f"/social/delete/{message_id}?author_id={author_id}",
+            {},
+            token=token,
         )
 
-    async def delete_listing(self, listing_id: str) -> Any:
-        return await self._post(f"/marketplace/delete/{listing_id}", {})
+    async def delete_listing(
+        self, listing_id: str, token: Optional[str] = None
+    ) -> Any:
+        return await self._post(
+            f"/marketplace/delete/{listing_id}", {}, token=token
+        )
 
     async def update_funds(self, amount: float) -> Any:
         return await self._post("/marketplace/funds", {"amount": amount})
@@ -123,7 +151,10 @@ class NetworkClient:
         return await self._get(f"/souls?owner_id={owner_id}")
 
     async def post_souls(
-        self, souls_data: list[dict[str, Any]], owner_id: str
+        self,
+        souls_data: list[dict[str, Any]],
+        owner_id: str,
+        token: Optional[str] = None,
     ) -> Any:
         payload = {"owner_id": owner_id, "souls": souls_data}
-        return await self._post("/souls", payload)
+        return await self._post("/souls", payload, token=token)
