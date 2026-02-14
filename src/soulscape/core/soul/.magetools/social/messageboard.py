@@ -46,7 +46,7 @@ async def social_post(self, title: str, content: str) -> dict[str, Any]:
         self.biology.name,
         title,
         content,
-        token=self.soul.secret,
+        token=self.secret,
     )
     log.info(
         f"{self.biology.name} posted to message board: {title} (Cost: {cost})"
@@ -94,7 +94,7 @@ async def social_reply(self, message_id: str, content: str) -> dict[str, Any]:
         self.biology.name,
         message_id,
         content,
-        token=self.soul.secret,
+        token=self.secret,
     )
     log.info(
         f"{self.biology.name} replied to {message_id}: {content[:30]}... (Cost: {cost})"
@@ -217,7 +217,7 @@ async def social_edit(
 
     await MessageBoard().initialize()
     success = await MessageBoard().edit_message(
-        self.biology.soul_id, message_id, new_content, token=self.soul.secret
+        self.biology.soul_id, message_id, new_content, token=self.secret
     )
     if success:
         log.info(
@@ -252,7 +252,7 @@ async def social_delete(self, message_id: str) -> dict[str, Any]:
     """
     await MessageBoard().initialize()
     success = await MessageBoard().delete_message(
-        self.biology.soul_id, message_id, token=self.soul.secret
+        self.biology.soul_id, message_id, token=self.secret
     )
     if success:
         if self.on_async_state_change:
