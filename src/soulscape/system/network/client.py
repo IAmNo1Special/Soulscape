@@ -36,7 +36,7 @@ class NetworkClient:
             )
         except httpx.JSONDecodeError:
             log.error(
-                f"Hub {method} error ({response.status_code}) at {endpoint}. Response body: {response.text}"
+                f"Hub {method} error ({response.status_code}) at {endpoint}. Response body: {response.text[:200]}"
             )
         except Exception as e:
             log.error(
