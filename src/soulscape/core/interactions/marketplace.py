@@ -113,7 +113,8 @@ class Marketplace:
                 return
 
             # Load Essence Fund
-            self.essence_fund = float(data.get("essence_fund", 0.0))
+            essence_fund_data = data.get("essence_fund", 0.0)
+            self.essence_fund = float(essence_fund_data)
 
             # Load Listings
             listings_data = data.get("listings", [])
