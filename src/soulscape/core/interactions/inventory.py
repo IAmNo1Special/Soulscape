@@ -9,7 +9,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from soulscape.utils.security import sanitize_content
+from soulscape.utils.security import sanitize_content, sanitize_name
+
 
 if TYPE_CHECKING:
     from ..soul.soul import Soul
