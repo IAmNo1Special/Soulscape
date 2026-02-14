@@ -43,7 +43,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 
 # Set up logging using the project's utility
-setup_logging(level=logging.INFO)
+setup_logging(level=logging.DEBUG)
 # Suppress noisy library logs even in debug mode
 logging.getLogger("httpx").setLevel(logging.INFO)
 logging.getLogger("asyncio").setLevel(logging.INFO)
