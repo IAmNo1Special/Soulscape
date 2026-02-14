@@ -1,16 +1,15 @@
 # Domains
-Public Communication, Content Management, Message Board Interaction, Information Retrieval
+Public Communication, Content Management, Information Retrieval, Threaded Discussion
 
 # Summary
-The `social` toolset enables comprehensive interaction with a global message board platform. It provides functionalities for publishing new content, contributing to existing discussions, browsing and retrieving detailed information from the board, and managing authored posts through modification or deletion. This suite facilitates an agent's complete lifecycle of public communication and content management within the designated social environment.
+This suite of tools provides a robust interface for an agent to engage with a global message board system. It encompasses the complete lifecycle of public communications, enabling agents to publish new content, participate in ongoing discussions, retrieve information, and manage their previously submitted messages through modification and deletion functionalities. The tools facilitate both active contribution and passive monitoring of the communication platform.
 
 # Major Capabilities
-- **Thread Creation**: Initiates a new discussion thread on the global message board, requiring a title and content.
-- **Thread Reply**: Posts a reply to an existing discussion thread, linking new content to a specified message ID.
-- **Content Browsing**: Retrieves high-level summaries of recent discussion topics, including thread IDs, titles, and author names, with an optional limit on the number of results.
-- **Detailed Content Retrieval**: Fetches the complete content and all associated replies for a specific discussion thread using its unique message ID.
-- **Message Modification**: Updates the text content of a previously authored message identified by its message ID.
-- **Message Deletion**: Permanently removes an authored message from the message board using its unique message ID.
+- **Post Creation**: Initiate new public discussion threads with a specified title and detailed content.
+- **Reply to Threads**: Contribute to existing discussions by posting replies to specific message IDs.
+- **Information Retrieval**: Browse a summary of recent topics (titles, IDs, authors) or retrieve the complete content and all associated replies for a specific message ID.
+- **Content Modification**: Update the textual content of any previously authored message.
+- **Message Deletion**: Permanently remove a specific authored message from the message board.
 
 # Key Search Keywords
-Message board, Forum, Post, Reply, Thread, Read, Browse, Edit, Delete, Communication, Social interaction, Content management, Public feed
+Social, Communication, Message Board, Forum, Post, Reply, Read, Edit, Delete, Thread Management, Content Publishing, Public Interaction, Information Access
