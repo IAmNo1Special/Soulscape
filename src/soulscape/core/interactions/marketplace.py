@@ -24,7 +24,7 @@ class MarketListing:
     """Represents an item listed for sale in the marketplace."""
 
     listing_id: str
-    seller_id: int
+    seller_id: str
     seller_name: str
     item: Item
     price: float
@@ -159,7 +159,7 @@ class Marketplace:
 
     async def add_listing(
         self,
-        seller_id: int,
+        seller_id: str,
         seller_name: str,
         item: Item,
         price: float,
@@ -168,7 +168,7 @@ class Marketplace:
         """Creates a new listing and adds it to the marketplace.
 
         Args:
-            seller_id: The ID of the soul selling the item.
+            seller_id: The unique ID (string) of the soul selling the item.
             seller_name: The name of the soul (for display).
             item: The item object being sold.
             price: The cost in Essence.
@@ -207,7 +207,7 @@ class Marketplace:
     async def buy_listing(
         self,
         listing_id: str,
-        buyer_id: int,
+        buyer_id: str,
         buyer_name: str,
         token: str | None = None,
     ) -> MarketListing | None:

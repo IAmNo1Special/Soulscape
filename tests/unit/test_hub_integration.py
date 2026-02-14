@@ -81,7 +81,7 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
     async def test_network_client_token_header(self):
         """Test that NetworkClient uses the token header when provided."""
         client = NetworkClient(
-            base_url="http://test.com", secret_key="global-key"
+            base_url="http://localhost:8000", secret_key="global-key"
         )
 
         with patch("httpx.AsyncClient") as mock_client_cls:
@@ -133,7 +133,7 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
         mock_item.to_dict.return_value = {"name": "Test Item"}
 
         await self.marketplace.add_listing(
-            seller_id=123,
+            seller_id="soul-123",
             seller_name="Seller Soul",
             item=mock_item,
             price=10.0,

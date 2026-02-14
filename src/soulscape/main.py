@@ -879,9 +879,11 @@ class SoulscapeApp:
                 asyncio.run_coroutine_threadsafe(
                     self._shutdown_async(), self._loop
                 ).result(timeout=5)
-            except (concurrent.futures.TimeoutError, Exception) as e:
+            except concurrent.futures.TimeoutError:
+                log.warning("Background loop shutdown timed out.")
+            except Exception as e:
                 log.warning(
-                    f"Background loop shutdown timed out or failed: {e}"
+                    f"Background loop shutdown failed unexpectedly: {e}"
                 )
             if (
                 self._loop_thread

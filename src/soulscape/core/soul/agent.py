@@ -421,7 +421,8 @@ class SoulAgent(LlmAgent):
         )
         if sensations:
             context_str += "\nRecent Physical Sensations:\n" + "\n".join(
-                f"- {sanitize_name(s)}" for s in sensations
+                f"- {s[:250].replace('<', '&lt;').replace('>', '&gt;')}"
+                for s in sensations
             )
         log.info(f"Context for {name}: {context_str}")
         parts = [types.Part(text=context_str)]

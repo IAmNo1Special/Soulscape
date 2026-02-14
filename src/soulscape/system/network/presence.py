@@ -67,6 +67,7 @@ class PresenceManager:
             headers["X-Hub-Secret"] = self.secret_key
 
         auth_failures = 0
+        max_auth_failures = 5
         while self._running:
             try:
                 log.info(f"Connecting to Hub WebSocket: {self._ws_url}")
@@ -82,9 +83,9 @@ class PresenceManager:
                 if e.code == 1008:
                     auth_failures += 1
                     log.error(
-                        f"Hub WebSocket auth failure ({auth_failures}/5). Check HUB_SECRET_KEY."
+                        f"Hub WebSocket auth failure ({auth_failures}/{max_auth_failures}). Check HUB_SECRET_KEY."
                     )
-                    if auth_failures >= 5:
+                    if auth_failures >= max_auth_failures:
                         log.error("Too many auth failures. Giving up.")
                         self._running = False
                         break

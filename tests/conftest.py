@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from __future__ import annotations
 
 import pytest
 
@@ -64,5 +64,6 @@ def auto_cleanup_souls(monkeypatch):
         try:
             if hasattr(soul, "stop"):
                 soul.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            # It's useful to see errors during cleanup, even if we don't re-raise.
+            print(f"WARNING: Error during auto-cleanup of soul: {e}")

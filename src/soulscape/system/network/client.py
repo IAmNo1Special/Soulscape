@@ -21,16 +21,21 @@ class NetworkClient:
         self.base_url = base_url or os.getenv(
             "HUB_URL", "http://localhost:8000"
         )
-        # Security: Warn if sending secrets over unencrypted HTTP (to non-localhost)
-        if (
-            self.base_url.startswith("http://")
-            and "localhost" not in self.base_url
-            and "127.0.0.1" not in self.base_url
-        ):
+        # Security: Enforce HTTPS for remote connections
+        is_local = any(
+            h in self.base_url for h in ["localhost", "127.0.0.1", "test-hub"]
+        )
+        if self.base_url.startswith("http://") and not is_local:
             log.warning(
                 f"SECURITY WARNING: Hub URL '{self.base_url}' uses unencrypted HTTP. "
-                "Secrets will be transmitted in plain text! Please use HTTPS for production."
+                "Secrets will be transmitted in plain text! HTTPS is REQUIRED for production."
             )
+            # We log warning but allow it for now if APP_ENV is dev
+            if os.getenv("APP_ENV") != "dev":
+                raise ValueError(
+                    "Hub URL must use HTTPS for production. "
+                    f"Received: {self.base_url}"
+                )
 
         self.secret_key = secret_key or os.getenv("HUB_SECRET_KEY", "")
         self.headers = (
@@ -68,6 +73,9 @@ class NetworkClient:
             except (httpx.JSONDecodeError, ValueError):
                 detail = resp_text
 
+            # Redact secrets even from error details
+            detail = redact_secret(str(detail), self.secret_key)
+
             log.error(
                 f"Hub {method} error ({response.status_code}) at {endpoint}: {detail}"
             )
@@ -91,7 +99,10 @@ class NetworkClient:
             log.debug(f"Network GET: Hub unreachable at {endpoint} ({e})")
             return None
         except Exception as e:
-            log.error(f"Network GET error at {endpoint}: {e}")
+            err_msg = redact_secret(str(e), self.secret_key)
+            if token:
+                err_msg = redact_secret(err_msg, token)
+            log.error(f"Network GET error at {endpoint}: {err_msg}")
             return None
 
     async def _post(
@@ -109,7 +120,10 @@ class NetworkClient:
             log.debug(f"Network POST: Hub unreachable at {endpoint} ({e})")
             return None
         except Exception as e:
-            log.error(f"Network POST error at {endpoint}: {e}")
+            err_msg = redact_secret(str(e), self.secret_key)
+            if token:
+                err_msg = redact_secret(err_msg, token)
+            log.error(f"Network POST error at {endpoint}: {err_msg}")
             return None
 
     async def _delete(
@@ -133,7 +147,10 @@ class NetworkClient:
             log.debug(f"Network DELETE: Hub unreachable at {endpoint} ({e})")
             return None
         except Exception as e:
-            log.error(f"Network DELETE error at {endpoint}: {e}")
+            err_msg = redact_secret(str(e), self.secret_key)
+            if token:
+                err_msg = redact_secret(err_msg, token)
+            log.error(f"Network DELETE error at {endpoint}: {err_msg}")
             return None
 
     # --- Specific Endpoints (Placeholders for now) ---
