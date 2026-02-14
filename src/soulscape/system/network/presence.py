@@ -66,6 +66,7 @@ class PresenceManager:
         if self.secret_key:
             headers["X-Hub-Secret"] = self.secret_key
 
+        auth_failures = 0
         while self._running:
             try:
                 log.info(f"Connecting to Hub WebSocket: {self._ws_url}")
@@ -74,14 +75,20 @@ class PresenceManager:
                 ) as ws:
                     self._ws = ws
                     backoff = 1  # Reset backoff on successful connect
+                    auth_failures = 0  # Reset auth failures on success
                     log.info("WebSocket connected to Hub.")
                     await self._listen(ws)
             except websockets.exceptions.ConnectionClosed as e:
                 if e.code == 1008:
+                    auth_failures += 1
                     log.error(
-                        "Hub WebSocket connection rejected: Authentication failure (1008)."
+                        f"Hub WebSocket auth failure ({auth_failures}/5). Check HUB_SECRET_KEY."
                     )
-                    # We might want to stop trying if it's an auth failure, or slow down
+                    if auth_failures >= 5:
+                        log.error("Too many auth failures. Giving up.")
+                        self._running = False
+                        break
+
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 60)
                 else:
