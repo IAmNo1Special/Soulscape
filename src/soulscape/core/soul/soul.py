@@ -352,9 +352,6 @@ class Soul:
                     pos_list = json.loads(position)
                     new_x, new_y = float(pos_list[0]), float(pos_list[1])
                 except Exception as e:
-                    import logging
-
-                    log = logging.getLogger("soulscape")
                     log.warning(f"Failed to parse position '{position}': {e}")
                     new_x, new_y = self.x, self.y
 
