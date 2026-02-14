@@ -468,7 +468,6 @@ class SoulAgent(LlmAgent):
                     # 3. Handle Text Responses
                     # Support multiple event structures for robustness
                     text_to_log = None
-                    # DEBUG: Inspect event structure
                     if event.content and event.content.parts:
                         for part in event.content.parts:
                             if part.text:

@@ -54,21 +54,24 @@ class PresenceManager:
             ws_url = f"ws://{hub_url}"  # Default to ws if no scheme
 
         self.secret_key = os.getenv("HUB_SECRET_KEY", "")
-        self._ws_url = (
-            ws_url + f"/ws/{owner_id}?token={self.secret_key}"
-            if self.secret_key
-            else ws_url + f"/ws/{owner_id}"
-        )
+        self._ws_url = ws_url + f"/ws/{owner_id}"
 
     async def connect(self) -> None:
         """Start the WebSocket connection loop with auto-reconnect."""
         self._running = True
         backoff = 1
 
+        # Prepare headers if secret is present
+        headers = {}
+        if self.secret_key:
+            headers["X-Hub-Secret"] = self.secret_key
+
         while self._running:
             try:
                 log.info(f"Connecting to Hub WebSocket: {self._ws_url}")
-                async with websockets.connect(self._ws_url) as ws:
+                async with websockets.connect(
+                    self._ws_url, extra_headers=headers if headers else None
+                ) as ws:
                     self._ws = ws
                     backoff = 1  # Reset backoff on successful connect
                     log.info("WebSocket connected to Hub.")

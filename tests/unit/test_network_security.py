@@ -51,7 +51,8 @@ async def test_presence_manager_token_param(mock_env):
         on_soul_updated=mock_async_cb,
     )
     # PresenceManager uses HUB_URL from env if not passed
-    assert "token=test-secret-123" in pm._ws_url
+    assert "token=test-secret-123" not in pm._ws_url
+    assert pm.secret_key == "test-secret-123"
     assert "ws://test-hub/ws/test_owner" in pm._ws_url
 
 
@@ -82,9 +83,6 @@ async def test_operator_post_mock(mock_env):
         assert res["cost"] == 0.0
 
         # Verify headers were sent
-        mock_post.assert_called_once()
-        args, kwargs = mock_post.call_args
-        assert kwargs["json"] == payload
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
         assert kwargs["json"] == payload

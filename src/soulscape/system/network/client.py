@@ -16,10 +16,8 @@ class NetworkClient:
     def __init__(
         self, base_url: Optional[str] = None, secret_key: Optional[str] = None
     ):
-        self.base_url = (
-            base_url
-            or os.getenv("HUB_URL")
-            or os.getenv("HUB_URL", "http://localhost:8000")
+        self.base_url = base_url or os.getenv(
+            "HUB_URL", "http://localhost:8000"
         )
         self.secret_key = secret_key or os.getenv("HUB_SECRET_KEY", "")
         self.headers = (
