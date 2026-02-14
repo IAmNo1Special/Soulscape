@@ -41,7 +41,7 @@ class PresenceManager:
         self._running = False
 
         # Build WS URL from Hub URL (http -> ws)
-        hub_url = os.getenv("HUB_URL")
+        hub_url = os.getenv("HUB_URL", "http://localhost:8000")
         # Case-insensitive replacement of HTTP scheme
         hub_url_lower = hub_url.lower()
         if hub_url_lower.startswith("https://"):
