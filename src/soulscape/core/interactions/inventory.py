@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 
 from soulscape.utils.security import sanitize_content, sanitize_name
 
-
 if TYPE_CHECKING:
     from ..soul.soul import Soul
 

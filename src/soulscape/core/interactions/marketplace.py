@@ -24,7 +24,7 @@ class MarketListing:
     """Represents an item listed for sale in the marketplace."""
 
     listing_id: str
-    seller_id: int
+    seller_id: str
     seller_name: str
     item: Item
     price: float
@@ -113,7 +113,13 @@ class Marketplace:
                 return
 
             # Load Essence Fund
-            self.essence_fund = float(data.get("essence_fund", 0.0))
+            try:
+                self.essence_fund = float(data.get("essence_fund", 0.0))
+            except (ValueError, TypeError):
+                log.warning(
+                    "Invalid essence_fund in data store. Defaulting to 0.0"
+                )
+                self.essence_fund = 0.0
 
             # Load Listings
             listings_data = data.get("listings", [])
@@ -152,12 +158,17 @@ class Marketplace:
         await self._save_data()
 
     async def add_listing(
-        self, seller_id: int, seller_name: str, item: Item, price: float
+        self,
+        seller_id: str,
+        seller_name: str,
+        item: Item,
+        price: float,
+        token: str | None = None,
     ) -> str:
         """Creates a new listing and adds it to the marketplace.
 
         Args:
-            seller_id: The ID of the soul selling the item.
+            seller_id: The unique ID (string) of the soul selling the item.
             seller_name: The name of the soul (for display).
             item: The item object being sold.
             price: The cost in Essence.
@@ -177,29 +188,37 @@ class Marketplace:
         )
         self.listings[listing_id] = listing
         # Granular Hub update
-        await self.store.add_listing(listing.to_dict())
+        await self.store.add_listing(listing.to_dict(), token=token)
         # For local fallback, we still usually save everything
         await self._save_data()
         return listing_id
 
-    async def remove_listing(self, listing_id: str) -> MarketListing | None:
+    async def remove_listing(
+        self, listing_id: str, token: str | None = None
+    ) -> MarketListing | None:
         """Removes a listing from the marketplace (Cancellation)."""
         listing = self.listings.pop(listing_id, None)
         if listing:
             # Granular Hub update (pure delete)
-            await self.store.delete_listing(listing_id)
+            await self.store.delete_listing(listing_id, token=token)
             await self._save_data()
         return listing
 
     async def buy_listing(
-        self, listing_id: str, buyer_id: int, buyer_name: str
+        self,
+        listing_id: str,
+        buyer_id: str,
+        buyer_name: str,
+        token: str | None = None,
     ) -> MarketListing | None:
         """Executes a purchase of a listing (Buying)."""
         listing = self.listings.pop(listing_id, None)
         if listing:
             # Granular Hub update (trigger tax)
             await self.store.buy_listing(
-                listing_id, {"buyer_id": buyer_id, "buyer_name": buyer_name}
+                listing_id,
+                {"buyer_id": buyer_id, "buyer_name": buyer_name},
+                token=token,
             )
             await self._save_data()
         return listing

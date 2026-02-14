@@ -34,39 +34,60 @@ class RemoteStore(DataStore):
         return True
 
     # --- Hub-specific Granular Operations ---
-    async def add_listing(self, listing_data: dict[str, Any]) -> bool:
-        res = await self.client.post_listing(listing_data)
+    async def add_listing(
+        self, listing_data: dict[str, Any], token: str | None = None
+    ) -> bool:
+        res = await self.client.post_listing(listing_data, token=token)
         return res is not None and res.get("status") == "success"
 
-    async def delete_listing(self, listing_id: str) -> bool:
+    async def delete_listing(
+        self, listing_id: str, token: str | None = None
+    ) -> bool:
         # Pure cancellation (different from 'buy')
-        res = await self.client.delete_listing(listing_id)
+        res = await self.client.delete_listing(listing_id, token=token)
         return res is not None and res.get("status") == "success"
 
-    async def add_post(self, post_data: dict[str, Any]) -> bool:
-        res = await self.client.post_message(post_data)
+    async def add_post(
+        self, post_data: dict[str, Any], token: str | None = None
+    ) -> bool:
+        res = await self.client.post_message(post_data, token=token)
         return res is not None and res.get("status") == "success"
 
-    async def add_reply(self, reply_data: dict[str, Any]) -> bool:
-        res = await self.client.post_reply(reply_data)
+    async def add_reply(
+        self, reply_data: dict[str, Any], token: str | None = None
+    ) -> bool:
+        res = await self.client.post_reply(reply_data, token=token)
         return res is not None and res.get("status") == "success"
 
     async def edit_post(
-        self, message_id: str, content: str, author_id: str
+        self,
+        message_id: str,
+        content: str,
+        author_id: str,
+        token: str | None = None,
     ) -> bool:
         res = await self.client.edit_message(
-            message_id, {"content": content, "author_id": author_id}
+            message_id,
+            {"content": content, "author_id": author_id},
+            token=token,
         )
         return res is not None and res.get("status") == "success"
 
-    async def delete_post(self, message_id: str, author_id: str) -> bool:
-        res = await self.client.delete_message(message_id, author_id)
+    async def delete_post(
+        self, message_id: str, author_id: str, token: str | None = None
+    ) -> bool:
+        res = await self.client.delete_message(
+            message_id, author_id, token=token
+        )
         return res is not None and res.get("status") == "success"
 
     async def buy_listing(
-        self, listing_id: str, buyer_data: dict[str, Any]
+        self,
+        listing_id: str,
+        buyer_data: dict[str, Any],
+        token: str | None = None,
     ) -> bool:
-        res = await self.client.buy_item(listing_id, buyer_data)
+        res = await self.client.buy_item(listing_id, buyer_data, token=token)
         return res is not None and res.get("status") == "success"
 
     async def update_funds(self, amount: float) -> bool:

@@ -50,6 +50,9 @@ addopts = "-ra -q --asyncio-mode=auto"
 testpaths = [
     "tests",
 ]
+filterwarnings = [
+    "ignore:\\[EXPERIMENTAL\\] ResumabilityConfig:UserWarning",
+]
 pythonpath = [
     "src",
 ]

@@ -38,6 +38,7 @@ class MockSoul:
         self.local_instance_id = "test_sid"
         self.schedule_task = MagicMock()
         self.command_queue = MagicMock()
+        self.secret = "mock_secret"
 
 
 def test_move_command():
@@ -150,7 +151,7 @@ def test_sell_item_command():
     asyncio.run(coro)
 
     soul.marketplace.add_listing.assert_awaited_with(
-        soul.soul_id, soul.biology.name, mock_item, 50.0
+        soul.soul_id, soul.biology.name, mock_item, 50.0, token="mock_secret"
     )
 
 

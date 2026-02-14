@@ -30,7 +30,7 @@ async def async_save_souls(
     Returns:
         True if save succeeded, False otherwise.
     """
-    if os.getenv("SOULSCAPE_HUB_URL"):
+    if os.getenv("HUB_URL"):
         from soulscape.system.network.client import NetworkClient
 
         try:
@@ -53,7 +53,7 @@ def save_souls(souls: list[dict[str, Any]]) -> bool:
     NOTE: Synchronous Hub saves will block the current thread.
     If called from the main thread, this can freeze the GUI.
     """
-    if os.getenv("SOULSCAPE_HUB_URL"):
+    if os.getenv("HUB_URL"):
         from soulscape.system.network.client import NetworkClient
         from soulscape.utils.helpers import safe_run_async
 
@@ -97,7 +97,7 @@ def save_souls(souls: list[dict[str, Any]]) -> bool:
 
 async def async_load_souls() -> list[dict[str, Any]]:
     """Async version of load_souls."""
-    if os.getenv("SOULSCAPE_HUB_URL"):
+    if os.getenv("HUB_URL"):
         from soulscape.system.network.client import NetworkClient
 
         try:
@@ -119,7 +119,7 @@ def load_souls() -> list[dict[str, Any]]:
     Returns:
         List of raw soul dictionaries, or empty list if none exist.
     """
-    if os.getenv("SOULSCAPE_HUB_URL"):
+    if os.getenv("HUB_URL"):
         from soulscape.system.network.client import NetworkClient
         from soulscape.utils.helpers import safe_run_async
 

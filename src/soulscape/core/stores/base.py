@@ -32,34 +32,51 @@ class DataStore(ABC):
         pass
 
     # --- Hub-specific Granular Operations (Optional for LocalStore) ---
-    async def add_listing(self, listing_data: dict[str, Any]) -> bool:
+    async def add_listing(
+        self, listing_data: dict[str, Any], token: str | None = None
+    ) -> bool:
         """Sends a new listing to the store."""
         return True
 
-    async def delete_listing(self, listing_id: str) -> bool:
+    async def delete_listing(
+        self, listing_id: str, token: str | None = None
+    ) -> bool:
         """Removes a listing from the store."""
         return True
 
-    async def add_post(self, post_data: dict[str, Any]) -> bool:
+    async def add_post(
+        self, post_data: dict[str, Any], token: str | None = None
+    ) -> bool:
         """Sends a new social post to the store."""
         return True
 
-    async def add_reply(self, reply_data: dict[str, Any]) -> bool:
+    async def add_reply(
+        self, reply_data: dict[str, Any], token: str | None = None
+    ) -> bool:
         """Sends a social reply to the store."""
         return True
 
     async def edit_post(
-        self, message_id: str, content: str, author_id: str
+        self,
+        message_id: str,
+        content: str,
+        author_id: str,
+        token: str | None = None,
     ) -> bool:
         """Updates an existing post/reply in the store."""
         return True
 
-    async def delete_post(self, message_id: str, author_id: str) -> bool:
+    async def delete_post(
+        self, message_id: str, author_id: str, token: str | None = None
+    ) -> bool:
         """Removes a post/reply from the store."""
         return True
 
     async def buy_listing(
-        self, listing_id: str, buyer_data: dict[str, Any]
+        self,
+        listing_id: str,
+        buyer_data: dict[str, Any],
+        token: str | None = None,
     ) -> bool:
         """Completes a marketplace purchase in the store."""
         return True

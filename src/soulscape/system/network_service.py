@@ -76,6 +76,8 @@ class NetworkService:
         try:
             # 1. Disconnect presence (WebSocket)
             await self.presence_manager.disconnect()
+            # 2. Close HTTP client
+            await self.client.close()
         except Exception as e:
             log.error(f"Error during network shutdown: {e}")
         finally:

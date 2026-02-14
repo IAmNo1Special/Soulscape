@@ -140,7 +140,12 @@ class MessageBoard:
             log.error(f"Failed to save message board data to store: {e}")
 
     async def create_post(
-        self, author_id: str, author_name: str, title: str, content: str
+        self,
+        author_id: str,
+        author_name: str,
+        title: str,
+        content: str,
+        token: str | None = None,
     ) -> Message:
         """Creates and saves a new root post asynchronously."""
         message_id = str(uuid.uuid4())[:12]
@@ -153,12 +158,17 @@ class MessageBoard:
         )
         self.posts[message_id] = post
         # Granular Hub update
-        await self.store.add_post(post.to_dict())
+        await self.store.add_post(post.to_dict(), token=token)
         await self._save_data()
         return post
 
     async def create_reply(
-        self, author_id: str, author_name: str, parent_id: str, content: str
+        self,
+        author_id: str,
+        author_name: str,
+        parent_id: str,
+        content: str,
+        token: str | None = None,
     ) -> Message | None:
         """Creates a reply asynchronously."""
         # Find the root thread
@@ -187,14 +197,19 @@ class MessageBoard:
                     "author_id": author_id,
                     "author_name": author_name,
                     "content": content,
-                }
+                },
+                token=token,
             )
             await self._save_data()
             return reply
         return None
 
     async def edit_message(
-        self, author_id: str, message_id: str, new_content: str
+        self,
+        author_id: str,
+        message_id: str,
+        new_content: str,
+        token: str | None = None,
     ) -> bool:
         """Edits an existing message if the author matches.
 
@@ -213,7 +228,9 @@ class MessageBoard:
                 or author_id == Operator.ID
             ):
                 # Granular Hub update
-                await self.store.edit_post(message_id, new_content, author_id)
+                await self.store.edit_post(
+                    message_id, new_content, author_id, token=token
+                )
                 self.posts[message_id].content = new_content
                 await self._save_data()
                 return True
@@ -222,14 +239,19 @@ class MessageBoard:
         # Recursive search
         for post in self.posts.values():
             if await self._edit_recursive(
-                post, author_id, message_id, new_content
+                post, author_id, message_id, new_content, token=token
             ):
                 await self._save_data()
                 return True
         return False
 
     async def _edit_recursive(
-        self, parent: Message, author_id: str, target_id: str, new_content: str
+        self,
+        parent: Message,
+        author_id: str,
+        target_id: str,
+        new_content: str,
+        token: str | None = None,
     ) -> bool:
         """Helper to find and edit valid reply."""
         for reply in parent.replies:
@@ -237,18 +259,20 @@ class MessageBoard:
                 if reply.author_id == author_id or author_id == Operator.ID:
                     # Granular Hub update
                     await self.store.edit_post(
-                        target_id, new_content, author_id
+                        target_id, new_content, author_id, token=token
                     )
                     reply.content = new_content
                     return True
                 return False
             if await self._edit_recursive(
-                reply, author_id, target_id, new_content
+                reply, author_id, target_id, new_content, token=token
             ):
                 return True
         return False
 
-    async def delete_message(self, author_id: str, message_id: str) -> bool:
+    async def delete_message(
+        self, author_id: str, message_id: str, token: str | None = None
+    ) -> bool:
         """Deletes a message if the author matches.
 
         Args:
@@ -265,7 +289,7 @@ class MessageBoard:
                 or author_id == Operator.ID
             ):
                 # Granular Hub update
-                await self.store.delete_post(message_id, author_id)
+                await self.store.delete_post(message_id, author_id, token=token)
                 del self.posts[message_id]
                 await self._save_data()
                 return True
@@ -273,13 +297,19 @@ class MessageBoard:
 
         # Check replies (recursive search)
         for post in self.posts.values():
-            if await self._delete_recursive(post, author_id, message_id):
+            if await self._delete_recursive(
+                post, author_id, message_id, token=token
+            ):
                 await self._save_data()
                 return True
         return False
 
     async def _delete_recursive(
-        self, parent: Message, author_id: str, target_id: str
+        self,
+        parent: Message,
+        author_id: str,
+        target_id: str,
+        token: str | None = None,
     ) -> bool:
         """Helper to find and delete valid reply.
 
@@ -295,12 +325,16 @@ class MessageBoard:
             if reply.message_id == target_id:
                 if reply.author_id == author_id or author_id == Operator.ID:
                     # Granular Hub update
-                    await self.store.delete_post(target_id, author_id)
+                    await self.store.delete_post(
+                        target_id, author_id, token=token
+                    )
                     parent.replies.pop(i)
                     return True
                 return False
             # Recurse
-            if await self._delete_recursive(reply, author_id, target_id):
+            if await self._delete_recursive(
+                reply, author_id, target_id, token=token
+            ):
                 return True
         return False
 

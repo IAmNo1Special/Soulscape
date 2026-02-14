@@ -14,16 +14,38 @@ def sanitize_name(name: str) -> str:
     return safe[:50].strip()
 
 
-def sanitize_content(content: str) -> str:
+def redact_secret(text: str, secret: str) -> str:
+    """Redacts a sensitive secret from a string to prevent leakage in logs."""
+    if not secret or not text:
+        return text
+    return text.replace(secret, "[REDACTED]")
+
+
+def sanitize_content(content: str, is_untrusted: bool = True) -> str:
     """Sanitizes message content to prevent indirect prompt injection.
 
-    Removes potentially malicious system-like instruction sequences.
+    Args:
+        content: The text to sanitize.
+        is_untrusted: If True, wraps the content in tags to mark it as untrusted.
     """
     if not content:
         return ""
 
-    # Remove markdown block delimiters that might be used to frame fake instructions
-    # e.g. "]] [SYSTEM]"
-    clean = content.replace("[", "(").replace("]", ")")
+    # Remove markdown block delimiters and other framing characters
+    clean = (
+        content.replace("[", "(")
+        .replace("]", ")")
+        .replace("{", "(")
+        .replace("}", ")")
+    )
+    # Escape tags to prevent spoofing of markers
+    clean = clean.replace("<", "&lt;").replace(">", "&gt;")
+
     # Limit length to prevent context flooding
-    return clean[:1000].strip()
+    clean = clean[:1000].strip()
+
+    if is_untrusted:
+        # Wrap in clear markers for the LLM
+        return f"\n<UNTRUSTED_CONTENT>\n{clean}\n</UNTRUSTED_CONTENT>\n"
+
+    return clean
