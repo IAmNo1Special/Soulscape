@@ -66,7 +66,7 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(soul2.secret, "preset-secret")
 
             # Case 3: Persistence
-            data = soul2.to_dict()
+            data = soul2.to_dict(include_secret=True)
             self.assertIn("secret", data)
             self.assertEqual(data["secret"], "preset-secret")
 

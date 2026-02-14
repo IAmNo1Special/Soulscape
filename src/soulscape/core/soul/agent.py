@@ -441,8 +441,6 @@ class SoulAgent(LlmAgent):
                 )
             ) as events:
                 async for event in events:
-                    # TRACE: Log every event type to see what's coming through
-                    log.debug(f"Agent event received: {type(event).__name__}")
 
                     # Capture invocation_id for potential resumption
                     if event.invocation_id:

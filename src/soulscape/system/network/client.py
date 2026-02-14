@@ -30,14 +30,21 @@ class NetworkClient:
     ) -> None:
         """Logs detailed error information for failed requests."""
         try:
-            detail = response.json().get("detail", "No detail")
+            # Avoid leaking potentially large or binary response bodies
+            resp_text = response.text
+            if len(resp_text) > 500:
+                resp_text = resp_text[:500] + "... [truncated]"
+
+            detail = "No detail"
+            try:
+                detail = response.json().get("detail", "No detail")
+            except (httpx.JSONDecodeError, ValueError):
+                detail = resp_text
+
             log.error(
                 f"Hub {method} error ({response.status_code}) at {endpoint}: {detail}"
             )
-        except httpx.JSONDecodeError:
-            log.error(
-                f"Hub {method} error ({response.status_code}) at {endpoint}. Response body: {response.text[:200]}"
-            )
+
         except Exception as e:
             log.error(
                 f"Hub {method} error ({response.status_code}) at {endpoint}: {e}"
@@ -79,6 +86,24 @@ class NetworkClient:
             return None
         except Exception as e:
             log.error(f"Network POST error at {endpoint}: {e}")
+            return None
+
+    async def _delete(self, endpoint: str, token: Optional[str] = None) -> Any:
+        try:
+            headers = {"X-Hub-Secret": token} if token else self.headers
+            async with httpx.AsyncClient(
+                base_url=self.base_url, headers=headers
+            ) as client:
+                response = await client.delete(endpoint)
+                if response.status_code >= 400:
+                    self._handle_error_response(response, "DELETE", endpoint)
+                    return None
+                return response.json()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            log.debug(f"Network DELETE: Hub unreachable at {endpoint} ({e})")
+            return None
+        except Exception as e:
+            log.error(f"Network DELETE error at {endpoint}: {e}")
             return None
 
     # --- Specific Endpoints (Placeholders for now) ---
@@ -126,20 +151,16 @@ class NetworkClient:
     async def delete_message(
         self, message_id: str, author_id: str, token: Optional[str] = None
     ) -> Any:
-        # Pydantic expect author_id in some way? Or query param?
-        # Hub expects it in delete_message(message_id, author_id)
-        # We'll pass it as query param or extra data if we want
-        return await self._post(
-            f"/social/delete/{quote(message_id)}?author_id={quote(str(author_id))}",
-            {},
+        return await self._delete(
+            f"/social/delete/{quote(message_id)}?author_id={quote(author_id)}",
             token=token,
         )
 
     async def delete_listing(
         self, listing_id: str, token: Optional[str] = None
     ) -> Any:
-        return await self._post(
-            f"/marketplace/delete/{quote(listing_id)}", {}, token=token
+        return await self._delete(
+            f"/marketplace/delete/{quote(listing_id)}", token=token
         )
 
     async def update_funds(self, amount: float) -> Any:
