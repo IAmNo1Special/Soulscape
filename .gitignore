@@ -21,3 +21,7 @@ HUB_INTEGRATION_UPDATE.md
 .chroma_db/
 .pytest_cache/
 
+
+# Data & Coverage
+.coverage
+*.log

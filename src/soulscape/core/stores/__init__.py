@@ -7,7 +7,7 @@ from .remote_store import RemoteStore
 
 def get_default_store() -> DataStore:
     """Selects the appropriate store based on environment configuration."""
-    if os.getenv("SOULSCAPE_HUB_URL"):
+    if os.getenv("HUB_URL"):
         return RemoteStore()
     return LocalStore()
 

@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 import pytest
+
+from soulscape.core.soul.soul import Soul
 
 # Ensure imports work (handled by pyproject.toml now)
 
@@ -37,3 +41,29 @@ def mock_grimorium(mocker):
 def mock_vision(mocker):
     """Mock pyautogui to prevent screenshotting."""
     return mocker.patch("pyautogui.screenshot")
+
+
+@pytest.fixture(autouse=True)
+def auto_cleanup_souls(monkeypatch):
+    """Automatically tracks and cleans up Soul instances created during tests."""
+    created_souls = []
+
+    # Capture the original unbound __init__
+    original_init = Soul.__init__
+
+    def wrapped_init(self, *args, **kwargs):
+        created_souls.append(self)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(Soul, "__init__", wrapped_init)
+
+    yield
+
+    # Teardown: Stop all tracked souls
+    for soul in created_souls:
+        try:
+            if hasattr(soul, "stop"):
+                soul.stop()
+        except Exception as e:
+            # It's useful to see errors during cleanup, even if we don't re-raise.
+            print(f"WARNING: Error during auto-cleanup of soul: {e}")

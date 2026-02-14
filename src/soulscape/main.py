@@ -6,6 +6,7 @@ Manages a single transparent full-screen window and renders multiple souls withi
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import random
@@ -91,6 +92,7 @@ class SoulscapeApp:
             target=self._run_event_loop, daemon=True
         )
         self._loop_thread.start()
+        self._running: bool = False
 
     def _run_event_loop(self) -> None:
         """Runs the background asyncio event loop."""
@@ -108,6 +110,7 @@ class SoulscapeApp:
 
     def run(self) -> None:
         """Starts the application."""
+        self._running = True
         log.info("Starting Application...")
 
         # Initialize Persistent GUI Service
@@ -149,8 +152,10 @@ class SoulscapeApp:
         self.load_initial_souls()
 
         # 5. Start Network Service
-        if os.getenv("SOULSCAPE_HUB_URL"):
+        if os.getenv("HUB_URL"):
             self.network_service.start()
+            # Force initial secure sync of loaded souls (HTTP)
+            self.initial_hub_sync()
 
         self.window_manager.window.set_visible(True)
         self._setup_tray()
@@ -301,13 +306,21 @@ class SoulscapeApp:
                 for soul in self.active_souls
                 if soul.owner_id == self.instance_id
             ]
-            data = [soul.to_dict() for soul in owned_souls]
+            # 1. Persistence Data (Includes Secrets - Secure Disk)
+            persistence_data = [
+                soul.to_dict(include_secret=True) for soul in owned_souls
+            ]
+
+            # 2. Network Broadcast Data (Excludes Secrets - Public)
+            network_data = [
+                soul.to_dict(include_secret=False) for soul in owned_souls
+            ]
 
             # Broadcast update via NetworkService Upstream Queue
-            if data:
-                self.network_service.enqueue_update({"souls": data})
+            if network_data:
+                self.network_service.enqueue_update({"souls": network_data})
 
-            await async_save_souls(data, owner_id=self.instance_id)
+            await async_save_souls(persistence_data, owner_id=self.instance_id)
 
             # Also save global settings
             current_settings = load_settings()
@@ -323,6 +336,35 @@ class SoulscapeApp:
 
         # Fire and forget via background loop
         self._run_coro(self.async_persist_souls_state())
+
+    def initial_hub_sync(self) -> None:
+        """Triggers a secure HTTP sync of souls to the Hub."""
+        self._run_coro(self.async_initial_hub_sync())
+
+    async def async_initial_hub_sync(self) -> None:
+        """Securely registers owned souls with the Hub via HTTP."""
+        owned_souls = [
+            soul
+            for soul in self.active_souls
+            if soul.owner_id == self.instance_id
+        ]
+        if not owned_souls:
+            return
+
+        # DATA SPLITTING: secrets included for secure HTTP registration
+        secure_data = [
+            soul.to_dict(include_secret=True) for soul in owned_souls
+        ]
+
+        try:
+            log.info("Performing initial secure Hub sync via HTTP...")
+            # We use the bulk post_souls endpoint
+            await self.network_service.client.post_souls(
+                souls_data=secure_data,
+                owner_id=self.instance_id,
+            )
+        except Exception as e:
+            log.error(f"Initial Hub sync failed: {e}")
 
     # --- Sync Event Handlers (Called from Game Loop) ---
 
@@ -434,7 +476,7 @@ class SoulscapeApp:
                     or abs(soul.x - (last_pos[0] or 0)) > 1.0
                     or abs(soul.y - (last_pos[1] or 0)) > 1.0
                 ):
-                    updates.append(soul.to_dict())
+                    updates.append(soul.to_dict(include_secret=False))
                     self.soul_last_broadcast_pos[soul.biology.soul_id] = (
                         soul.x,
                         soul.y,
@@ -832,27 +874,42 @@ class SoulscapeApp:
             soul.stop()
 
         # 4. Stop background persistence loop
-        if self._background_loop and self._background_loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                self._shutdown_async(), self._background_loop
-            )
+        if self._loop and self._loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._shutdown_async(), self._loop
+                ).result(timeout=5)
+            except concurrent.futures.TimeoutError:
+                log.warning("Background loop shutdown timed out.")
+            except Exception as e:
+                log.warning(
+                    f"Background loop shutdown failed unexpectedly: {e}"
+                )
             if (
-                self._background_thread
-                and threading.current_thread() != self._background_thread
+                self._loop_thread
+                and threading.current_thread() != self._loop_thread
             ):
-                self._background_thread.join(timeout=2.0)
+                self._loop_thread.join(timeout=2.0)
 
         # 5. Stop GUI services
         if self.tray_controller:
             self.tray_controller.stop()
-        if self.gui_service:
-            self.gui_service.stop()
+        if self.gui_process and self.gui_process.is_alive():
+            # Graceful shutdown attempt
+            if self.gui_command_queue:
+                self.gui_command_queue.put({"type": GuiCommand.EXIT})
+
+            self.gui_process.join(timeout=2.0)
+
+            # Force kill if still alive
+            if self.gui_process.is_alive():
+                log.warning("GUI process did not exit gracefully, terminating.")
+                self.gui_process.terminate()
+                self.gui_process.join(timeout=1.0)
         if self.overlay_window:
             self.overlay_window.close()
 
         log.info("Cleanup complete. Exiting.")
-        # Only sys.exit if we are the main thread and not inside a finally block of run()
-        # Actually, pyglet.app.exit() is safer for the main loop.
         pyglet.app.exit()
 
     async def _shutdown_async(self) -> None:
@@ -861,7 +918,7 @@ class SoulscapeApp:
             # Cancel all tasks (like pending persistence)
             tasks = [
                 t
-                for t in asyncio.all_tasks(self._background_loop)
+                for t in asyncio.all_tasks(self._loop)
                 if t is not asyncio.current_task()
             ]
             for t in tasks:
@@ -869,8 +926,8 @@ class SoulscapeApp:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
         finally:
-            if self._background_loop:
-                self._background_loop.stop()
+            if self._loop:
+                self._loop.stop()
 
 
 def main() -> None:

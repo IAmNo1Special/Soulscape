@@ -1,15 +1,15 @@
 # Domains
-Survival, Resource Management, Navigation, Perception, Combat, Interaction
+Survival, Resource Management, Perception, Navigation, Combat, Self-Maintenance
 
 # Summary
-This toolset provides an agent with core capabilities for autonomous operation within an environment, focusing on fundamental survival, interaction, and exploration. It facilitates resource acquisition and consumption to maintain vital stats, enables perception of nearby entities, supports directed spatial navigation, and includes direct combat functionality.
+This set of tools provides an agent with core functionalities for environmental interaction, self-preservation, and basic engagement. Capabilities span resource acquisition and consumption for critical needs, sensory perception of the immediate surroundings, spatial navigation, and direct offensive actions against other entities. The suite enables agents to sustain vital stats, gather intelligence, maneuver, and participate in conflict within a dynamic environment.
 
 # Major Capabilities
--   **Resource Acquisition**: Agents can actively search their immediate surroundings to discover and secure essential resources such as water and food, which are then stored for future use.
--   **Self-Sustenance**: Agents are capable of consuming acquired resources (food and drink) from their inventory to replenish critical physiological parameters like hydration and satiety levels.
--   **Environmental Perception**: Agents possess the ability to scan their vicinity for other entities (souls), providing relative directional and distance information for detected presences.
--   **Spatial Navigation**: Agents can initiate movement to specified absolute coordinates within the operational environment, engaging a physics engine for controlled traversal.
--   **Direct Combat**: Agents are equipped with a direct attack mechanism, allowing them to engage and inflict damage upon other entities based on internal statistics.
+-   **Resource Acquisition**: Agents can actively search the environment to discover and secure essential items such as food and clean water, adding them to their inventory for later use.
+-   **Self-Maintenance & Consumption**: Agents possess the ability to consume acquired resources (food, water) from their inventory to restore critical internal states like hydration and satiety/energy levels.
+-   **Environmental Perception**: Agents can utilize sensory input to scan their immediate vicinity, detecting other entities and determining their relative positions and distances.
+-   **Spatial Locomotion**: Agents are capable of initiating precise, targeted movement to specific coordinates within the operational environment, facilitating travel and positioning.
+-   **Direct Offensive Action**: Agents can engage other entities in combat, executing attacks that inflict damage based on predefined statistical parameters.
 
 # Key Search Keywords
-Survival, Resource Management, Navigation, Perception, Combat, Hydration, Sustenance, Movement, Detection, Attack, Exploration.
+Survival, Resource Management, Navigation, Perception, Combat, Hydration, Satiety, Inventory, Movement, Attack, Environment Scan

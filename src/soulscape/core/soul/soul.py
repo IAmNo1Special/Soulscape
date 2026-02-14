@@ -8,6 +8,7 @@ import json
 import math
 import random
 import time
+import uuid
 from typing import Any
 
 from ...constants import SOUL_HEIGHT, SOUL_WIDTH
@@ -36,6 +37,7 @@ class Soul:
         inventory: An Inventory instance for holding items.
         essence: The currency used for social and magical actions.
         window_physics: A SoulPhysics instance handling screen movement.
+        secret: A private UUID key used for Hub authentication (V3).
     """
 
     @classmethod
@@ -98,6 +100,7 @@ class Soul:
             local_instance_id=kwargs.get("local_instance_id"),
             soul_id=data.get("soul_id"),
             task_scheduler=task_scheduler,
+            secret=data.get("secret"),
         )
 
         # Restore soul instance features using biology helper (handles flat/nested)
@@ -141,6 +144,7 @@ class Soul:
         local_instance_id: str | None = None,
         soul_id: str | None = None,
         task_scheduler: Any = None,
+        secret: str | None = None,
     ) -> None:
         """Initializes a new Soul entity.
 
@@ -179,6 +183,9 @@ class Soul:
         self.screen_width: int = screen_width
         self.screen_height: int = screen_height
         self.task_scheduler: Any = task_scheduler
+
+        # Hub V3 Authentication
+        self.secret: str = secret or str(uuid.uuid4())
 
         self.citizenship: list[str] = []
 
@@ -259,16 +266,20 @@ class Soul:
 
     # --- Main Update ---
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, include_secret: bool = False) -> dict[str, Any]:
         """Serializes the soul's current state to a portable dictionary format.
 
         Captures vital signs, position, and possessions for persistence.
 
         Returns:
             A dictionary containing the soul's serialized representation.
-        """
 
-        return {
+        Args:
+            include_secret: Whether to include the authentication secret.
+                            Defaults to `False` for security. Set this to `True` only
+                            for persistence or secure registration with the Hub.
+        """
+        data = {
             "soul_id": self.biology.soul_id,
             "owner_id": self.owner_id,
             **self.biology.to_flat_dict(),
@@ -279,6 +290,9 @@ class Soul:
             "essence": self.essence,
             "inventory": self.inventory.to_dict(),
         }
+        if include_secret:
+            data["secret"] = self.secret
+        return data
 
     def create_snapshot(self) -> dict[str, Any]:
         """Creates a thread-safe snapshot of the soul's current state.
@@ -290,8 +304,8 @@ class Soul:
         Returns:
             A dictionary containing a completely decoupled snapshot of the soul.
         """
-        # Reuse to_dict for the base data as it already serializes to primitives
-        snapshot = self.to_dict()
+        # Reuse to_dict for the base data but exclude secret for security
+        snapshot = self.to_dict(include_secret=False)
 
         # Add volatile/runtime-only data that to_dict might skip but Agent needs
         # (Currently to_dict is quite comprehensive, but we separate intent here)

@@ -187,7 +187,11 @@ class SellItemCommand(Command):
         async def _do_sell():
             try:
                 await soul.marketplace.add_listing(
-                    soul.soul_id, soul.biology.name, item, self.price
+                    soul.soul_id,
+                    soul.biology.name,
+                    item,
+                    self.price,
+                    token=soul.secret,
                 )
                 log.info(f"Marketplace listing confirmed: {item.name}")
             except Exception as e:
@@ -237,7 +241,10 @@ class BuyItemCommand(Command):
             try:
                 # Essence is deducted by Hub upon successful buy_listing
                 listing = await soul.marketplace.buy_listing(
-                    self.listing_id, soul.soul_id, soul.biology.name
+                    self.listing_id,
+                    soul.soul_id,
+                    soul.biology.name,
+                    token=soul.secret,
                 )
                 if listing and listing.item:
                     soul.command_queue.put(
@@ -282,7 +289,9 @@ class CancelListingCommand(Command):
 
         async def _do_cancel():
             try:
-                listing = await soul.marketplace.remove_listing(self.listing_id)
+                listing = await soul.marketplace.remove_listing(
+                    self.listing_id, token=soul.secret
+                )
                 if listing and listing.item:
                     soul.command_queue.put(
                         InventoryCommand(action="add", item=listing.item)

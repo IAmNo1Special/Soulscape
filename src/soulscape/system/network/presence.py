@@ -41,7 +41,7 @@ class PresenceManager:
         self._running = False
 
         # Build WS URL from Hub URL (http -> ws)
-        hub_url = os.getenv("SOULSCAPE_HUB_URL", "http://localhost:8000")
+        hub_url = os.getenv("HUB_URL", "http://localhost:8000")
         # Case-insensitive replacement of HTTP scheme
         hub_url_lower = hub_url.lower()
         if hub_url_lower.startswith("https://"):
@@ -52,6 +52,8 @@ class PresenceManager:
             ws_url = "ws://" + hub_url[7:]  # Remove "http://" and add "ws://"
         else:
             ws_url = f"ws://{hub_url}"  # Default to ws if no scheme
+
+        self.secret_key = os.getenv("HUB_SECRET_KEY", "")
         self._ws_url = ws_url + f"/ws/{owner_id}"
 
     async def connect(self) -> None:
@@ -59,14 +61,41 @@ class PresenceManager:
         self._running = True
         backoff = 1
 
+        # Prepare headers if secret is present
+        headers = {}
+        if self.secret_key:
+            headers["X-Hub-Secret"] = self.secret_key
+
+        auth_failures = 0
+        max_auth_failures = 5
         while self._running:
             try:
                 log.info(f"Connecting to Hub WebSocket: {self._ws_url}")
-                async with websockets.connect(self._ws_url) as ws:
+                async with websockets.connect(
+                    self._ws_url, extra_headers=headers if headers else None
+                ) as ws:
                     self._ws = ws
                     backoff = 1  # Reset backoff on successful connect
+                    auth_failures = 0  # Reset auth failures on success
                     log.info("WebSocket connected to Hub.")
                     await self._listen(ws)
+            except websockets.exceptions.ConnectionClosed as e:
+                if e.code == 1008:
+                    auth_failures += 1
+                    log.error(
+                        f"Hub WebSocket auth failure ({auth_failures}/{max_auth_failures}). Check HUB_SECRET_KEY."
+                    )
+                    if auth_failures >= max_auth_failures:
+                        log.error("Too many auth failures. Giving up.")
+                        self._running = False
+                        break
+
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+                else:
+                    log.warning(f"WebSocket connection closed: {e}")
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 30)
             except (
                 ConnectionError,
                 OSError,
