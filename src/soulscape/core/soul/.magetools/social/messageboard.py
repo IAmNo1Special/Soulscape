@@ -134,9 +134,9 @@ async def social_read(
             }
 
         formatted_thread = (
-            f"THREAD: {sanitize_content(thread.title)}\n"
+            f"THREAD: {sanitize_content(thread.title, is_untrusted=True)}\n"
             f"Author: {sanitize_name(thread.author_name)} [ID: {thread.message_id}]\n"
-            f"Content: {sanitize_content(thread.content)}\n"
+            f"Content: {sanitize_content(thread.content, is_untrusted=True)}\n"
             "--- REPLIES ---"
         )
 
@@ -144,7 +144,7 @@ async def social_read(
             res = ""
             for r in replies:
                 indent = "  " * level
-                res += f"\n{indent}- [{sanitize_name(r.author_name)}]: {sanitize_content(r.content)} [ID: {r.message_id}]"
+                res += f"\n{indent}- [{sanitize_name(r.author_name)}]: {sanitize_content(r.content, is_untrusted=True)} [ID: {r.message_id}]"
                 res += format_replies(r.replies, level + 1)
             return res
 
@@ -163,8 +163,10 @@ async def social_read(
     # Format for agent readability (List View)
     formatted_posts = []
     for post in posts:
+        # Titles in the list are also untrusted
+        safe_title = sanitize_content(post.title, is_untrusted=True)
         thread_summary = (
-            f"[ID: {post.message_id}] Title: {sanitize_content(post.title)} | Author: {sanitize_name(post.author_name)}"
+            f"[ID: {post.message_id}] Title: {safe_title} | Author: {sanitize_name(post.author_name)}"
             f" ({len(post.replies)} replies)"
         )
         formatted_posts.append(thread_summary)

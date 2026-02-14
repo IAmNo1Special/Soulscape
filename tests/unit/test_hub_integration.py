@@ -86,9 +86,7 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
 
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client_instance = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = (
-                mock_client_instance
-            )
+            mock_client_cls.return_value = mock_client_instance
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json = MagicMock(return_value={"status": "success"})
@@ -97,19 +95,18 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
             # Action with token
             await client.post_message({"content": "hello"}, token="soul-secret")
 
-            # Verify call args
+            # Verify call args for .post()
             # We expect headers to include X-Hub-Secret: soul-secret
-            # and NOT global-key
-            call_kwargs = mock_client_cls.call_args[1]
+            call_kwargs = mock_client_instance.post.call_args[1]
             headers = call_kwargs["headers"]
             self.assertEqual(headers["X-Hub-Secret"], "soul-secret")
 
             # Action without token
             await client.post_message({"content": "hello"})
-            call_kwargs_default = mock_client_cls.call_args_list[1][
-                1
-            ]  # Second call
+            # Second call to .post()
+            call_kwargs_default = mock_client_instance.post.call_args_list[1][1]
             headers_default = call_kwargs_default["headers"]
+            # Should fall back to the global key
             self.assertEqual(headers_default["X-Hub-Secret"], "global-key")
 
     async def test_social_interaction_flow(self):

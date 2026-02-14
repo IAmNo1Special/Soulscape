@@ -9,6 +9,7 @@ from urllib.parse import quote
 import httpx
 
 from soulscape.system.logger import log
+from soulscape.utils.security import redact_secret
 
 
 class NetworkClient:
@@ -20,6 +21,17 @@ class NetworkClient:
         self.base_url = base_url or os.getenv(
             "HUB_URL", "http://localhost:8000"
         )
+        # Security: Warn if sending secrets over unencrypted HTTP (to non-localhost)
+        if (
+            self.base_url.startswith("http://")
+            and "localhost" not in self.base_url
+            and "127.0.0.1" not in self.base_url
+        ):
+            log.warning(
+                f"SECURITY WARNING: Hub URL '{self.base_url}' uses unencrypted HTTP. "
+                "Secrets will be transmitted in plain text! Please use HTTPS for production."
+            )
+
         self.secret_key = secret_key or os.getenv("HUB_SECRET_KEY", "")
         self.headers = (
             {"X-Hub-Secret": self.secret_key} if self.secret_key else {}
@@ -61,8 +73,9 @@ class NetworkClient:
             )
 
         except Exception as e:
+            err_msg = redact_secret(str(e), self.secret_key)
             log.error(
-                f"Hub {method} error ({response.status_code}) at {endpoint}: {e}"
+                f"Hub {method} error ({response.status_code}) at {endpoint}: {err_msg}"
             )
 
     async def _get(self, endpoint: str, token: Optional[str] = None) -> Any:
