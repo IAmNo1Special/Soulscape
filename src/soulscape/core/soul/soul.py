@@ -369,16 +369,30 @@ class Soul:
                 self.draw_y = new_y
 
         # Update stats
-        if "stats" in data:
-            # TODO: Implement robust stats update. Currently checking structure.
-            # Ideally, we should parse 'stats' into a SoulStats object or update
-            # the existing self.biology in place without replacing the object reference.
-            pass
+        if "stat_hp_base" in data:
+            self.biology.stats = SoulStats.from_dict(data)
+        elif "stats" in data and isinstance(data["stats"], dict):
+            log.warning(
+                "Received nested 'stats' dictionary, "
+                "which is not fully supported by SoulStats.from_dict yet."
+            )
 
         # Update inventory
         inventory_data = data.get("inventory")
         if inventory_data:
             self.inventory = Inventory.from_dict(inventory_data)
+
+        # Update Biology / Vitals
+        if "satiety" in data:
+            self.biology.satiety = float(data["satiety"])
+        if "hydration" in data:
+            self.biology.hydration = float(data["hydration"])
+        if "hp" in data:
+            self.biology.current_health = int(data["hp"])
+        if "xp" in data:
+            self.biology.experience_points = float(data["xp"])
+        if "level" in data:
+            self.biology.level = int(data["level"])
 
         # Update essence
         self.essence = float(data.get("essence", self.essence))
