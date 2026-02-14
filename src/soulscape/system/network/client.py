@@ -124,7 +124,7 @@ class NetworkClient:
         )
 
     async def delete_message(
-        self, message_id: str, author_id: int, token: Optional[str] = None
+        self, message_id: str, author_id: str, token: Optional[str] = None
     ) -> Any:
         # Pydantic expect author_id in some way? Or query param?
         # Hub expects it in delete_message(message_id, author_id)
