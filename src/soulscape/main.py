@@ -153,8 +153,8 @@ class SoulscapeApp:
         # 5. Start Network Service
         if os.getenv("HUB_URL"):
             self.network_service.start()
-            # Force initial sync of loaded souls to ensure Hub has their secrets
-            self.persist_souls_state()
+            # Force initial secure sync of loaded souls (HTTP)
+            self.initial_hub_sync()
 
         self.window_manager.window.set_visible(True)
         self._setup_tray()
@@ -305,13 +305,21 @@ class SoulscapeApp:
                 for soul in self.active_souls
                 if soul.owner_id == self.instance_id
             ]
-            data = [soul.to_dict() for soul in owned_souls]
+            # 1. Persistence Data (Includes Secrets - Secure Disk)
+            persistence_data = [
+                soul.to_dict(include_secret=True) for soul in owned_souls
+            ]
+
+            # 2. Network Broadcast Data (Excludes Secrets - Public)
+            network_data = [
+                soul.to_dict(include_secret=False) for soul in owned_souls
+            ]
 
             # Broadcast update via NetworkService Upstream Queue
-            if data:
-                self.network_service.enqueue_update({"souls": data})
+            if network_data:
+                self.network_service.enqueue_update({"souls": network_data})
 
-            await async_save_souls(data, owner_id=self.instance_id)
+            await async_save_souls(persistence_data, owner_id=self.instance_id)
 
             # Also save global settings
             current_settings = load_settings()
@@ -327,6 +335,35 @@ class SoulscapeApp:
 
         # Fire and forget via background loop
         self._run_coro(self.async_persist_souls_state())
+
+    def initial_hub_sync(self) -> None:
+        """Triggers a secure HTTP sync of souls to the Hub."""
+        self._run_coro(self.async_initial_hub_sync())
+
+    async def async_initial_hub_sync(self) -> None:
+        """Securely registers owned souls with the Hub via HTTP."""
+        owned_souls = [
+            soul
+            for soul in self.active_souls
+            if soul.owner_id == self.instance_id
+        ]
+        if not owned_souls:
+            return
+
+        # DATA SPLITTING: secrets included for secure HTTP registration
+        secure_data = [
+            soul.to_dict(include_secret=True) for soul in owned_souls
+        ]
+
+        try:
+            log.info("Performing initial secure Hub sync via HTTP...")
+            # We use the bulk post_souls endpoint
+            await self.network_service.client.post_souls(
+                souls_data=secure_data,
+                owner_id=self.instance_id,
+            )
+        except Exception as e:
+            log.error(f"Initial Hub sync failed: {e}")
 
     # --- Sync Event Handlers (Called from Game Loop) ---
 
@@ -438,7 +475,7 @@ class SoulscapeApp:
                     or abs(soul.x - (last_pos[0] or 0)) > 1.0
                     or abs(soul.y - (last_pos[1] or 0)) > 1.0
                 ):
-                    updates.append(soul.to_dict())
+                    updates.append(soul.to_dict(include_secret=False))
                     self.soul_last_broadcast_pos[soul.biology.soul_id] = (
                         soul.x,
                         soul.y,

@@ -266,16 +266,20 @@ class Soul:
 
     # --- Main Update ---
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, include_secret: bool = True) -> dict[str, Any]:
         """Serializes the soul's current state to a portable dictionary format.
 
         Captures vital signs, position, and possessions for persistence.
 
         Returns:
             A dictionary containing the soul's serialized representation.
-        """
 
-        return {
+        Args:
+            include_secret: Whether to include the authentication secret.
+                            Defaults to True for backward compatibility and persistence.
+                            Set to False for network broadcasts and public data.
+        """
+        data = {
             "soul_id": self.biology.soul_id,
             "owner_id": self.owner_id,
             **self.biology.to_flat_dict(),
@@ -285,8 +289,10 @@ class Soul:
             "aura_visible": self.aura_visible,
             "essence": self.essence,
             "inventory": self.inventory.to_dict(),
-            "secret": self.secret,
         }
+        if include_secret:
+            data["secret"] = self.secret
+        return data
 
     def create_snapshot(self) -> dict[str, Any]:
         """Creates a thread-safe snapshot of the soul's current state.
@@ -298,8 +304,8 @@ class Soul:
         Returns:
             A dictionary containing a completely decoupled snapshot of the soul.
         """
-        # Reuse to_dict for the base data as it already serializes to primitives
-        snapshot = self.to_dict()
+        # Reuse to_dict for the base data but exclude secret for security
+        snapshot = self.to_dict(include_secret=False)
 
         # Add volatile/runtime-only data that to_dict might skip but Agent needs
         # (Currently to_dict is quite comprehensive, but we separate intent here)

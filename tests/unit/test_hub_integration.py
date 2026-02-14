@@ -76,6 +76,10 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
         soul3 = Soul.from_dict(data, task_scheduler=mock_scheduler)
         self.assertEqual(soul3.secret, "preset-secret")
 
+        # Case 5: Security (No Secret)
+        public_data = soul2.to_dict(include_secret=False)
+        self.assertNotIn("secret", public_data)
+
     async def test_network_client_token_header(self):
         """Test that NetworkClient uses the token header when provided."""
         client = NetworkClient(
