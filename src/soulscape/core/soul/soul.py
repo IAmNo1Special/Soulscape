@@ -266,7 +266,7 @@ class Soul:
 
     # --- Main Update ---
 
-    def to_dict(self, include_secret: bool = True) -> dict[str, Any]:
+    def to_dict(self, include_secret: bool = False) -> dict[str, Any]:
         """Serializes the soul's current state to a portable dictionary format.
 
         Captures vital signs, position, and possessions for persistence.
