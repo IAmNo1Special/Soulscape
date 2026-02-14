@@ -38,7 +38,7 @@ load_dotenv()
 class SoulAgent(LlmAgent):
     """Manages the AI brain and tool interactions for a Soul."""
 
-    model_options: ClassVar[list[str]] = [
+    DEFAULT_MODELS: ClassVar[list[str]] = [
         # "gemini-3-pro-preview",
         # "gemini-3-flash-preview",
         # "gemini-2.5-pro",
@@ -91,7 +91,7 @@ class SoulAgent(LlmAgent):
         safe_gender = sanitize_name(soul.biology.gender.gender_name)
 
         super().__init__(
-            model=random.choice(SoulAgent.model_options),
+            model=random.choice(SoulAgent.DEFAULT_MODELS),
             name=safe_name.replace(" ", "_"),
             description="A magical and mysterious entity called a 'Soul'.",
             instruction=f"""You are {safe_name}, a {safe_gender} {safe_species}.
