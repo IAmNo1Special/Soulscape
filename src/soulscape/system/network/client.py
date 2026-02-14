@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -33,9 +34,13 @@ class NetworkClient:
             log.error(
                 f"Hub {method} error ({response.status_code}) at {endpoint}: {detail}"
             )
-        except Exception:
+        except httpx.JSONDecodeError:
             log.error(
-                f"Hub {method} error ({response.status_code}) at {endpoint}"
+                f"Hub {method} error ({response.status_code}) at {endpoint}. Response body: {response.text}"
+            )
+        except Exception as e:
+            log.error(
+                f"Hub {method} error ({response.status_code}) at {endpoint}: {e}"
             )
 
     async def _get(self, endpoint: str, token: Optional[str] = None) -> Any:
@@ -92,7 +97,7 @@ class NetworkClient:
         token: Optional[str] = None,
     ) -> Any:
         return await self._post(
-            f"/marketplace/buy/{listing_id}", buyer_data, token=token
+            f"/marketplace/buy/{quote(listing_id)}", buyer_data, token=token
         )
 
     async def get_messages(self) -> Any:
@@ -115,7 +120,7 @@ class NetworkClient:
         token: Optional[str] = None,
     ) -> Any:
         return await self._post(
-            f"/social/edit/{message_id}", edit_data, token=token
+            f"/social/edit/{quote(message_id)}", edit_data, token=token
         )
 
     async def delete_message(
@@ -125,7 +130,7 @@ class NetworkClient:
         # Hub expects it in delete_message(message_id, author_id)
         # We'll pass it as query param or extra data if we want
         return await self._post(
-            f"/social/delete/{message_id}?author_id={author_id}",
+            f"/social/delete/{quote(message_id)}?author_id={quote(str(author_id))}",
             {},
             token=token,
         )
@@ -134,7 +139,7 @@ class NetworkClient:
         self, listing_id: str, token: Optional[str] = None
     ) -> Any:
         return await self._post(
-            f"/marketplace/delete/{listing_id}", {}, token=token
+            f"/marketplace/delete/{quote(listing_id)}", {}, token=token
         )
 
     async def update_funds(self, amount: float) -> Any:
@@ -144,7 +149,7 @@ class NetworkClient:
         return await self._get("/souls")
 
     async def get_souls_by_owner(self, owner_id: str) -> Any:
-        return await self._get(f"/souls?owner_id={owner_id}")
+        return await self._get(f"/souls?owner_id={quote(owner_id)}")
 
     async def post_souls(
         self,

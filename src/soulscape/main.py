@@ -887,8 +887,17 @@ class SoulscapeApp:
         if self.tray_controller:
             self.tray_controller.stop()
         if self.gui_process and self.gui_process.is_alive():
-            self.gui_process.terminate()
-            self.gui_process.join(timeout=1.0)
+            # Graceful shutdown attempt
+            if self.gui_command_queue:
+                self.gui_command_queue.put({"type": GuiCommand.EXIT})
+
+            self.gui_process.join(timeout=2.0)
+
+            # Force kill if still alive
+            if self.gui_process.is_alive():
+                log.warning("GUI process did not exit gracefully, terminating.")
+                self.gui_process.terminate()
+                self.gui_process.join(timeout=1.0)
         if self.overlay_window:
             self.overlay_window.close()
 
