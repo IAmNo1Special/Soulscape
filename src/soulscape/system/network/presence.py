@@ -72,7 +72,7 @@ class PresenceManager:
             try:
                 log.info(f"Connecting to Hub WebSocket: {self._ws_url}")
                 async with websockets.connect(
-                    self._ws_url, extra_headers=headers if headers else None
+                    self._ws_url, additional_headers=headers if headers else None
                 ) as ws:
                     self._ws = ws
                     backoff = 1  # Reset backoff on successful connect
