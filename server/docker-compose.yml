@@ -1,0 +1,16 @@
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app/server/
+      - /app/.venv
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HUB_SECRET_KEY=${HUB_SECRET_KEY:-soulscape-secret-123}
+      - HUB_OPERATOR_ID=${HUB_OPERATOR_ID:-999}

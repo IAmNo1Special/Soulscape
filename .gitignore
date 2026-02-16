@@ -6,10 +6,12 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
+# Virtual environment
 .venv
 
-.env
+# Environment variables
+*.env
+
 
 # dev docs
 .protel/
@@ -18,10 +20,16 @@ gradex_jsons/
 connecting_others.md
 HUB_INTEGRATION_UPDATE.md
 
-.chroma_db/
-.pytest_cache/
-
-
-# Data & Coverage
+# Testing
+*.pytest_cache
 .coverage
+.chroma_db/
+.coverage
+
+# Docker
+.dockerenv
+
+# Database
+*.db
+*.db-*
 *.log

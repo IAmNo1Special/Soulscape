@@ -1,0 +1,21 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.db
+.sqlite
+.env
+.python-version
+node_modules
+.DS_Store
+.coverage
+.pytest_cache
+
+# Ignore client source code to keep the context light
+client/
+!client/pyproject.toml
+
+# Ignore server tests
+server/tests/
