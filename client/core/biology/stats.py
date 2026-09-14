@@ -8,22 +8,10 @@ from __future__ import annotations
 
 import random
 from dataclasses import asdict, dataclass
-from enum import Enum
 from typing import Any
 
+from shared.enums import Stat
 from .mechanics import Nature
-
-
-class Stat(str, Enum):
-    """Enumeration of core stats."""
-
-    HP = "HP"
-    ATTACK = "Attack"
-    DEFENSE = "Defense"
-    SP_ATK = "Sp. Atk"
-    SP_DEF = "Sp. Def"
-    SPEED = "Speed"
-    VISION = "Vision"
 
 
 @dataclass

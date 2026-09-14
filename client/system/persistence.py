@@ -233,6 +233,7 @@ def load_settings() -> dict[str, Any]:
         "opacity": 100,
         "spawn_hotkey": "ctrl+shift+s",
         "instance_id": uuid.uuid4().hex,
+        "hub_url": "http://localhost:9785",
     }
 
     try:

@@ -12,13 +12,10 @@ class SoulscapeWindow(pyglet.window.Window):
         """Initializes the SoulscapeWindow."""
         screen = pyglet.display.get_display().get_default_screen()
         super().__init__(
-            width=screen.width + 10,
-            height=screen.height + 10,
+            width=screen.width,
+            height=screen.height,
             style=pyglet.window.Window.WINDOW_STYLE_TRANSPARENT,
             screen=screen,
-            vsync=True,
-            resizable=False,
             visible=False,
-            fullscreen=False,
         )
         self.set_location(0, 0)

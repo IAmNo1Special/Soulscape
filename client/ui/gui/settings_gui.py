@@ -359,7 +359,8 @@ class GlobalSettingsDialog:
         parent: tk.Tk | tk.Toplevel | ttk.Window | None = None,
         current_opacity: float = 100.0,
         run_on_startup: bool = False,
-        on_apply: Callable[[float, bool], None] | None = None,
+        current_hub_url: str = "http://localhost:9785",
+        on_apply: Callable[[float, bool, str], None] | None = None,
     ):
         """Initialize the global settings dialog.
 
@@ -367,10 +368,11 @@ class GlobalSettingsDialog:
             parent: Optional parent window.
             current_opacity: Current opacity percentage (15-100).
             run_on_startup: Whether app runs on Windows startup.
-            on_apply: Callback with (opacity, run_on_startup).
+            current_hub_url: Current URL of the Hub.
+            on_apply: Callback with (opacity, run_on_startup, hub_url).
         """
         self.on_apply = on_apply
-        self.result: tuple[float, bool] | None = None
+        self.result: tuple[float, bool, str] | None = None
 
         # Create the window
         self.root = ttk.Toplevel(parent) if parent else ttk.Window()
@@ -379,8 +381,8 @@ class GlobalSettingsDialog:
         self.root.attributes("-topmost", True)
 
         # Center the window
-        window_width = 320
-        window_height = 200
+        window_width = 350
+        window_height = 250
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x = (screen_width - window_width) // 2
@@ -392,6 +394,7 @@ class GlobalSettingsDialog:
         ui_opacity = self._real_to_ui(current_opacity)
         self.opacity_var = tk.IntVar(value=ui_opacity)
         self.run_on_startup_var = tk.BooleanVar(value=run_on_startup)
+        self.hub_url_var = tk.StringVar(value=current_hub_url)
 
         self._create_widgets()
 
@@ -401,12 +404,20 @@ class GlobalSettingsDialog:
         frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        # Opacity slider
-        ttk.Label(frame, text="Global Opacity:").grid(
+        # Hub URL entry
+        ttk.Label(frame, text="Hub URL:").grid(
             row=0, column=0, sticky=tk.W, pady=5
         )
+        self.hub_url_entry = ttk.Entry(frame, width=25)
+        self.hub_url_entry.insert(0, self.hub_url_var.get())
+        self.hub_url_entry.grid(row=0, column=1, columnspan=2, sticky=tk.EW, pady=5)
+
+        # Opacity slider
+        ttk.Label(frame, text="Global Opacity:").grid(
+            row=1, column=0, sticky=tk.W, pady=5
+        )
         opacity_frame = ttk.Frame(frame)
-        opacity_frame.grid(row=0, column=1, sticky=tk.EW, pady=5)
+        opacity_frame.grid(row=1, column=1, sticky=tk.EW, pady=5)
 
         self.opacity_slider = ttk.Scale(
             opacity_frame,
@@ -425,11 +436,11 @@ class GlobalSettingsDialog:
             text="Run on Windows Startup",
             variable=self.run_on_startup_var,
             bootstyle="round-toggle",
-        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=5)
+        ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
 
         # Buttons frame
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=2, column=0, columnspan=2, pady=20)
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=20)
 
         ttk.Button(
             btn_frame,
@@ -451,10 +462,11 @@ class GlobalSettingsDialog:
         ui_opacity = self.opacity_var.get()
         real_opacity = self._ui_to_real(ui_opacity)
         run_on_startup = self.run_on_startup_var.get()
+        hub_url = self.hub_url_entry.get().strip() or "http://localhost:9785"
 
-        self.result = (real_opacity, run_on_startup)
+        self.result = (real_opacity, run_on_startup, hub_url)
         if self.on_apply:
-            self.on_apply(real_opacity, run_on_startup)
+            self.on_apply(real_opacity, run_on_startup, hub_url)
         self.root.destroy()
 
     def _real_to_ui(self, real_val: float) -> int:

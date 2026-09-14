@@ -81,7 +81,7 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
     async def test_network_client_token_header(self):
         """Test that NetworkClient uses the token header when provided."""
         client = NetworkClient(
-            base_url="http://localhost:8000", secret_key="global-key"
+            base_url="http://localhost:9785", secret_key="global-key"
         )
 
         with patch("httpx.AsyncClient") as mock_client_cls:

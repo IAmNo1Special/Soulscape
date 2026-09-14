@@ -166,7 +166,7 @@ class WindowsWindowManager(WindowManager):
     WS_CAPTION = 0x00C00000
     WS_THICKFRAME = 0x00040000
 
-    WS_EX_LAYERED = 0x00080000
+    WS_EX_LAYERED = 0x00097850
     WS_EX_TRANSPARENT = 0x00000020
     WS_EX_APPWINDOW = 0x00040000
     WS_EX_TOOLWINDOW = 0x00000080
@@ -231,7 +231,6 @@ class WindowsWindowManager(WindowManager):
         Returns:
             bool: True if successful, False otherwise.
         """
-        log.debug(f"Setting always-on-top for Soulscape: {enabled}")
         try:
             if not self.hwnd:
                 log.warning("Could not find window handle for Soulscape.")
@@ -256,11 +255,6 @@ class WindowsWindowManager(WindowManager):
                 0,
                 0,
                 flags,
-            )
-
-            log.debug(
-                f"Always-on-top {'enabled' if enabled else 'disabled'}. "
-                f"SetWindowPos result: {result}"
             )
             return bool(result)
 

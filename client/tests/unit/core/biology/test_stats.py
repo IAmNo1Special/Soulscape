@@ -1,7 +1,8 @@
 import pytest
 
 from client.core.biology.mechanics import Nature
-from client.core.biology.stats import SoulStats, Stat, StatSet
+from client.core.biology.stats import SoulStats, StatSet
+from shared.enums import Stat
 
 
 # Fixture for basic stats

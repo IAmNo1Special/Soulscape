@@ -93,7 +93,6 @@ class NetworkService:
                 self._upstream_queue.put(data), self._loop
             )
 
-    # get_events removed in favor of command_queue access
 
     # --- Async Callbacks (Run in Background Loop) ---
     # These push events to the thread-safe queue for the Main Thread to consume

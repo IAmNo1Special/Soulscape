@@ -45,6 +45,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.INFO)
 logging.getLogger("pyglet").setLevel(logging.WARNING)
 
+
 class SoulscapeApp:
     """Main application class for Soulscape."""
 
@@ -59,13 +60,9 @@ class SoulscapeApp:
         # Load settings
         self.saved_settings: dict[str, Any] = load_settings()
         self.global_opacity: int = self.saved_settings.get("opacity", 80)
-        self.global_aura_visible: bool = self.saved_settings.get(
-            "aura_visible", True
-        )
+        self.global_aura_visible: bool = self.saved_settings.get("aura_visible", True)
         self.run_on_startup: bool = self._check_startup_registry()
-        self.instance_id: str = self.saved_settings.get(
-            "instance_id", "unknown"
-        )
+        self.instance_id: str = self.saved_settings.get("instance_id", "unknown")
         self.next_soul_id: int = 1
 
         self.gui_command_queue: Any = None
@@ -82,9 +79,7 @@ class SoulscapeApp:
 
         # Persistent Background Event Loop for non-UI tasks (saves, HTTP)
         self._loop = asyncio.new_event_loop()
-        self._loop_thread = threading.Thread(
-            target=self._run_event_loop, daemon=True
-        )
+        self._loop_thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self._loop_thread.start()
         self._running: bool = False
 
@@ -132,9 +127,7 @@ class SoulscapeApp:
 
         # Real-time sync tracking
         self.last_broadcast_time = time.time()
-        self.soul_last_broadcast_pos = (
-            {}
-        )  # type: dict[str, tuple[float, float]]
+        self.soul_last_broadcast_pos = {}  # type: dict[str, tuple[float, float]]
 
         # Apply initial aura visibility
         self.scene_renderer.aura_visible = self.global_aura_visible
@@ -171,9 +164,7 @@ class SoulscapeApp:
         @self.overlay_window.event
         def on_draw() -> None:
             self.overlay_window.clear()
-            self.scene_renderer.render(
-                self.active_souls, self.overlay_window.height
-            )
+            self.scene_renderer.render(self.active_souls, self.overlay_window.height)
 
         @self.overlay_window.event
         def on_key_press(symbol, modifiers) -> None:
@@ -186,9 +177,7 @@ class SoulscapeApp:
         self.overlay_window.push_handlers(self.input_router)
 
         @self.overlay_window.event
-        def on_mouse_press(
-            x: int, y: int, button: int, modifiers: int
-        ) -> bool | None:
+        def on_mouse_press(x: int, y: int, button: int, modifiers: int) -> bool | None:
             """Pyglet event handler for mouse press events."""
             # Use InputRouter to find target soul
             target_soul = self.input_router.get_soul_at(
@@ -224,9 +213,7 @@ class SoulscapeApp:
                 )
 
         @self.overlay_window.event
-        def on_mouse_release(
-            x: int, y: int, button: int, modifiers: int
-        ) -> None:
+        def on_mouse_release(x: int, y: int, button: int, modifiers: int) -> None:
             """Pyglet event handler for mouse release events."""
             if self.input_router.dragged_soul:
                 self.input_router.dragged_soul.on_mouse_release(
@@ -255,9 +242,7 @@ class SoulscapeApp:
 
         def on_tray_settings() -> None:
             # This puts into a queue so it's thread-safe, but consistency is good
-            pyglet.clock.schedule_once(
-                lambda dt: self.show_global_settings(), 0
-            )
+            pyglet.clock.schedule_once(lambda dt: self.show_global_settings(), 0)
 
         def on_tray_message_board() -> None:
             if self.gui_command_queue:
@@ -296,9 +281,7 @@ class SoulscapeApp:
 
             # Only send locally-owned souls to the Hub
             owned_souls = [
-                soul
-                for soul in self.active_souls
-                if soul.owner_id == self.instance_id
+                soul for soul in self.active_souls if soul.owner_id == self.instance_id
             ]
             # 1. Persistence Data (Includes Secrets - Secure Disk)
             persistence_data = [
@@ -306,9 +289,7 @@ class SoulscapeApp:
             ]
 
             # 2. Network Broadcast Data (Excludes Secrets - Public)
-            network_data = [
-                soul.to_dict(include_secret=False) for soul in owned_souls
-            ]
+            network_data = [soul.to_dict(include_secret=False) for soul in owned_souls]
 
             # Broadcast update via NetworkService Upstream Queue
             if network_data:
@@ -338,17 +319,13 @@ class SoulscapeApp:
     async def async_initial_hub_sync(self) -> None:
         """Securely registers owned souls with the Hub via HTTP."""
         owned_souls = [
-            soul
-            for soul in self.active_souls
-            if soul.owner_id == self.instance_id
+            soul for soul in self.active_souls if soul.owner_id == self.instance_id
         ]
         if not owned_souls:
             return
 
         # DATA SPLITTING: secrets included for secure HTTP registration
-        secure_data = [
-            soul.to_dict(include_secret=True) for soul in owned_souls
-        ]
+        secure_data = [soul.to_dict(include_secret=True) for soul in owned_souls]
 
         try:
             log.info("Performing initial secure Hub sync via HTTP...")
@@ -387,8 +364,7 @@ class SoulscapeApp:
         stale_souls = [
             soul
             for soul in self.active_souls
-            if soul.owner_id != self.instance_id
-            and soul.owner_id not in online_set
+            if soul.owner_id != self.instance_id and soul.owner_id not in online_set
         ]
         if stale_souls:
             log.info(f"Pruning {len(stale_souls)} stale souls.")
@@ -400,15 +376,11 @@ class SoulscapeApp:
     def _on_owner_offline_sync(self, owner_id: str) -> None:
         """Handle owner going offline."""
         active_len = len(self.active_souls)
-        self.active_souls[:] = [
-            s for s in self.active_souls if s.owner_id != owner_id
-        ]
+        self.active_souls[:] = [s for s in self.active_souls if s.owner_id != owner_id]
         if len(self.active_souls) < active_len:
             log.info(f"Removed souls for offline owner: {owner_id}")
 
-    def _on_soul_updated_sync(
-        self, souls_data: list[dict], owner_id: str
-    ) -> None:
+    def _on_soul_updated_sync(self, souls_data: list[dict], owner_id: str) -> None:
         """Handle soul updates."""
         # SECURITY: Prevent spoofing of local souls by remote/Hub
         if owner_id == self.instance_id:
@@ -452,7 +424,7 @@ class SoulscapeApp:
 
         # 3. Real-time Broadcast (Upstream)
         now = time.time()
-        if self._force_broadcast or (now - self.last_broadcast_time > 0.033):
+        if self._force_broadcast or (now - self.last_broadcast_time > 0.2):
             if self._force_broadcast:
                 self.soul_last_broadcast_pos.clear()
                 self._force_broadcast = False
@@ -548,13 +520,9 @@ class SoulscapeApp:
         self.persist_souls_state()
         return soul
 
-    def handle_soul_right_click(
-        self, soul: Soul, screen_x: int, screen_y: int
-    ) -> None:
+    def handle_soul_right_click(self, soul: Soul, screen_x: int, screen_y: int) -> None:
         """Callback for soul right-click events."""
-        log.debug(
-            f"Right-click on soul {soul.biology.name} at {screen_x}, {screen_y}"
-        )
+        log.debug(f"Right-click on soul {soul.biology.name} at {screen_x}, {screen_y}")
 
         if self.gui_command_queue:
             self.gui_command_queue.put(
@@ -589,9 +557,7 @@ class SoulscapeApp:
         app_name = "Soulscape"
 
         try:
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ
-            )
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
             try:
                 winreg.QueryValueEx(key, app_name)
                 is_startup = True
@@ -653,11 +619,15 @@ class SoulscapeApp:
         """Shows global settings dialog."""
         if self.gui_command_queue:
             run_on_startup = self._check_startup_registry()
+            current_hub_url = self.saved_settings.get(
+                "hub_url", "http://localhost:9785"
+            )
             self.gui_command_queue.put(
                 {
                     "type": GuiCommand.SHOW_GLOBAL_SETTINGS,
                     "current_opacity": self.global_opacity,
                     "run_on_startup": run_on_startup,
+                    "current_hub_url": current_hub_url,
                 }
             )
 
@@ -706,6 +676,7 @@ class SoulscapeApp:
                     data = msg.get("data")
                     opacity = data.get("opacity")
                     startup = data.get("startup")
+                    hub_url = data.get("hub_url")
 
                     # Apply settings
                     self.global_opacity = opacity
@@ -714,14 +685,16 @@ class SoulscapeApp:
                     # Persist
                     current_settings = load_settings()
                     current_settings["opacity"] = opacity
+                    current_settings["hub_url"] = hub_url
                     save_settings(current_settings)
 
                     # Startup reg
                     self._set_windows_startup(startup)
                     log.debug(
-                        "Applied global settings: opacity=%d, startup=%s",
+                        "Applied global settings: opacity=%d, startup=%s, hub_url=%s",
                         opacity,
                         startup,
+                        hub_url,
                     )
 
                 elif cmd_type == GuiCommand.SHOW_CONTEXT_MENU:
@@ -738,16 +711,12 @@ class SoulscapeApp:
                             if action == "EDIT":
                                 self.show_soul_settings(target_soul)
                             elif action == "TOGGLE_AURA":
-                                target_soul.aura_visible = (
-                                    not target_soul.aura_visible
-                                )
+                                target_soul.aura_visible = not target_soul.aura_visible
                                 self.persist_souls_state()
                             elif action == "DISMISS":
                                 self.active_souls.remove(target_soul)
                                 target_soul.cleanup()
-                                log.debug(
-                                    f"Dismissed soul: {target_soul.biology.name}"
-                                )
+                                log.debug(f"Dismissed soul: {target_soul.biology.name}")
                                 self.persist_souls_state()
 
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_POST:
@@ -761,9 +730,7 @@ class SoulscapeApp:
                                 data["content"],
                             )
                         )
-                        log.info(
-                            f"Created operator post via GUI: {data['title']}"
-                        )
+                        log.info(f"Created operator post via GUI: {data['title']}")
 
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_REPLY:
                     data = msg.get("data")
@@ -802,9 +769,7 @@ class SoulscapeApp:
                                 data["content"],
                             )
                         )
-                        log.info(
-                            f"Dispatched edit for message: {data['message_id']}"
-                        )
+                        log.info(f"Dispatched edit for message: {data['message_id']}")
 
                 elif cmd_type == GuiCommand.SHOW_SOUL_SETTINGS:
                     data = msg.get("data")
@@ -827,9 +792,7 @@ class SoulscapeApp:
                                 target_soul.aura_color_rgb
                             )
 
-                            log.debug(
-                                f"Updated soul {target_soul.biology.name}"
-                            )
+                            log.debug(f"Updated soul {target_soul.biology.name}")
                             self.persist_souls_state()
 
                 elif cmd_type == GuiCommand.SHOW_ADD_SOUL:
@@ -876,13 +839,8 @@ class SoulscapeApp:
             except concurrent.futures.TimeoutError:
                 log.warning("Background loop shutdown timed out.")
             except Exception as e:
-                log.warning(
-                    f"Background loop shutdown failed unexpectedly: {e}"
-                )
-            if (
-                self._loop_thread
-                and threading.current_thread() != self._loop_thread
-            ):
+                log.warning(f"Background loop shutdown failed unexpectedly: {e}")
+            if self._loop_thread and threading.current_thread() != self._loop_thread:
                 self._loop_thread.join(timeout=2.0)
 
         # 5. Stop GUI services

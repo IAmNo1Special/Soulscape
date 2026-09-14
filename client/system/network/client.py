@@ -15,16 +15,35 @@ from ..logger import log
 class NetworkClient:
     """Async client wrapper for Soulscape backend services."""
 
+    @staticmethod
+    def _is_local_url(base_url: str) -> bool:
+        from urllib.parse import urlparse
+
+        hostname = urlparse(base_url).hostname
+        if hostname is None:
+            return False
+        return hostname in ("localhost", "127.0.0.1", "::1")
+
     def __init__(
         self, base_url: Optional[str] = None, secret_key: Optional[str] = None
     ):
-        self.base_url = base_url or os.getenv(
-            "HUB_URL", "http://localhost:8000"
-        )
+        if base_url:
+            self.base_url = base_url
+        else:
+            # Prioritize Env Var -> Saved Settings -> Default
+            env_url = os.getenv("HUB_URL")
+            if env_url:
+                self.base_url = env_url
+            else:
+                try:
+                    from ..system.persistence import load_settings
+
+                    settings = load_settings()
+                    self.base_url = settings.get("hub_url", "http://localhost:9785")
+                except Exception:
+                    self.base_url = "http://localhost:9785"
         # Security: Enforce HTTPS for remote connections
-        is_local = any(
-            h in self.base_url for h in ["localhost", "127.0.0.1", "test-hub"]
-        )
+        is_local = self._is_local_url(self.base_url)
         if self.base_url.startswith("http://") and not is_local:
             log.warning(
                 f"SECURITY WARNING: Hub URL '{self.base_url}' uses unencrypted HTTP. "
@@ -33,14 +52,11 @@ class NetworkClient:
             # We log warning but allow it for now if APP_ENV is dev
             if os.getenv("APP_ENV") != "dev":
                 raise ValueError(
-                    "Hub URL must use HTTPS for production. "
-                    f"Received: {self.base_url}"
+                    f"Hub URL must use HTTPS for production. Received: {self.base_url}"
                 )
 
         self.secret_key = secret_key or os.getenv("HUB_SECRET_KEY", "")
-        self.headers = (
-            {"X-Hub-Secret": self.secret_key} if self.secret_key else {}
-        )
+        self.headers = {"X-Hub-Secret": self.secret_key} if self.secret_key else {}
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -205,9 +221,7 @@ class NetworkClient:
             token=token,
         )
 
-    async def delete_listing(
-        self, listing_id: str, token: Optional[str] = None
-    ) -> Any:
+    async def delete_listing(self, listing_id: str, token: Optional[str] = None) -> Any:
         return await self._delete(
             f"/marketplace/delete/{quote(listing_id)}", token=token
         )

@@ -182,11 +182,11 @@ class GuiService:
             msg: Message data.
         """
 
-        def on_apply(opacity: float, startup: bool) -> None:
+        def on_apply(opacity: float, startup: bool, hub_url: str) -> None:
             self.result_queue.put(
                 {
                     "type": GuiCommand.SHOW_GLOBAL_SETTINGS,
-                    "data": {"opacity": opacity, "startup": startup},
+                    "data": {"opacity": opacity, "startup": startup, "hub_url": hub_url},
                 }
             )
 
@@ -194,6 +194,7 @@ class GuiService:
             parent=self.root,
             current_opacity=msg.get("current_opacity"),  # type: ignore
             run_on_startup=msg.get("run_on_startup"),  # type: ignore
+            current_hub_url=msg.get("current_hub_url", "http://localhost:9785"),  # type: ignore
             on_apply=on_apply,
         )
         d.show()

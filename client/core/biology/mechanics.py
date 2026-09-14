@@ -6,7 +6,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .stats import Stat
+    from shared.enums import Stat
 
 
 class Nature(str, Enum):

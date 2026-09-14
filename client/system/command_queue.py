@@ -14,7 +14,7 @@ class Command(ABC):
 
     def __lt__(self, other: "Command") -> bool:
         if not isinstance(other, Command):
-            return NotImplemented
+            raise NotImplementedError("Cannot compare Command with non-Command")
         # Lower number = higher priority for PriorityQueue
         if self.priority != other.priority:
             return self.priority < other.priority

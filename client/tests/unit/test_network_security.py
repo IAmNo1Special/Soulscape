@@ -12,7 +12,7 @@ from client.system.network.presence import PresenceManager
 def mock_env():
     with patch.dict(
         os.environ,
-        {"HUB_URL": "http://test-hub", "HUB_SECRET_KEY": "test-secret-123"},
+        {"HUB_URL": "http://localhost", "HUB_SECRET_KEY": "test-secret-123"},
     ):
         yield
 
@@ -53,7 +53,7 @@ async def test_presence_manager_token_param(mock_env):
     # PresenceManager uses HUB_URL from env if not passed
     assert "token=test-secret-123" not in pm._ws_url
     assert pm.secret_key == "test-secret-123"
-    assert "ws://test-hub/ws/test_owner" in pm._ws_url
+    assert "ws://localhost/ws/test_owner" in pm._ws_url
 
 
 @pytest.mark.asyncio

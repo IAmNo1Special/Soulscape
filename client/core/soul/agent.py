@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import random
 import threading
 import time
@@ -10,8 +11,6 @@ from pathlib import Path
 from types import MethodType
 from typing import TYPE_CHECKING, Any, ClassVar
 
-# Import constants
-import pyautogui
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.apps.app import App, ResumabilityConfig
@@ -41,8 +40,7 @@ class SoulAgent(LlmAgent):
         # "gemini-3-pro-preview",
         # "gemini-3-flash-preview",
         # "gemini-2.5-pro",
-        # "gemini-2.5-flash",
-        "gemini-2.5-flash-preview-09-2025",
+        "gemini-2.5-flash",
     ]
 
     # Internal state (private to avoid Pydantic field interference)
@@ -51,7 +49,7 @@ class SoulAgent(LlmAgent):
     _magetools_initialized: bool = False
 
     last_decision_time: float = 0.0
-    decision_interval: float = 10.0
+    decision_interval: float = float(os.getenv("SOUL_DECISION_INTERVAL", "3600"))
     session_service: InMemorySessionService | None = None
     session: Session | None = None
     runner: Runner | None = None
@@ -75,15 +73,13 @@ class SoulAgent(LlmAgent):
         """
         # 1. Setup Magetools early (local variable)
         project_root = Path(__file__).resolve().parents[2]
-        local_grim = Grimorium(
-            root_path=str(project_root), auto_initialize=False
-        )
+        local_grim = Grimorium(root_path=str(project_root), auto_initialize=False)
 
         # 2. Initialize the LlmAgent base class
         # SANITIZATION: Prevent prompt injection via name
-        safe_name = "".join(
-            c for c in soul.biology.name if c.isalnum() or c in " -_"
-        )[:50]
+        safe_name = "".join(c for c in soul.biology.name if c.isalnum() or c in " -_")[
+            :50
+        ]
 
         # SANITIZATION: Prevent prompt injection via biological names
         safe_species = sanitize_name(soul.biology.species.name)
@@ -121,13 +117,11 @@ class SoulAgent(LlmAgent):
 
         # 4. Initialize session and other services
         try:
-            self.session_service: InMemorySessionService = (
-                InMemorySessionService()
+            self.session_service: InMemorySessionService = InMemorySessionService()
+            self.session_user_id = (
+                f"user_{soul.biology.soul_id}_{soul.biology.name.replace(' ', '_')}"
             )
-            self.session_user_id = f"user_{soul.biology.soul_id}_{soul.biology.name.replace(' ', '_')}"
-            self.session_id = (
-                f"session_{soul.biology.soul_id}_{uuid.uuid4().hex[:8]}"
-            )
+            self.session_id = f"session_{soul.biology.soul_id}_{uuid.uuid4().hex[:8]}"
 
             try:
                 # 5. Start persistent background event loop
@@ -146,9 +140,7 @@ class SoulAgent(LlmAgent):
 
             log.debug(f"Agent initialized for {soul.biology.name}")
         except Exception as e:
-            log.error(
-                f"Failed to initialize agent for {soul.biology.name}: {e}"
-            )
+            log.error(f"Failed to initialize agent for {soul.biology.name}: {e}")
 
         self.last_decision_time: float = -self.decision_interval + 5.0
 
@@ -267,9 +259,7 @@ class SoulAgent(LlmAgent):
         await Marketplace().initialize()
         await MessageBoard().initialize()
 
-        log.debug(
-            f"Runner setup: Initializing Magetools for {self.soul.biology.name}"
-        )
+        log.debug(f"Runner setup: Initializing Magetools for {self.soul.biology.name}")
         await self._initialize_magetools()
 
         app = App(
@@ -331,22 +321,16 @@ class SoulAgent(LlmAgent):
                     self._grimorium.spell_sync.registry[spell_name] = (
                         LongRunningFunctionTool(func=bound_method)
                     )
-                    log.debug(
-                        f"Promoted {spell_name} to LongRunningFunctionTool"
-                    )
+                    log.debug(f"Promoted {spell_name} to LongRunningFunctionTool")
                 else:
-                    self._grimorium.spell_sync.registry[spell_name] = (
-                        bound_method
-                    )
+                    self._grimorium.spell_sync.registry[spell_name] = bound_method
 
                 log.debug(
                     f"Attached modular spell: {spell_name} to {self._soul.biology.name}"
                 )
 
             self._magetools_initialized = True
-            log.info(
-                f"Magetools: Grimorium initialized for {self._soul.biology.name}"
-            )
+            log.info(f"Magetools: Grimorium initialized for {self._soul.biology.name}")
         except Exception as e:
             log.error(
                 f"Magetools: Failed to initialize Grimorium for {self._soul.biology.name}: {e}"
@@ -391,9 +375,7 @@ class SoulAgent(LlmAgent):
                 debug_dir = Path("client/debug_vision")
                 debug_dir.mkdir(exist_ok=True)
                 # Use timestamp + name for unique files
-                timestamp = (
-                    int(self._soul.time) if self._soul else int(time.time())
-                )
+                timestamp = int(self._soul.time) if self._soul else int(time.time())
                 name = state.get("name", "Unknown").replace(" ", "_")
                 save_path = debug_dir / f"{name}_{timestamp}.png"
                 masked_img.save(save_path)
@@ -421,7 +403,8 @@ class SoulAgent(LlmAgent):
             self.is_busy = False
             return
 
-        img_bytes = self._process_vision(state, screen_context)
+        # img_bytes = self._process_vision(state, screen_context)
+        img_bytes = None
 
         context_str = (
             f"Current Location: ({state['x']:.0f}, {state['y']:.0f}). "
@@ -444,9 +427,7 @@ class SoulAgent(LlmAgent):
         if img_bytes:
             parts.append(
                 types.Part(
-                    inline_data=types.Blob(
-                        mime_type="image/png", data=img_bytes
-                    )
+                    inline_data=types.Blob(mime_type="image/png", data=img_bytes)
                 )
             )
 
@@ -469,7 +450,6 @@ class SoulAgent(LlmAgent):
                     if not event.content or not event.content.parts:
                         continue
 
-                    
                     parts = event.content.parts
                     for part in parts:
                         if part.text:
@@ -478,13 +458,9 @@ class SoulAgent(LlmAgent):
                             # if len(text) > 200:
                             # text = text[:197] + "..."
                             if event.is_final_response:
-                                log.info(
-                                    f"Soul {name} finally decided: {text}"
-                                )
+                                log.info(f"Soul {name} finally decided: {text}")
                             else:
-                                log.info(
-                                    f"Soul {name} thought: {text}"
-                                )
+                                log.info(f"Soul {name} thought: {text}")
                         if part.function_call:
                             func_call = part.function_call
                             log.info(
@@ -498,7 +474,7 @@ class SoulAgent(LlmAgent):
                                 self._pending_function_response = func_response
                             log.info(
                                 f"Tool {func_response.name} response for {name}: {func_response.response}"
-                            )          
+                            )
         except Exception as e:
             log.error(f"Error during agent turn for {name}: {e}")
         finally:
@@ -517,16 +493,11 @@ class SoulAgent(LlmAgent):
     ) -> None:
         """The threaded execution of the AI reasoning loop."""
         name = state["name"]
-        self._run_coro(
-            self._run_turn_async(name, state, sensations, screen_context)
-        )
+        self._run_coro(self._run_turn_async(name, state, sensations, screen_context))
 
     def handle_arrival(self, soul: Any, x: float, y: float) -> None:
         """Callback from physics when the target location is reached."""
-        if (
-            not self._pending_invocation_id
-            or not self._pending_function_response
-        ):
+        if not self._pending_invocation_id or not self._pending_function_response:
             # Not in a long-running turn
             return
 
@@ -539,9 +510,7 @@ class SoulAgent(LlmAgent):
                 return
 
             # Prepare the updated response
-            updated_response = self._pending_function_response.model_copy(
-                deep=True
-            )
+            updated_response = self._pending_function_response.model_copy(deep=True)
             updated_response.response = {
                 "status": "success",
                 "message": f"Arrived at destination ({x}, {y}).",
@@ -560,16 +529,12 @@ class SoulAgent(LlmAgent):
                         invocation_id=inv_id,
                         new_message=types.Content(
                             role="user",
-                            parts=[
-                                types.Part(function_response=updated_response)
-                            ],
+                            parts=[types.Part(function_response=updated_response)],
                         ),
                     )
                 ) as events:
                     async for event in events:
-                        log.debug(
-                            f"Resumption event received: {type(event).__name__}"
-                        )
+                        log.debug(f"Resumption event received: {type(event).__name__}")
                         # Handle final text responses after arrival
                         if event.content and event.content.parts:
                             for part in event.content.parts:
@@ -601,23 +566,4 @@ class SoulAgent(LlmAgent):
         """
         # 1. Capture Screen Context (Still potentially heavy, but Pyglet specific)
         # Note: We still do this in the thread for now to avoid blocking Main Loop.
-        # Ideally, we'd pass image data too, but pyautogui is external.
-        # If pyautogui conflicts with Pyglet, this might need moving.
-
-        # We wrap the thread target to handle the screenshot inside the thread
-        # to prevent Main Thread lag.
-
-        def _threaded_entry_point():
-            try:
-                screen_context = pyautogui.screenshot()
-            except Exception as e:
-                log.error(f"Screenshot failed: {e}")
-                screen_context = None
-
-            self._run_agent_step(state_snapshot, sensations, screen_context)
-
-        # 4. Spawn Thread
-        threading.Thread(
-            target=_threaded_entry_point,
-            daemon=True,
-        ).start()
+        self._run_agent_step(state_snapshot, sensations, None)
