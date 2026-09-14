@@ -1,0 +1,8 @@
+[project]
+name = "shared"
+version = "0.1.0"
+description = "Shared models and enums for Soulscape client and server"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.12.5",
+]
