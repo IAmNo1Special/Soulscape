@@ -57,6 +57,10 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM soul_inventory")
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'essence_fund'")
     db_conn.commit()
+    from ..routers.marketplace import _marketplace_cache
+
+    _marketplace_cache["timestamp"] = 0.0
+    _marketplace_cache["data"] = None
 
 
 @pytest.fixture

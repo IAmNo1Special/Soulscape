@@ -96,9 +96,7 @@ def test_idor_social_post():
     # Note: identity.id for soul secret is the soul_id
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT author_id FROM social_posts WHERE title = 'Hack'"
-        )
+        cursor.execute("SELECT author_id FROM social_posts WHERE title = 'Hack'")
         row = cursor.fetchone()
         assert (
             row["author_id"] == "soul_1"
@@ -144,9 +142,7 @@ def test_operator_override():
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT author_id FROM social_posts WHERE title = 'Admin Post'"
-        )
+        cursor.execute("SELECT author_id FROM social_posts WHERE title = 'Admin Post'")
         assert cursor.fetchone()["author_id"] == "target_user"
 
 

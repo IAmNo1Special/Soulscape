@@ -9,13 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import database
 from ..models import SoulResponse, SoulUpdate
-from ..security import UserIdentity, get_api_key
+from ..security import UserIdentity, get_api_key, validate_secret, generate_token_expiry
 
 logger = logging.getLogger("soulscape_hub")
 
-router = APIRouter(
-    prefix="/souls", tags=["Souls"], dependencies=[Depends(get_api_key)]
-)
+router = APIRouter(prefix="/souls", tags=["Souls"], dependencies=[Depends(get_api_key)])
 
 
 @router.get("", response_model=list[SoulResponse])
@@ -38,18 +36,41 @@ def get_souls(
             cursor = conn.cursor()
             if owner_id:
                 cursor.execute(
-                    "SELECT * FROM souls WHERE owner_id = ?", (owner_id,)
+                    "SELECT soul_id, owner_id, name, first_name, family_name, "
+                    "species, gender, level, essence, hp, max_hp, satiety, "
+                    "hydration, xp, position, hometown, birth_date, activity, "
+                    "mother_id, father_id, orb_color, aura_color, aura_visible, "
+                    "stat_hp_base, stat_atk_base, stat_def_base, "
+                    "stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base, "
+                    "stat_hp_iv, stat_atk_iv, stat_def_iv, "
+                    "stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv, "
+                    "stat_hp_ev, stat_atk_ev, stat_def_ev, "
+                    "stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev, "
+                    "nature FROM souls WHERE owner_id = ?",
+                    (owner_id,),
                 )
             else:
-                cursor.execute("SELECT * FROM souls")
+                cursor.execute(
+                    "SELECT soul_id, owner_id, name, first_name, family_name, "
+                    "species, gender, level, essence, hp, max_hp, satiety, "
+                    "hydration, xp, position, hometown, birth_date, activity, "
+                    "mother_id, father_id, orb_color, aura_color, aura_visible, "
+                    "stat_hp_base, stat_atk_base, stat_def_base, "
+                    "stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base, "
+                    "stat_hp_iv, stat_atk_iv, stat_def_iv, "
+                    "stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv, "
+                    "stat_hp_ev, stat_atk_ev, stat_def_ev, "
+                    "stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev, "
+                    "nature FROM souls"
+                )
             souls = []
             for row in cursor.fetchall():
                 s = dict(row)
-                s.pop("secret", None)
                 souls.append(s)
 
-            # Performance Fix (r2806164032): Filter inventory by soul_ids
             soul_ids = [s["soul_id"] for s in souls]
+            if not soul_ids:
+                return souls
             inventory_items = []
             if soul_ids:
                 placeholders = ",".join("?" for _ in soul_ids)
@@ -85,9 +106,7 @@ def get_souls(
 
 
 @router.post("")
-def update_souls(
-    payload: SoulUpdate, identity: UserIdentity = Depends(get_api_key)
-):
+def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_key)):
     """Updates souls for a specific owner. Expects {owner_id: str, souls: [...]}."""
     # IDOR Mitigation: Derive owner_id from identity
     owner_id = payload.owner_id
@@ -115,9 +134,7 @@ def update_souls(
             # IDOR/Takeover Fix: Verify that all provided souls are either new or owned by this owner
             for s in souls:
                 sid = s.get("soul_id")
-                cursor.execute(
-                    "SELECT owner_id FROM souls WHERE soul_id = ?", (sid,)
-                )
+                cursor.execute("SELECT owner_id FROM souls WHERE soul_id = ?", (sid,))
                 existing = cursor.fetchone()
                 if existing and existing["owner_id"] != owner_id:
                     raise HTTPException(
@@ -133,8 +150,14 @@ def update_souls(
 
             for s in souls:
                 soul_id = s.get("soul_id")
-                # Restore secret if it existed, or use one from payload (for registration)
                 secret = s.get("secret") or existing_secrets.get(soul_id)
+                if secret and secret != existing_secrets.get(soul_id):
+                    validate_secret(secret)
+                token_expiry = (
+                    generate_token_expiry()
+                    if secret and secret != existing_secrets.get(soul_id)
+                    else None
+                )
 
                 orb = s.get("orb_color", [1, 1, 1])
                 aura = s.get("aura_color", [1, 1, 1])
@@ -149,7 +172,7 @@ def update_souls(
                         stat_hp_base, stat_atk_base, stat_def_base, stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base,
                         stat_hp_iv, stat_atk_iv, stat_def_iv, stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv,
                         stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev,
-                        nature, secret
+                        nature, secret, token_expiry, is_revoked
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?,
@@ -158,6 +181,7 @@ def update_souls(
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?,
                         ?, ?
                     )
                 """,
@@ -208,6 +232,8 @@ def update_souls(
                         s.get("stat_vis_ev", 0),
                         s.get("nature", "Hardy"),
                         secret,
+                        token_expiry,
+                        0,
                     ),
                 )
 

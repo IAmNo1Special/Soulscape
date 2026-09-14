@@ -16,9 +16,7 @@ async def test_websocket_connect_existing_close_error():
     # Test lines 37-40: Exception when closing existing connection
     mock_ws_old = MagicMock()
     # close() is async
-    mock_ws_old.close = unittest.mock.AsyncMock(
-        side_effect=Exception("Close Fail")
-    )
+    mock_ws_old.close = unittest.mock.AsyncMock(side_effect=Exception("Close Fail"))
 
     mock_ws_new = MagicMock()
     mock_ws_new.accept = unittest.mock.AsyncMock()
@@ -39,9 +37,7 @@ async def test_websocket_broadcast_error():
     # Test lines 62-63: Exception during broadcast removes connection
     mock_ws = MagicMock()
     # send_json() is async
-    mock_ws.send_json = unittest.mock.AsyncMock(
-        side_effect=Exception("Send Fail")
-    )
+    mock_ws.send_json = unittest.mock.AsyncMock(side_effect=Exception("Send Fail"))
 
     manager.active_connections["user1"] = mock_ws
 

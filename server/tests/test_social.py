@@ -8,7 +8,7 @@ def test_get_social_empty(client: TestClient):
 
 
 def test_create_post(client: TestClient, register_soul):
-    register_soul("1", essence=100.0, name="Alice", secret="alice_secret")
+    register_soul("1", essence=100.0, name="Alice", secret="alice_secret_key_123")
     post_payload = {
         "author_id": "1",
         "author_name": "Alice",
@@ -18,7 +18,7 @@ def test_create_post(client: TestClient, register_soul):
     response = client.post(
         "/social/post",
         json=post_payload,
-        headers={"X-Hub-Secret": "alice_secret"},
+        headers={"X-Hub-Secret": "alice_secret_key_123"},
     )
     assert response.status_code == 200
     data = response.json()
@@ -26,7 +26,7 @@ def test_create_post(client: TestClient, register_soul):
     assert "message_id" in data
 
     # Verify post in feed
-    response = client.get("/social", headers={"X-Hub-Secret": "alice_secret"})
+    response = client.get("/social", headers={"X-Hub-Secret": "alice_secret_key_123"})
     posts = response.json()
     assert len(posts) == 1
     assert posts[0]["author_name"] == "Alice"
@@ -35,8 +35,8 @@ def test_create_post(client: TestClient, register_soul):
 
 def test_reply_to_post(client: TestClient, register_soul):
     # Create post
-    register_soul("1", essence=100.0, name="Alice", secret="alice_secret")
-    register_soul("2", essence=100.0, name="Bob", secret="bob_secret")
+    register_soul("1", essence=100.0, name="Alice", secret="alice_secret_key_123")
+    register_soul("2", essence=100.0, name="Bob", secret="bob_secret_key_1234")
 
     post_payload = {
         "author_id": "1",
@@ -46,7 +46,7 @@ def test_reply_to_post(client: TestClient, register_soul):
     res_post = client.post(
         "/social/post",
         json=post_payload,
-        headers={"X-Hub-Secret": "alice_secret"},
+        headers={"X-Hub-Secret": "alice_secret_key_123"},
     )
     message_id = res_post.json()["message_id"]
 
@@ -60,13 +60,13 @@ def test_reply_to_post(client: TestClient, register_soul):
     response = client.post(
         "/social/reply",
         json=reply_payload,
-        headers={"X-Hub-Secret": "bob_secret"},
+        headers={"X-Hub-Secret": "bob_secret_key_1234"},
     )
     assert response.status_code == 200
     assert response.json()["status"] == "success"
 
     # Verify reply in feed
-    response = client.get("/social", headers={"X-Hub-Secret": "alice_secret"})
+    response = client.get("/social", headers={"X-Hub-Secret": "alice_secret_key_123"})
     posts = response.json()
     assert len(posts[0]["replies"]) == 1
     assert posts[0]["replies"][0]["author_name"] == "Bob"
@@ -74,7 +74,7 @@ def test_reply_to_post(client: TestClient, register_soul):
 
 
 def test_reply_to_nonexistent_post(client: TestClient, register_soul):
-    register_soul("2", essence=100.0, secret="bob_secret")
+    register_soul("2", essence=100.0, secret="bob_secret_key_1234")
     reply_payload = {
         "message_id": "none",
         "author_id": "2",
@@ -84,7 +84,7 @@ def test_reply_to_nonexistent_post(client: TestClient, register_soul):
     response = client.post(
         "/social/reply",
         json=reply_payload,
-        headers={"X-Hub-Secret": "bob_secret"},
+        headers={"X-Hub-Secret": "bob_secret_key_1234"},
     )
     assert response.status_code == 404
     assert response.json()["detail"] == "Target message none not found"
@@ -92,7 +92,7 @@ def test_reply_to_nonexistent_post(client: TestClient, register_soul):
 
 def test_edit_message(client: TestClient, register_soul):
     # Create post
-    register_soul("1", essence=100.0, name="Alice", secret="alice_secret")
+    register_soul("1", essence=100.0, name="Alice", secret="alice_secret_key_123")
     post_res = client.post(
         "/social/post",
         json={
@@ -100,7 +100,7 @@ def test_edit_message(client: TestClient, register_soul):
             "author_name": "Alice",
             "content": "Original content",
         },
-        headers={"X-Hub-Secret": "alice_secret"},
+        headers={"X-Hub-Secret": "alice_secret_key_123"},
     )
     message_id = post_res.json()["message_id"]
 
@@ -108,21 +108,21 @@ def test_edit_message(client: TestClient, register_soul):
     edit_res = client.post(
         f"/social/edit/{message_id}",
         json={"author_id": "1", "content": "Edited content"},
-        headers={"X-Hub-Secret": "alice_secret"},
+        headers={"X-Hub-Secret": "alice_secret_key_123"},
     )
     assert edit_res.status_code == 200
 
     # Verify edit
-    get_res = client.get("/social", headers={"X-Hub-Secret": "alice_secret"})
+    get_res = client.get("/social", headers={"X-Hub-Secret": "alice_secret_key_123"})
     posts = get_res.json()
     assert posts[0]["content"] == "Edited content"
 
     # Unauthorized edit attempt
-    register_soul("2", secret="bob_secret")
+    register_soul("2", secret="bob_secret_key_1234")
     fail_res = client.post(
         f"/social/edit/{message_id}",
         json={"author_id": "2", "content": "Hacker edit"},
-        headers={"X-Hub-Secret": "bob_secret"},
+        headers={"X-Hub-Secret": "bob_secret_key_1234"},
     )
     assert fail_res.status_code == 404
     assert fail_res.json()["detail"] == "Message not found or unauthorized"
@@ -130,7 +130,7 @@ def test_edit_message(client: TestClient, register_soul):
 
 def test_delete_message(client: TestClient, register_soul):
     # Create post
-    register_soul("1", essence=100.0, name="Alice", secret="alice_secret")
+    register_soul("1", essence=100.0, name="Alice", secret="alice_secret_key_123")
     post_res = client.post(
         "/social/post",
         json={
@@ -138,31 +138,31 @@ def test_delete_message(client: TestClient, register_soul):
             "author_name": "Alice",
             "content": "To be deleted",
         },
-        headers={"X-Hub-Secret": "alice_secret"},
+        headers={"X-Hub-Secret": "alice_secret_key_123"},
     )
     message_id = post_res.json()["message_id"]
 
     # Unauthorized delete
-    register_soul("2", secret="bob_secret")
+    register_soul("2", secret="bob_secret_key_1234")
     fail_res = client.post(
         f"/social/delete/{message_id}",
         json={"author_id": "2"},
-        headers={"X-Hub-Secret": "bob_secret"},
+        headers={"X-Hub-Secret": "bob_secret_key_1234"},
     )
     assert fail_res.status_code == 404
 
-    get_res = client.get("/social", headers={"X-Hub-Secret": "alice_secret"})
+    get_res = client.get("/social", headers={"X-Hub-Secret": "alice_secret_key_123"})
     assert len(get_res.json()) == 1
 
     # Authorized delete
     del_res = client.post(
         f"/social/delete/{message_id}",
         json={"author_id": "1"},
-        headers={"X-Hub-Secret": "alice_secret"},
+        headers={"X-Hub-Secret": "alice_secret_key_123"},
     )
     assert del_res.status_code == 200
 
-    get_res = client.get("/social", headers={"X-Hub-Secret": "alice_secret"})
+    get_res = client.get("/social", headers={"X-Hub-Secret": "alice_secret_key_123"})
     assert len(get_res.json()) == 0
 
 

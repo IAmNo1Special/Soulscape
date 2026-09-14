@@ -23,6 +23,7 @@ def _get_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -36,9 +37,7 @@ def get_db():
         conn.close()
 
 
-def charge_soul(
-    cursor: sqlite3.Cursor, soul_id: str, amount: float, description: str
-):
+def charge_soul(cursor: sqlite3.Cursor, soul_id: str, amount: float, description: str):
     """
     Deducts essence from a soul. Raises HTTPException if soul not found or insufficient essence.
     """
@@ -57,6 +56,21 @@ def charge_soul(
             status_code=400,
             detail=f"Insufficient essence for {description}. Required: {amount}",
         )
+
+
+def log_audit(
+    cursor: sqlite3.Cursor,
+    operator_id: str,
+    action: str,
+    target_type: str = "",
+    target_id: str = "",
+    details: str = "",
+):
+    cursor.execute(
+        "INSERT INTO audit_log (operator_id, action, target_type, target_id, details) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (operator_id, action, target_type, target_id, details),
+    )
 
 
 def init_db():
@@ -147,16 +161,11 @@ def init_db():
                     stat_spe_ev INTEGER,
                     stat_vis_ev INTEGER,
                     nature TEXT,
-                    secret TEXT
+                    secret TEXT,
+                    token_expiry REAL,
+                    is_revoked INTEGER DEFAULT 0
                 )
             """)
-            # Migration: Add secret column if it doesn't exist
-            try:
-                cursor.execute("ALTER TABLE souls ADD COLUMN secret TEXT")
-            except sqlite3.OperationalError:
-                # Column already exists
-                pass
-
             # Inventory Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS soul_inventory (
@@ -185,6 +194,35 @@ def init_db():
             cursor.execute(
                 "INSERT OR IGNORE INTO globals (key, value) VALUES ('essence_fund', 0.0)"
             )
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_souls_owner_id ON souls(owner_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_souls_secret ON souls(secret)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_soul_inventory_soul_id
+                ON soul_inventory(soul_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_marketplace_listing_id
+                ON marketplace(listing_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_social_posts_message_id
+                ON social_posts(message_id)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    operator_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target_type TEXT,
+                    target_id TEXT,
+                    details TEXT,
+                    timestamp REAL DEFAULT (strftime('%s', 'now'))
+                )
+            """)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise

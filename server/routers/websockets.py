@@ -14,6 +14,7 @@ from fastapi import (
     status,
 )
 
+from .. import database
 from ..managers import manager
 from ..security import verify_ws_token
 
@@ -41,9 +42,7 @@ async def websocket_presence(
     # Verify authorization
     # Operator can connect as anyone, but regular users must match their owner_id
     is_authorized = (
-        identity.is_operator
-        or identity.owner_id == owner_id
-        or identity.id == owner_id
+        identity.is_operator or identity.owner_id == owner_id or identity.id == owner_id
     )
 
     if not is_authorized:
@@ -60,6 +59,15 @@ async def websocket_presence(
         return
 
     await manager.connect(owner_id, websocket)
+    owned_soul_ids: set = set()
+    if identity.is_user:
+        with database.get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT soul_id FROM souls WHERE owner_id = ?",
+                (owner_id,),
+            )
+            owned_soul_ids = {row["soul_id"] for row in cursor.fetchall()}
     try:
         # Send current online owners to the newly connected client
         online = manager.get_online_owners()
@@ -88,6 +96,18 @@ async def websocket_presence(
 
                 if msg_type == "soul_update":
                     souls = message.get("souls", [])
+                    if identity.is_user:
+                        for soul in souls:
+                            sid = soul.get("soul_id")
+                            if sid and sid not in owned_soul_ids:
+                                logger.warning(
+                                    f"Spoofing attempt: {owner_id} sent soul_id={sid} not owned"
+                                )
+                                await websocket.close(
+                                    code=status.WS_1008_POLICY_VIOLATION,
+                                    reason="Invalid soul_id",
+                                )
+                                return
                     await manager.broadcast(
                         {
                             "type": "soul_updated",

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import WebSocket
@@ -9,12 +10,10 @@ class ConnectionManager:
     """Manages active WebSocket connections for presence tracking."""
 
     def __init__(self):
-        # {owner_id: WebSocket}
         self.active_connections: dict[str, WebSocket] = {}
 
     async def connect(self, owner_id: str, websocket: WebSocket):
         await websocket.accept()
-        # Close existing connection for this owner if any
         if owner_id in self.active_connections:
             try:
                 await self.active_connections[owner_id].close()
@@ -37,14 +36,16 @@ class ConnectionManager:
         return list(self.active_connections.keys())
 
     async def broadcast(self, message: dict, exclude: str | None = None):
-        """Send a message to all connected clients, optionally excluding one."""
-        for owner_id, ws in list(self.active_connections.items()):
+        async def _send(owner_id, ws):
             if owner_id == exclude:
-                continue
+                return
             try:
-                await ws.send_json(message)
+                await asyncio.wait_for(ws.send_json(message), timeout=5)
             except Exception:
                 self.active_connections.pop(owner_id, None)
+
+        tasks = [_send(oid, ws) for oid, ws in list(self.active_connections.items())]
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 manager = ConnectionManager()

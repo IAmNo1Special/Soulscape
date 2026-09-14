@@ -1,5 +1,6 @@
 import os
 import secrets
+import time
 from typing import Optional
 
 from fastapi import HTTPException, Security, WebSocket, status
@@ -15,6 +16,21 @@ API_KEY_NAME = "X-Hub-Secret"
 api_key_header_scheme = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 OPERATOR_ID = os.getenv("HUB_OPERATOR_ID", "HUB_OPERATOR")
+SECRET_MIN_LENGTH = 16
+TOKEN_LIFETIME_SECONDS = 30 * 24 * 3600
+
+
+def validate_secret(secret: str) -> str:
+    if not secret or len(secret) < SECRET_MIN_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Secret must be at least {SECRET_MIN_LENGTH} characters",
+        )
+    return secret
+
+
+def generate_token_expiry() -> float:
+    return time.time() + TOKEN_LIFETIME_SECONDS
 
 
 class UserIdentity(BaseModel):
@@ -64,11 +80,22 @@ async def get_api_key(
         with database.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT soul_id, owner_id FROM souls WHERE secret = ?",
+                "SELECT soul_id, owner_id, token_expiry, is_revoked "
+                "FROM souls WHERE secret = ?",
                 (api_key,),
             )
             row = cursor.fetchone()
             if row:
+                if row["is_revoked"]:
+                    raise HTTPException(
+                        status_code=HTTP_403_FORBIDDEN,
+                        detail="Token has been revoked",
+                    )
+                if row["token_expiry"] and row["token_expiry"] < time.time():
+                    raise HTTPException(
+                        status_code=HTTP_403_FORBIDDEN,
+                        detail="Token has expired",
+                    )
                 return UserIdentity(
                     id=row["soul_id"], owner_id=row["owner_id"], role="user"
                 )
@@ -104,11 +131,16 @@ async def verify_ws_token(
         with database.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT soul_id, owner_id FROM souls WHERE secret = ?",
+                "SELECT soul_id, owner_id, token_expiry, is_revoked "
+                "FROM souls WHERE secret = ?",
                 (received_token,),
             )
             row = cursor.fetchone()
             if row:
+                if row["is_revoked"]:
+                    return None
+                if row["token_expiry"] and row["token_expiry"] < time.time():
+                    return None
                 return UserIdentity(
                     id=row["soul_id"], owner_id=row["owner_id"], role="user"
                 )

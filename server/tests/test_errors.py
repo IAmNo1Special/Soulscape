@@ -2,9 +2,7 @@ from unittest.mock import patch
 
 
 def test_marketplace_error(client):
-    with patch(
-        "server.database.get_db", side_effect=Exception("DB Connection Fail")
-    ):
+    with patch("server.database.get_db", side_effect=Exception("DB Connection Fail")):
         response = client.get("/marketplace")
         assert response.status_code == 500
         assert "DB Connection Fail" in response.json()["detail"]

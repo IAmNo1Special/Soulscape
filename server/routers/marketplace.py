@@ -4,6 +4,7 @@ API endpoints for the marketplace functionality, including item listings and tra
 
 import json
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,45 +21,73 @@ router = APIRouter(
     dependencies=[Depends(get_api_key)],
 )
 
+MAX_ITEM_SIZE = 100_000
+MAX_JSON_DEPTH = 10
+CACHE_TTL = 10.0
+
+_marketplace_cache: dict = {"timestamp": 0.0, "data": None}
+
+
+def _safe_json_loads(data: str) -> dict:
+    if len(data) > MAX_ITEM_SIZE:
+        raise HTTPException(status_code=400, detail="Item data too large")
+    try:
+        parsed = json.loads(data)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid item JSON")
+    _validate_depth(parsed)
+    return parsed
+
+
+def _validate_depth(obj, depth: int = 0):
+    if depth > MAX_JSON_DEPTH:
+        raise HTTPException(status_code=400, detail="Item nesting too deep")
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _validate_depth(v, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            _validate_depth(v, depth + 1)
+
 
 @router.get("")
 def get_marketplace():
+    now = time.time()
+    if _marketplace_cache["data"] is not None:
+        if now - _marketplace_cache["timestamp"] < CACHE_TTL:
+            return _marketplace_cache["data"]
     try:
         with database.get_db() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT value FROM globals WHERE key = 'essence_fund'"
-            )
+            cursor.execute("SELECT value FROM globals WHERE key = 'essence_fund'")
             essence_fund = cursor.fetchone()["value"]
 
             cursor.execute("SELECT * FROM marketplace")
             listings = []
             for row in cursor.fetchall():
                 listing = dict(row)
-                listing["item"] = json.loads(listing["item"])
+                listing["item"] = _safe_json_loads(listing["item"])
                 listings.append(listing)
 
-            return {"essence_fund": essence_fund, "listings": listings}
+            result = {"essence_fund": essence_fund, "listings": listings}
+            _marketplace_cache["timestamp"] = now
+            _marketplace_cache["data"] = result
+            return result
     except Exception as e:
         logger.error(f"Error in get_marketplace: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/list")
-def add_listing(
-    listing: MarketListing, identity: UserIdentity = Depends(get_api_key)
-):
+def add_listing(listing: MarketListing, identity: UserIdentity = Depends(get_api_key)):
     listing_id = listing.listing_id or str(uuid.uuid4())[:8]
     if listing.price <= 0:
-        raise HTTPException(
-            status_code=400, detail="Price must be greater than zero"
-        )
+        raise HTTPException(status_code=400, detail="Price must be greater than zero")
 
     listing_data = listing.model_dump()
     # IDOR Mitigation: Strictly derive seller_id from identity
     seller_id = identity.id
     if identity.is_operator and listing.seller_id:
-        # Operator can override seller_id
         seller_id = listing.seller_id
 
     try:
@@ -78,7 +107,19 @@ def add_listing(
                     listing_data["timestamp"],
                 ),
             )
+            if identity.is_operator and identity.id != seller_id:
+                database.log_audit(
+                    cursor, identity.id, "marketplace_list_override",
+                    target_type="listing", target_id=listing_id,
+                    details=f"seller_id={seller_id}",
+                )
+            if identity.is_operator and listing.seller_id:
+                database.log_audit(
+                    cursor, identity.id, "add_listing_as_operator",
+                    target_type="listing", target_id=listing_id,
+                )
             conn.commit()
+            _marketplace_cache["timestamp"] = 0.0
     except Exception as e:
         logger.error(f"Error in add_listing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -93,6 +134,7 @@ def buy_item(
 ):
     try:
         with database.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM marketplace WHERE listing_id = ?", (listing_id,)
@@ -140,10 +182,11 @@ def buy_item(
                 (tax,),
             )
             conn.commit()
+            _marketplace_cache["timestamp"] = 0.0
 
         return {
             "status": "success",
-            "item": json.loads(listing["item"]),
+            "item": _safe_json_loads(listing["item"]),
             "seller_id": seller_id,
             "seller_credited": seller_net,
             "tax_collected": tax,

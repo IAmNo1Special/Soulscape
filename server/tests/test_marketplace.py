@@ -63,8 +63,6 @@ def test_buy_item(client: TestClient, register_soul):
 
 def test_buy_item_not_found(client: TestClient, register_soul):
     register_soul("456")
-    response = client.post(
-        "/marketplace/buy/nonexistent", json={"buyer_id": "456"}
-    )
+    response = client.post("/marketplace/buy/nonexistent", json={"buyer_id": "456"})
     assert response.status_code == 404
     assert response.json()["detail"] == "Listing not found"

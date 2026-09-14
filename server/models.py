@@ -92,6 +92,27 @@ class SoulResponse(BaseModel):
     aura_color: Optional[List[float]] = [1.0, 1.0, 1.0]
     aura_visible: Optional[bool] = True
     nature: Optional[str] = "Hardy"
+    stat_hp_base: Optional[int] = 0
+    stat_atk_base: Optional[int] = 0
+    stat_def_base: Optional[int] = 0
+    stat_spa_base: Optional[int] = 0
+    stat_spd_base: Optional[int] = 0
+    stat_spe_base: Optional[int] = 0
+    stat_vis_base: Optional[int] = 0
+    stat_hp_iv: Optional[int] = 0
+    stat_atk_iv: Optional[int] = 0
+    stat_def_iv: Optional[int] = 0
+    stat_spa_iv: Optional[int] = 0
+    stat_spd_iv: Optional[int] = 0
+    stat_spe_iv: Optional[int] = 0
+    stat_vis_iv: Optional[int] = 0
+    stat_hp_ev: Optional[int] = 0
+    stat_atk_ev: Optional[int] = 0
+    stat_def_ev: Optional[int] = 0
+    stat_spa_ev: Optional[int] = 0
+    stat_spd_ev: Optional[int] = 0
+    stat_spe_ev: Optional[int] = 0
+    stat_vis_ev: Optional[int] = 0
     inventory: Dict[str, int] = {}
 
     model_config = ConfigDict(from_attributes=True)

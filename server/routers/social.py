@@ -3,6 +3,7 @@ API endpoints for social interactions, including posts, replies, and moderation.
 """
 
 import logging
+import re
 import time
 import uuid
 from typing import Any, Dict, List
@@ -19,6 +20,16 @@ logger = logging.getLogger("soulscape_hub")
 POST_COST = 20.00
 REPLY_COST = 8.00
 
+
+def _sanitize(text: str) -> str:
+    if not text:
+        return ""
+    clean = re.sub(r"<[^>]*>", "", text)
+    clean = clean.replace("[", "&#91;").replace("]", "&#93;")
+    clean = clean.replace("{", "&#123;").replace("}", "&#125;")
+    return clean[:2000].strip()
+
+
 router = APIRouter(
     prefix="/social", tags=["Social"], dependencies=[Depends(get_api_key)]
 )
@@ -30,9 +41,7 @@ def get_social():
         with database.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM social_posts ORDER BY timestamp DESC")
-            posts = {
-                dict(row)["message_id"]: dict(row) for row in cursor.fetchall()
-            }
+            posts = {dict(row)["message_id"]: dict(row) for row in cursor.fetchall()}
 
             for post in posts.values():
                 post["replies"] = []
@@ -60,9 +69,7 @@ def get_social():
 
 
 @router.post("/post")
-def create_post(
-    post: SocialPost, identity: UserIdentity = Depends(get_api_key)
-):
+def create_post(post: SocialPost, identity: UserIdentity = Depends(get_api_key)):
     post_id = post.message_id or str(uuid.uuid4())[:12]
     post_data = post.model_dump()
 
@@ -75,12 +82,11 @@ def create_post(
     logger.info(f"Creating post {post_id} from {post_data['author_name']}")
     try:
         with database.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             # Exempt Operator from charges
             if not identity.is_operator:
-                database.charge_soul(
-                    cursor, author_id, POST_COST, "create post"
-                )
+                database.charge_soul(cursor, author_id, POST_COST, "create post")
 
             cursor.execute(
                 """
@@ -92,7 +98,7 @@ def create_post(
                     author_id,
                     post_data["author_name"],
                     post_data["title"],
-                    post_data["content"],
+                    _sanitize(post_data["content"]),
                     post_data["timestamp"],
                 ),
             )
@@ -124,12 +130,11 @@ def reply_to_post(
 
     try:
         with database.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             # Exempt Operator from charges
             if not identity.is_operator:
-                database.charge_soul(
-                    cursor, author_id, REPLY_COST, "post reply"
-                )
+                database.charge_soul(cursor, author_id, REPLY_COST, "post reply")
 
             # Check if parent exists
             cursor.execute(
@@ -160,7 +165,7 @@ def reply_to_post(
                     message_id,
                     author_id,
                     reply_data["author_name"],
-                    reply_data["content"],
+                    _sanitize(reply_data["content"]),
                     time.time(),
                 ),
             )
@@ -245,6 +250,10 @@ def delete_message(
 
             # If not deleted, try as operator (system admin)
             if rows_affected == 0 and identity.is_operator:
+                database.log_audit(
+                    cursor, identity.id, "social_delete_as_operator",
+                    target_type="message", target_id=message_id,
+                )
                 cursor.execute(
                     "DELETE FROM social_posts WHERE message_id = ?",
                     (message_id,),
