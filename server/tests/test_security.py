@@ -4,7 +4,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from ..database import DB_PATH, get_db, init_db
+from ..database import DB_PATH, get_db, init_db, hash_secret
 from ..main import app
 
 
@@ -32,14 +32,18 @@ def setup_data():
         cursor.execute("DELETE FROM social_replies")
         cursor.execute("DELETE FROM marketplace")
 
-        # Add some test data
+        # Add some test data (using hashed secrets)
+        secret_hash_1 = hash_secret("secret_1")
+        secret_prefix_1 = secret_hash_1[:16]
+        secret_hash_2 = hash_secret("secret_2")
+        secret_prefix_2 = secret_hash_2[:16]
         cursor.execute(
-            "INSERT INTO souls (soul_id, owner_id, name, essence, secret) VALUES (?, ?, ?, ?, ?)",
-            ("soul_1", "user_1", "Test Soul 1", 100.0, "secret_1"),
+            "INSERT INTO souls (soul_id, owner_id, name, essence, secret_hash, secret_prefix) VALUES (?, ?, ?, ?, ?, ?)",
+            ("soul_1", "user_1", "Test Soul 1", 100.0, secret_hash_1, secret_prefix_1),
         )
         cursor.execute(
-            "INSERT INTO souls (soul_id, owner_id, name, essence, secret) VALUES (?, ?, ?, ?, ?)",
-            ("soul_2", "user_2", "Test Soul 2", 100.0, "secret_2"),
+            "INSERT INTO souls (soul_id, owner_id, name, essence, secret_hash, secret_prefix) VALUES (?, ?, ?, ?, ?, ?)",
+            ("soul_2", "user_2", "Test Soul 2", 100.0, secret_hash_2, secret_prefix_2),
         )
         # Add some inventory items
         cursor.execute(
@@ -195,6 +199,8 @@ def test_secret_redaction():
     data = response.json()
     for soul in data:
         assert "secret" not in soul
+        assert "secret_hash" not in soul
+        assert "secret_prefix" not in soul
 
 
 def test_idor_get_souls():
@@ -210,12 +216,12 @@ def test_idor_get_souls():
 
 def test_token_persistence():
     client = TestClient(app)
-    # Check current secret
+    # Check current secret hash
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT secret FROM souls WHERE soul_id = 'soul_1'")
-        old_secret = cursor.fetchone()["secret"]
-        assert old_secret == "secret_1"
+        cursor.execute("SELECT secret_hash FROM souls WHERE soul_id = 'soul_1'")
+        old_hash = cursor.fetchone()["secret_hash"]
+        assert old_hash is not None
 
     # Perform update for soul_1
     response = client.post(
@@ -234,12 +240,12 @@ def test_token_persistence():
     )
     assert response.status_code == 200
 
-    # Verify secret still exists
+    # Verify secret hash still exists
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT secret FROM souls WHERE soul_id = 'soul_1'")
-        new_secret = cursor.fetchone()["secret"]
-        assert new_secret == "secret_1"
+        cursor.execute("SELECT secret_hash FROM souls WHERE soul_id = 'soul_1'")
+        new_hash = cursor.fetchone()["secret_hash"]
+        assert new_hash == old_hash
 
 
 def test_idor_social_delete():

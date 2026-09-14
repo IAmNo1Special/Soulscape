@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import database
 from ..models import SoulResponse, SoulUpdate
-from ..security import UserIdentity, get_api_key, validate_secret, generate_token_expiry
+from ..security import UserIdentity, get_api_key, make_secret_record, generate_token_expiry, validate_secret
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -35,6 +35,11 @@ def get_souls(
         with database.get_db() as conn:
             cursor = conn.cursor()
             if owner_id:
+                if identity.is_operator and owner_id != identity.owner_id:
+                    database.audit_log(
+                        identity.id, "souls_view_other_owner",
+                        target_type="owner", target_id=owner_id,
+                    )
                 cursor.execute(
                     "SELECT soul_id, owner_id, name, first_name, family_name, "
                     "species, gender, level, essence, hp, max_hp, satiety, "
@@ -50,6 +55,11 @@ def get_souls(
                     (owner_id,),
                 )
             else:
+                if identity.is_operator:
+                    database.audit_log(
+                        identity.id, "souls_view_all",
+                        target_type="souls", target_id="all",
+                    )
                 cursor.execute(
                     "SELECT soul_id, owner_id, name, first_name, family_name, "
                     "species, gender, level, essence, hp, max_hp, satiety, "
@@ -124,11 +134,12 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
 
             # Fix Token Loss: Fetch existing secrets for this owner before deletion
             cursor.execute(
-                "SELECT soul_id, secret FROM souls WHERE owner_id = ?",
+                "SELECT soul_id, secret_hash, secret_prefix FROM souls WHERE owner_id = ?",
                 (owner_id,),
             )
             existing_secrets = {
-                row["soul_id"]: row["secret"] for row in cursor.fetchall()
+                row["soul_id"]: {"secret_hash": row["secret_hash"], "secret_prefix": row["secret_prefix"]}
+                for row in cursor.fetchall()
             }
 
             # IDOR/Takeover Fix: Verify that all provided souls are either new or owned by this owner
@@ -150,14 +161,25 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
 
             for s in souls:
                 soul_id = s.get("soul_id")
-                secret = s.get("secret") or existing_secrets.get(soul_id)
-                if secret and secret != existing_secrets.get(soul_id):
+                secret = s.get("secret")
+                existing = existing_secrets.get(soul_id)
+                existing_hash = existing.get("secret_hash") if existing else None
+
+                if secret and secret != existing_hash:
                     validate_secret(secret)
                 token_expiry = (
                     generate_token_expiry()
-                    if secret and secret != existing_secrets.get(soul_id)
+                    if secret and secret != existing_hash
                     else None
                 )
+
+                secret_hash = None
+                secret_prefix = None
+                if secret and secret != existing_hash:
+                    secret_hash, secret_prefix = make_secret_record(secret)
+                else:
+                    secret_hash = existing_hash
+                    secret_prefix = existing.get("secret_prefix") if existing else None
 
                 orb = s.get("orb_color", [1, 1, 1])
                 aura = s.get("aura_color", [1, 1, 1])
@@ -172,7 +194,7 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         stat_hp_base, stat_atk_base, stat_def_base, stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base,
                         stat_hp_iv, stat_atk_iv, stat_def_iv, stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv,
                         stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev,
-                        nature, secret, token_expiry, is_revoked
+                        nature, secret_hash, secret_prefix, token_expiry, is_revoked
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?,
@@ -181,32 +203,32 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?,
+                        ?, ?, ?,
                         ?, ?
                     )
                 """,
-                    (
-                        soul_id,
-                        owner_id,
-                        s.get("name"),
-                        s.get("first_name"),
-                        s.get("family_name"),
-                        s.get("species"),
-                        s.get("gender"),
-                        s.get("level"),
-                        s.get("xp"),
-                        s.get("mother_id"),
-                        s.get("father_id"),
-                        s.get("hp"),
-                        s.get("max_hp") or 100,
-                        s.get("satiety"),
-                        s.get("hydration"),
-                        s.get("essence"),
-                        json.dumps(s.get("position", [0, 0])),
-                        json.dumps(s.get("hometown")),
-                        s.get("birth_date"),
-                        s.get("activity"),
-                        json.dumps(orb),
+                (
+                    soul_id,
+                    owner_id,
+                    s.get("name"),
+                    s.get("first_name"),
+                    s.get("family_name"),
+                    s.get("species"),
+                    s.get("gender"),
+                    s.get("level"),
+                    s.get("xp"),
+                    s.get("mother_id"),
+                    s.get("father_id"),
+                    s.get("hp"),
+                    s.get("max_hp") or 100,
+                    s.get("satiety"),
+                    s.get("hydration"),
+                    s.get("essence"),
+                    json.dumps(s.get("position", [0, 0])),
+                    json.dumps(s.get("hometown")),
+                    s.get("birth_date"),
+                    s.get("activity"),
+                    json.dumps(orb),
                         json.dumps(aura),
                         1 if s.get("aura_visible") else 0,
                         s.get("stat_hp_base", 0),
@@ -231,7 +253,8 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         s.get("stat_spe_ev", 0),
                         s.get("stat_vis_ev", 0),
                         s.get("nature", "Hardy"),
-                        secret,
+                        secret_hash,
+                        secret_prefix,
                         token_expiry,
                         0,
                     ),

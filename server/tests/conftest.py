@@ -55,6 +55,9 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM social_replies")
     cursor.execute("DELETE FROM souls")
     cursor.execute("DELETE FROM soul_inventory")
+    cursor.execute("DELETE FROM ws_sessions")
+    cursor.execute("DELETE FROM rate_limits")
+    cursor.execute("DELETE FROM audit_log")
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'essence_fund'")
     db_conn.commit()
     from ..routers.marketplace import _marketplace_cache

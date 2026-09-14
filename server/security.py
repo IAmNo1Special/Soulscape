@@ -29,6 +29,13 @@ def validate_secret(secret: str) -> str:
     return secret
 
 
+def make_secret_record(secret: str) -> tuple[str, str]:
+    """Create (secret_hash, secret_prefix) from a plaintext secret."""
+    secret_hash = database.hash_secret(secret)
+    secret_prefix = secret_hash[:16]  # First 16 chars of hash for O(1) lookup
+    return secret_hash, secret_prefix
+
+
 def generate_token_expiry() -> float:
     return time.time() + TOKEN_LIFETIME_SECONDS
 
@@ -76,29 +83,30 @@ async def get_api_key(
         if secrets.compare_digest(api_key, hub_secret):
             return UserIdentity(id=OPERATOR_ID, role="operator")
 
-        # Check for individual Soul secret
+        # Check for individual Soul secret (hashed lookup)
+        prefix = database.hash_secret(api_key)[:16]
         with database.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT soul_id, owner_id, token_expiry, is_revoked "
-                "FROM souls WHERE secret = ?",
-                (api_key,),
+                "SELECT soul_id, owner_id, token_expiry, is_revoked, secret_hash "
+                "FROM souls WHERE secret_prefix = ?",
+                (prefix,),
             )
-            row = cursor.fetchone()
-            if row:
-                if row["is_revoked"]:
-                    raise HTTPException(
-                        status_code=HTTP_403_FORBIDDEN,
-                        detail="Token has been revoked",
+            for row in cursor.fetchall():
+                if database.verify_secret_hash(api_key, row["secret_hash"]):
+                    if row["is_revoked"]:
+                        raise HTTPException(
+                            status_code=HTTP_403_FORBIDDEN,
+                            detail="Token has been revoked",
+                        )
+                    if row["token_expiry"] and row["token_expiry"] < time.time():
+                        raise HTTPException(
+                            status_code=HTTP_403_FORBIDDEN,
+                            detail="Token has expired",
+                        )
+                    return UserIdentity(
+                        id=row["soul_id"], owner_id=row["owner_id"], role="user"
                     )
-                if row["token_expiry"] and row["token_expiry"] < time.time():
-                    raise HTTPException(
-                        status_code=HTTP_403_FORBIDDEN,
-                        detail="Token has expired",
-                    )
-                return UserIdentity(
-                    id=row["soul_id"], owner_id=row["owner_id"], role="user"
-                )
 
     raise HTTPException(
         status_code=HTTP_403_FORBIDDEN, detail="Could not validate credentials"
@@ -127,22 +135,23 @@ async def verify_ws_token(
         if secrets.compare_digest(received_token, hub_secret):
             return UserIdentity(id=OPERATOR_ID, role="operator")
 
-        # Check for individual Soul secret
+        # Check for individual Soul secret (hashed lookup)
+        prefix = database.hash_secret(received_token)[:16]
         with database.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT soul_id, owner_id, token_expiry, is_revoked "
-                "FROM souls WHERE secret = ?",
-                (received_token,),
+                "SELECT soul_id, owner_id, token_expiry, is_revoked, secret_hash "
+                "FROM souls WHERE secret_prefix = ?",
+                (prefix,),
             )
-            row = cursor.fetchone()
-            if row:
-                if row["is_revoked"]:
-                    return None
-                if row["token_expiry"] and row["token_expiry"] < time.time():
-                    return None
-                return UserIdentity(
-                    id=row["soul_id"], owner_id=row["owner_id"], role="user"
-                )
+            for row in cursor.fetchall():
+                if database.verify_secret_hash(received_token, row["secret_hash"]):
+                    if row["is_revoked"]:
+                        return None
+                    if row["token_expiry"] and row["token_expiry"] < time.time():
+                        return None
+                    return UserIdentity(
+                        id=row["soul_id"], owner_id=row["owner_id"], role="user"
+                    )
 
     return None

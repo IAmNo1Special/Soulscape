@@ -24,7 +24,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra -q --asyncio-mode=auto"
+addopts = "-ra -q"
 filterwarnings = [
     "ignore:\\[EXPERIMENTAL\\] ResumabilityConfig:UserWarning",
 ]
