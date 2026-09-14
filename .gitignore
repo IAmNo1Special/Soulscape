@@ -9,6 +9,11 @@ wheels/
 # Virtual environment
 .venv
 
+# uv workspace - only the root uv.lock is tracked
+client/uv.lock
+server/uv.lock
+shared/uv.lock
+
 # Environment variables
 *.env
 
