@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from client.core.soul.goap_brain import GoapBrain
 from client.core.soul.soul import Soul
 
 
@@ -21,7 +22,7 @@ class TestSoul:
 
     def test_initialization(self, soul):
         assert soul.biology.name == "Test Soul"
-        assert soul.agent is None  # AI parked; see client/ai/README.md
+        assert isinstance(soul.agent, GoapBrain)
 
     def test_update_physics(self, soul):
         # Mock physics update

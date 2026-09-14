@@ -97,6 +97,7 @@ name = "client"
 version = "0.1.0"
 source = { virtual = "client" }
 dependencies = [
+    { name = "goapauto" },
     { name = "httpx" },
     { name = "pillow" },
     { name = "pyautogui" },
@@ -116,6 +117,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "goapauto", specifier = ">=0.3.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "pyautogui", specifier = ">=0.9.54" },
@@ -225,6 +227,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/48/47/75f6bea02e797abff1bca968d5997793898032d9923c1935ae2efdece642/fastapi-0.129.0.tar.gz", hash = "sha256:61315cebd2e65df5f97ec298c888f9de30430dd0612d59d6480beafbc10655af", size = 375450, upload-time = "2026-02-12T13:54:52.541Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/dd/d0ee25348ac58245ee9f90b6f3cbb666bf01f69be7e0911f9851bddbda16/fastapi-0.129.0-py3-none-any.whl", hash = "sha256:b4946880e48f462692b31c083be0432275cbfb6e2274566b1be91479cc1a84ec", size = 102950, upload-time = "2026-02-12T13:54:54.528Z" },
+]
+
+[[package]]
+name = "goapauto"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/31/ed/87ed4562b808d5375ccec2010c1c7dc0d25cbd61635f0a80d5a002815dfa/goapauto-0.3.0.tar.gz", hash = "sha256:94e8ac36b902db38017d1755a42d0007d1ac04161e6f94d237865ecc56ac4257", size = 21716, upload-time = "2026-08-01T21:23:00.028Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/f3/b36ab9086bb7638c2fd3fce5e626a174cad538e7a224e8800730938f303a/goapauto-0.3.0-py3-none-any.whl", hash = "sha256:cbb510b3116a43da6f691f848b87ac8093fdafafeacc5e6a31ae4cec2ee64368", size = 27046, upload-time = "2026-08-01T21:22:58.884Z" },
 ]
 
 [[package]]

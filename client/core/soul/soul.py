@@ -1,6 +1,6 @@
 """This module defines the Soul class, which manages soul state, biology,
-and physics-based movement. Autonomous decision-making is parked;
-see client/ai/README.md.
+and physics-based movement. Moment-to-moment decisions come from the GOAP
+brain (see goap_brain.py); the LLM agent is parked (see client/ai/README.md).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from ...system.command_queue import CommandQueue
 from ...system.logger import log
 from ..biology import Gender, SoulBiology, SoulStats, Species
 from ..interactions import Inventory
+from .goap_brain import GoapBrain
 from .physics import SoulPhysics
 
 
@@ -25,8 +26,9 @@ class Soul:
 
     The Soul class is the core actor in the ecosystem. It possesses
     needs (satiety, hydration, etc...) and digital presence in the window
-    environment. Autonomous decision-making is parked (see client/ai/README.md);
-    the decision tick below is a no-op while no brain is attached.
+    environment. Autonomous decision-making is handled by the attached
+    brain (see client/core/soul/goap_brain.py); the decision tick below
+    is a no-op while no brain is attached.
 
     Attributes:
         soul_id: A unique integer identifier for the soul instance.
@@ -228,10 +230,21 @@ class Soul:
             self, on_move_end, self.screen_width, self.screen_height
         )
 
-        # Ownership and decision-making hook (AI parked: always None for now)
+        # Ownership and decision-making hook (GOAP brain for local souls)
         self.owner_id = owner_id or local_instance_id
         self.local_instance_id = local_instance_id
         self.agent: Any = None
+
+        if (
+            self.owner_id == self.local_instance_id
+            or self.local_instance_id is None
+        ):
+            log.info(f"Attaching GOAP brain for local soul: {self.biology.name}")
+            self.agent = GoapBrain(soul=self)
+        else:
+            log.info(
+                f"Skipping brain for remote soul: {self.biology.name} (Owner: {self.owner_id})"
+            )
 
     # --- Simulation Methods ---
 

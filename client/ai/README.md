@@ -1,5 +1,9 @@
 # Parked AI brain (LLM / magetools)
 
+The active moment-to-moment brain is now GOAP (see
+`../core/soul/goap_brain.py`). This directory holds only the retired LLM
+code below.
+
 Core dev continues WITHOUT this code. Nothing under `client/core/`,
 `client/system/`, `client/ui/`, `server/` or `shared/` imports from here,
 and the default test suite ignores this directory.
