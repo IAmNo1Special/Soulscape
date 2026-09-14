@@ -1,5 +1,6 @@
 """This module defines the Soul class, which manages soul state, biology,
-physics-based movement, and AI-driven decision-making using the ADK.
+and physics-based movement. Autonomous decision-making is parked;
+see client/ai/README.md.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from ...system.command_queue import CommandQueue
 from ...system.logger import log
 from ..biology import Gender, SoulBiology, SoulStats, Species
 from ..interactions import Inventory
-from .agent import SoulAgent
 from .physics import SoulPhysics
 
 
@@ -24,9 +24,9 @@ class Soul:
     """An autonomous entity within the Soulscape simulation.
 
     The Soul class is the core actor in the ecosystem. It possesses
-    needs (satiety, hydration, etc...), digital presence in the window environment,
-    and an AI 'brain' (LlmAgent) that allows it to perceive its surroundings
-    and take meaningful actions via available tools.
+    needs (satiety, hydration, etc...) and digital presence in the window
+    environment. Autonomous decision-making is parked (see client/ai/README.md);
+    the decision tick below is a no-op while no brain is attached.
 
     Attributes:
         soul_id: A unique integer identifier for the soul instance.
@@ -228,21 +228,10 @@ class Soul:
             self, on_move_end, self.screen_width, self.screen_height
         )
 
-        # Ownership and Agent logic
+        # Ownership and decision-making hook (AI parked: always None for now)
         self.owner_id = owner_id or local_instance_id
         self.local_instance_id = local_instance_id
-        self.agent: SoulAgent | None = None
-
-        if (
-            self.owner_id == self.local_instance_id
-            or self.local_instance_id is None
-        ):
-            log.info(f"Spawning agent for local soul: {self.biology.name}")
-            self.agent = SoulAgent(soul=self)
-        else:
-            log.info(
-                f"Skipping agent for remote soul: {self.biology.name} (Owner: {self.owner_id})"
-            )
+        self.agent: Any = None
 
     # --- Simulation Methods ---
 
@@ -297,7 +286,8 @@ class Soul:
     def create_snapshot(self) -> dict[str, Any]:
         """Creates a thread-safe snapshot of the soul's current state.
 
-        This method creates a deep copy of all data required by the AI agent,
+        This method creates a deep copy of all data required by background
+        consumers (network sync, future decision-making brains),
         ensuring that no live Pyglet objects or mutable shared state reference
         leak into the background thread.
 
@@ -591,7 +581,3 @@ class Soul:
         if self.agent:
             self.agent.stop()
         log.debug(f"Cleaned up resources for soul: {self.biology.name}")
-
-
-# Resolve circular dependency for Pydantic
-SoulAgent.model_rebuild()

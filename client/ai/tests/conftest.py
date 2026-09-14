@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ..core.soul.soul import Soul
-
-# Ensure imports work (handled by pyproject.toml now)
+from client.core.soul.soul import Soul
 
 
 @pytest.fixture
@@ -23,10 +21,15 @@ def mock_network_service(mocker):
 
 
 @pytest.fixture
-def mock_gui_service(mocker):
-    """Mock the GuiService to prevent GUI process spawning."""
-    mock = mocker.patch("client.ui.gui.gui_service.GuiService", autospec=True)
-    return mock.return_value
+def mock_grimorium(mocker):
+    """Mock Grimorium interaction (parked with client/ai/agent.py)."""
+    return mocker.patch("client.ai.agent.Grimorium", autospec=True)
+
+
+@pytest.fixture
+def mock_vision(mocker):
+    """Mock pyautogui to prevent screenshotting."""
+    return mocker.patch("pyautogui.screenshot")
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +37,6 @@ def auto_cleanup_souls(monkeypatch):
     """Automatically tracks and cleans up Soul instances created during tests."""
     created_souls = []
 
-    # Capture the original unbound __init__
     original_init = Soul.__init__
 
     def wrapped_init(self, *args, **kwargs):
@@ -45,11 +47,9 @@ def auto_cleanup_souls(monkeypatch):
 
     yield
 
-    # Teardown: Stop all tracked souls
     for soul in created_souls:
         try:
             if hasattr(soul, "stop"):
                 soul.stop()
         except Exception as e:
-            # It's useful to see errors during cleanup, even if we don't re-raise.
             print(f"WARNING: Error during auto-cleanup of soul: {e}")

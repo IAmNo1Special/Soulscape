@@ -23,7 +23,7 @@ from .interactions import (
     MessageBoard,
     Operator,
 )
-from .soul import Soul, SoulAgent, SoulPhysics
+from .soul import Soul, SoulPhysics
 
 __all__ = [
     "Ability",
@@ -46,6 +46,5 @@ __all__ = [
     "MessageBoard",
     "Operator",
     "Soul",
-    "SoulAgent",
     "SoulPhysics",
 ]

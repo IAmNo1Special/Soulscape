@@ -41,42 +41,41 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
 
     def test_soul_secret_generation(self):
         """Test that a Soul generates a secret if none is provided."""
-        # We patch SoulAgent to prevent it from starting background threads
-        # during this purely metadata test.
-        with patch("client.core.soul.soul.SoulAgent"):
-            mock_scheduler = MagicMock()
+        # No background agent threads exist while AI is parked
+        # (see client/ai/README.md), so souls can be built directly.
+        mock_scheduler = MagicMock()
 
-            # Case 1: No secret provided
-            soul = Soul(
-                orb_color_rgb=(0.5, 0.5, 0.5),
-                aura_color_rgb=(1.0, 0.5, 0.0),
-                task_scheduler=mock_scheduler,
-            )
-            self.assertTrue(hasattr(soul, "secret"))
-            self.assertIsNotNone(soul.secret)
-            self.assertTrue(len(soul.secret) > 0)
+        # Case 1: No secret provided
+        soul = Soul(
+            orb_color_rgb=(0.5, 0.5, 0.5),
+            aura_color_rgb=(1.0, 0.5, 0.0),
+            task_scheduler=mock_scheduler,
+        )
+        self.assertTrue(hasattr(soul, "secret"))
+        self.assertIsNotNone(soul.secret)
+        self.assertTrue(len(soul.secret) > 0)
 
-            # Case 2: Secret provided
-            soul2 = Soul(
-                orb_color_rgb=(0.5, 0.5, 0.5),
-                aura_color_rgb=(1.0, 0.5, 0.0),
-                task_scheduler=mock_scheduler,
-                secret="preset-secret",
-            )
-            self.assertEqual(soul2.secret, "preset-secret")
+        # Case 2: Secret provided
+        soul2 = Soul(
+            orb_color_rgb=(0.5, 0.5, 0.5),
+            aura_color_rgb=(1.0, 0.5, 0.0),
+            task_scheduler=mock_scheduler,
+            secret="preset-secret",
+        )
+        self.assertEqual(soul2.secret, "preset-secret")
 
-            # Case 3: Persistence
-            data = soul2.to_dict(include_secret=True)
-            self.assertIn("secret", data)
-            self.assertEqual(data["secret"], "preset-secret")
+        # Case 3: Persistence
+        data = soul2.to_dict(include_secret=True)
+        self.assertIn("secret", data)
+        self.assertEqual(data["secret"], "preset-secret")
 
-            # Case 4: Loading
-            soul3 = Soul.from_dict(data, task_scheduler=mock_scheduler)
-            self.assertEqual(soul3.secret, "preset-secret")
+        # Case 4: Loading
+        soul3 = Soul.from_dict(data, task_scheduler=mock_scheduler)
+        self.assertEqual(soul3.secret, "preset-secret")
 
-            # Case 5: Security (No Secret)
-            public_data = soul2.to_dict(include_secret=False)
-            self.assertNotIn("secret", public_data)
+        # Case 5: Security (No Secret)
+        public_data = soul2.to_dict(include_secret=False)
+        self.assertNotIn("secret", public_data)
 
     async def test_network_client_token_header(self):
         """Test that NetworkClient uses the token header when provided."""
@@ -111,7 +110,7 @@ class TestHubV3Integration(unittest.IsolatedAsyncioTestCase):
 
     async def test_social_interaction_flow(self):
         """Test that MessageBoard.create_post passes the token correctly."""
-        # We assume the caller (SoulAgent or similar) extracts the secret from the Soul
+        # We assume the caller extracts the secret from the Soul
         # and passes it to create_post.
 
         await self.message_board.create_post(

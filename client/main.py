@@ -826,7 +826,7 @@ class SoulscapeApp:
         # 2. Stop Network Service (Graceful WebSocket closure)
         self.network_service.stop()
 
-        # 3. Stop all Souls and their Agents
+        # 3. Stop all Souls
         for soul in list(self.active_souls):
             soul.stop()
 

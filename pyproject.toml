@@ -37,6 +37,9 @@ known_first_party = ["soulscape"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
+addopts = [
+    "--ignore=client/ai",
+]
 testpaths = [
     "server/tests",
     "client/tests",

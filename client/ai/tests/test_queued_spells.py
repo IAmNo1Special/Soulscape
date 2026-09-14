@@ -26,10 +26,7 @@ async def test_move_to_enqueues_command(mock_network_service, mock_grimorium):
     )
     # Dynamically load move_to
     path = (
-        Path(__file__).parent.parent.parent
-        / "core"
-        / "soul"
-        / ".magetools"
+        Path(__file__).parent.parent / "spells"
         / "survival"
         / "movement.py"
     )
@@ -58,10 +55,7 @@ async def test_eat_enqueues_commands(mock_network_service, mock_grimorium):
     )
     # Dynamically load eat
     path = (
-        Path(__file__).parent.parent.parent
-        / "core"
-        / "soul"
-        / ".magetools"
+        Path(__file__).parent.parent / "spells"
         / "survival"
         / "satiety.py"
     )
@@ -94,10 +88,7 @@ async def test_drink_enqueues_commands(mock_network_service, mock_grimorium):
     )
     # Dynamically load drink
     path = (
-        Path(__file__).parent.parent.parent
-        / "core"
-        / "soul"
-        / ".magetools"
+        Path(__file__).parent.parent / "spells"
         / "survival"
         / "hydration.py"
     )
@@ -132,10 +123,7 @@ async def test_market_sell_enqueues_command(
     )
     # Dynamically load market_sell
     path = (
-        Path(__file__).parent.parent.parent
-        / "core"
-        / "soul"
-        / ".magetools"
+        Path(__file__).parent.parent / "spells"
         / "economy"
         / "marketplace.py"
     )
@@ -169,10 +157,7 @@ async def test_market_buy_enqueues_command(
     )
     # Dynamically load market_buy
     path = (
-        Path(__file__).parent.parent.parent
-        / "core"
-        / "soul"
-        / ".magetools"
+        Path(__file__).parent.parent / "spells"
         / "economy"
         / "marketplace.py"
     )
@@ -202,10 +187,7 @@ async def test_market_cancel_enqueues_command(
     )
     # Dynamically load market_cancel
     path = (
-        Path(__file__).parent.parent.parent
-        / "core"
-        / "soul"
-        / ".magetools"
+        Path(__file__).parent.parent / "spells"
         / "economy"
         / "marketplace.py"
     )

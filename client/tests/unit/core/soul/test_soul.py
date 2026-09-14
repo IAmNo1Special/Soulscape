@@ -7,7 +7,7 @@ from client.core.soul.soul import Soul
 
 class TestSoul:
     @pytest.fixture
-    def soul(self, mock_network_service, mock_grimorium):
+    def soul(self, mock_network_service):
         # Initialize a soul with default args
         soul = Soul(
             orb_color_rgb=(1.0, 0.0, 0.0),
@@ -21,7 +21,7 @@ class TestSoul:
 
     def test_initialization(self, soul):
         assert soul.biology.name == "Test Soul"
-        assert soul.agent is not None  # Should spawn agent for local soul
+        assert soul.agent is None  # AI parked; see client/ai/README.md
 
     def test_update_physics(self, soul):
         # Mock physics update
@@ -44,22 +44,6 @@ class TestSoul:
         soul.biology.decrease_satiety.assert_called_once()
         soul.biology.decrease_hydration.assert_called_once()
         soul.biology.check_status.assert_called_once()
-
-    def test_agent_trigger(self, soul, mock_grimorium, mocker):
-        # Mock agent to be not busy and ready
-        soul.agent.is_busy = False
-        soul.agent.last_decision_time = 0
-        soul.agent.decision_interval = 0.1
-        soul.time = 1.0  # Time passed
-
-        # Patch the class method instead of instance attribute
-        mock_trigger = mocker.patch(
-            "client.core.soul.agent.SoulAgent.trigger_decision"
-        )
-
-        soul.update(0.1)
-
-        mock_trigger.assert_called_once()
 
     def test_snapshot_creation(self, soul):
         snapshot = soul.create_snapshot()
