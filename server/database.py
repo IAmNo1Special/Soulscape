@@ -49,7 +49,6 @@ def verify_secret_hash(secret: str, secret_hash: str) -> bool:
 def create_ws_session(owner_id: str, soul_id: str, hmac_key: str, ttl_seconds: int = 86400) -> str:
     """Create a new WebSocket session with HMAC key. Returns session_id."""
     import secrets as pysecrets
-    import time
     session_id = pysecrets.token_urlsafe(32)
     now = time.time()
     with get_db() as conn:
@@ -65,7 +64,6 @@ def create_ws_session(owner_id: str, soul_id: str, hmac_key: str, ttl_seconds: i
 
 def get_ws_session(session_id: str) -> dict | None:
     """Get a valid WebSocket session by ID, updating last_used_at."""
-    import time
     now = time.time()
     with get_db() as conn:
         cursor = conn.cursor()
@@ -90,7 +88,6 @@ def validate_and_store_nonce(session_id: str, nonce: str, max_age_seconds: int =
     Validate a nonce hasn't been used recently and store it.
     Returns True if nonce is new, False if replay detected.
     """
-    import time
     import json
     now = time.time()
     cutoff = now - max_age_seconds
@@ -130,7 +127,6 @@ def delete_ws_session(session_id: str) -> None:
 
 def cleanup_expired_ws_sessions() -> int:
     """Remove expired WebSocket sessions. Returns count deleted."""
-    import time
     now = time.time()
     with get_db() as conn:
         cursor = conn.cursor()
@@ -149,7 +145,6 @@ def check_rate_limit(owner_id: str, cost: float = 1.0) -> bool:
     Check and consume tokens from the owner's rate limit bucket.
     Returns True if allowed, False if rate limited.
     """
-    import time
     now = time.time()
     with get_db() as conn:
         cursor = conn.cursor()
@@ -197,7 +192,6 @@ def check_rate_limit(owner_id: str, cost: float = 1.0) -> bool:
 
 def get_rate_limit_status(owner_id: str) -> dict:
     """Get current rate limit status for an owner."""
-    import time
     now = time.time()
     with get_db() as conn:
         cursor = conn.cursor()
@@ -334,7 +328,6 @@ def audit_log(
     details: str = "",
 ) -> None:
     """Standalone audit log entry (opens its own connection)."""
-    import time
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -435,6 +428,7 @@ def init_db():
                     nature TEXT,
                     secret_hash TEXT,
                     secret_prefix TEXT,
+                    updated_at REAL,
                     token_expiry REAL,
                     is_revoked INTEGER DEFAULT 0
                 )
@@ -526,8 +520,45 @@ def init_db():
                     refill_rate REAL NOT NULL DEFAULT 50.0
                 )
             """)
+            _migrate_souls(cursor)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
     finally:
         conn.close()
+
+
+def _add_column_if_missing(cursor, table: str, column_def: str) -> None:
+    cursor.execute(f"PRAGMA table_info({table})")
+    existing = {row["name"] for row in cursor.fetchall()}
+    col_name = column_def.split()[0]
+    if col_name not in existing:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+        logger.info(f"Migration: added {table}.{col_name}")
+
+
+def _migrate_souls(cursor) -> None:
+    _add_column_if_missing(cursor, "souls", "secret_hash TEXT")
+    _add_column_if_missing(cursor, "souls", "secret_prefix TEXT")
+    _add_column_if_missing(cursor, "souls", "updated_at REAL")
+    cursor.execute("PRAGMA table_info(souls)")
+    cols = {row["name"] for row in cursor.fetchall()}
+    if "secret" in cols:
+        cursor.execute(
+            "SELECT soul_id, secret FROM souls "
+            "WHERE secret IS NOT NULL AND secret_hash IS NULL"
+        )
+        migrated = 0
+        for row in cursor.fetchall():
+            secret_hash = hash_secret(row["secret"])
+            cursor.execute(
+                "UPDATE souls SET secret_hash = ?, secret_prefix = ? "
+                "WHERE soul_id = ?",
+                (secret_hash, secret_hash[:16], row["soul_id"]),
+            )
+            migrated += 1
+        cursor.execute("ALTER TABLE souls DROP COLUMN secret")
+        logger.info(
+            f"Migration: hashed {migrated} legacy plaintext secrets, "
+            "dropped souls.secret"
+        )

@@ -4,6 +4,9 @@ API endpoints for managing Soul states, inventory, and lifecycle.
 
 import json
 import logging
+import math
+import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -14,6 +17,134 @@ from ..security import UserIdentity, get_api_key, make_secret_record, generate_t
 logger = logging.getLogger("soulscape_hub")
 
 router = APIRouter(prefix="/souls", tags=["Souls"], dependencies=[Depends(get_api_key)])
+
+STARTING_ESSENCE = 100.0
+MAX_LEVEL_PER_HOUR = 10.0
+MAX_XP_PER_HOUR = 100000.0
+MAX_POSITION = 4096.0
+MAX_ITEM_QUANTITY = 99
+MAX_ITEM_NAME_LEN = 64
+
+_IV_KEYS = [
+    "stat_hp_iv",
+    "stat_atk_iv",
+    "stat_def_iv",
+    "stat_spa_iv",
+    "stat_spd_iv",
+    "stat_spe_iv",
+    "stat_vis_iv",
+]
+_EV_KEYS = [
+    "stat_hp_ev",
+    "stat_atk_ev",
+    "stat_def_ev",
+    "stat_spa_ev",
+    "stat_spd_ev",
+    "stat_spe_ev",
+    "stat_vis_ev",
+]
+_BASE_KEYS = [
+    "stat_hp_base",
+    "stat_atk_base",
+    "stat_def_base",
+    "stat_spa_base",
+    "stat_spd_base",
+    "stat_spe_base",
+    "stat_vis_base",
+]
+
+
+def _to_float(value: Any, default: float) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if math.isfinite(result) else default
+
+
+def _to_int(value: Any, default: int) -> int:
+    try:
+        result = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return result
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(value, hi))
+
+
+def _validate_soul_state(
+    s: dict, stored: dict | None, now: float
+) -> tuple[dict, str | None]:
+    soul_id = s.get("soul_id")
+    if not soul_id or not isinstance(soul_id, str):
+        return {}, "missing soul_id"
+    out: dict[str, Any] = {}
+    out["satiety"] = _clamp(_to_float(s.get("satiety"), 100.0), 0.0, 100.0)
+    out["hydration"] = _clamp(_to_float(s.get("hydration"), 100.0), 0.0, 100.0)
+    out["max_hp"] = _clamp(_to_float(s.get("max_hp"), 100.0) or 100.0, 1.0, 9999.0)
+    out["hp"] = _clamp(_to_float(s.get("hp"), out["max_hp"]), 0.0, out["max_hp"])
+    level = _clamp(_to_int(s.get("level"), 1), 1, 100)
+    xp = max(0.0, _to_float(s.get("xp"), 0.0))
+    if stored is not None:
+        stored_level = _to_int(stored.get("level"), 1)
+        stored_xp = max(0.0, _to_float(stored.get("xp"), 0.0))
+        if level < stored_level:
+            return {}, f"level decreased {stored_level} -> {level}"
+        if xp < stored_xp:
+            return {}, f"xp decreased {stored_xp} -> {xp}"
+        elapsed_hours = max((now - _to_float(stored.get("updated_at"), now)) / 3600.0, 1.0 / 3600.0)
+        if (level - stored_level) / elapsed_hours > MAX_LEVEL_PER_HOUR:
+            return {}, f"level gain too fast {stored_level} -> {level}"
+        if (xp - stored_xp) / elapsed_hours > MAX_XP_PER_HOUR:
+            return {}, f"xp gain too fast {stored_xp} -> {xp}"
+    out["level"] = level
+    out["xp"] = xp
+    for key in _IV_KEYS:
+        out[key] = int(_clamp(_to_int(s.get(key), 0), 0, 31))
+    for key in _EV_KEYS:
+        out[key] = int(_clamp(_to_int(s.get(key), 0), 0, 255))
+    for key in _BASE_KEYS:
+        out[key] = int(_clamp(_to_int(s.get(key), 100), 1, 255))
+    pos = s.get("position", [0, 0])
+    if (
+        not isinstance(pos, (list, tuple))
+        or len(pos) != 2
+        or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in pos)
+    ):
+        stored_pos = [0, 0]
+        if stored is not None and stored.get("position"):
+            try:
+                stored_pos = json.loads(stored["position"])
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+        pos = stored_pos
+    out["position"] = [float(_clamp(pos[0], 0.0, MAX_POSITION)), float(_clamp(pos[1], 0.0, MAX_POSITION))]
+    return out, None
+
+
+def _validate_inventory_items(inventory: Any) -> list[dict]:
+    if not isinstance(inventory, dict):
+        return []
+    items = inventory.get("items", [])
+    if not isinstance(items, list):
+        return []
+    clean = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        try:
+            quantity = int(float(item.get("quantity", 1)))
+        except (TypeError, ValueError):
+            continue
+        clean.append(
+            {"name": name[:MAX_ITEM_NAME_LEN], "quantity": int(_clamp(quantity, 1, MAX_ITEM_QUANTITY))}
+        )
+    return clean
 
 
 @router.get("", response_model=list[SoulResponse])
@@ -129,17 +260,18 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
         raise HTTPException(status_code=400, detail="owner_id is required")
 
     try:
+        now = time.time()
         with database.get_db() as conn:
             cursor = conn.cursor()
 
-            # Fix Token Loss: Fetch existing secrets for this owner before deletion
             cursor.execute(
-                "SELECT soul_id, secret_hash, secret_prefix FROM souls WHERE owner_id = ?",
+                "SELECT soul_id, secret_hash, secret_prefix, token_expiry, "
+                "essence, xp, level, position, updated_at "
+                "FROM souls WHERE owner_id = ?",
                 (owner_id,),
             )
-            existing_secrets = {
-                row["soul_id"]: {"secret_hash": row["secret_hash"], "secret_prefix": row["secret_prefix"]}
-                for row in cursor.fetchall()
+            stored_rows = {
+                row["soul_id"]: dict(row) for row in cursor.fetchall()
             }
 
             # IDOR/Takeover Fix: Verify that all provided souls are either new or owned by this owner
@@ -153,33 +285,67 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         detail=f"Soul {sid} is owned by another user.",
                     )
 
-            cursor.execute(
-                "DELETE FROM soul_inventory WHERE soul_id IN (SELECT soul_id FROM souls WHERE owner_id = ?)",
-                (owner_id,),
-            )
-            cursor.execute("DELETE FROM souls WHERE owner_id = ?", (owner_id,))
-
+            saved = 0
+            skipped: list[dict] = []
+            validated_souls: list[tuple[dict, dict]] = []
             for s in souls:
                 soul_id = s.get("soul_id")
-                secret = s.get("secret")
-                existing = existing_secrets.get(soul_id)
-                existing_hash = existing.get("secret_hash") if existing else None
+                stored = stored_rows.get(soul_id) if soul_id else None
+                validated, reason = _validate_soul_state(s, stored, now)
+                if reason is not None:
+                    logger.warning(f"Rejected soul save {soul_id}: {reason}")
+                    skipped.append({"soul_id": soul_id, "reason": reason})
+                    continue
+                validated_souls.append((s, validated))
 
-                if secret and secret != existing_hash:
-                    validate_secret(secret)
-                token_expiry = (
-                    generate_token_expiry()
-                    if secret and secret != existing_hash
-                    else None
+            if validated_souls:
+                placeholders = ",".join("?" for _ in validated_souls)
+                valid_ids = [s.get("soul_id") for s, _ in validated_souls]
+                cursor.execute(
+                    f"DELETE FROM soul_inventory WHERE soul_id IN ({placeholders})",
+                    valid_ids,
                 )
-
-                secret_hash = None
-                secret_prefix = None
-                if secret and secret != existing_hash:
-                    secret_hash, secret_prefix = make_secret_record(secret)
-                else:
-                    secret_hash = existing_hash
-                    secret_prefix = existing.get("secret_prefix") if existing else None
+                cursor.execute(
+                    f"DELETE FROM souls WHERE owner_id = ? AND soul_id IN ({placeholders})",
+                    [owner_id, *valid_ids],
+                )
+            seen_ids = {s.get("soul_id") for s, _ in validated_souls}
+            seen_ids |= {
+                item["soul_id"] for item in skipped if item["soul_id"] is not None
+            }
+            stale_ids = [sid for sid in stored_rows if sid not in seen_ids]
+            if stale_ids:
+                placeholders = ",".join("?" for _ in stale_ids)
+                cursor.execute(
+                    f"DELETE FROM soul_inventory WHERE soul_id IN ({placeholders})",
+                    stale_ids,
+                )
+                cursor.execute(
+                    f"DELETE FROM souls WHERE owner_id = ? AND soul_id IN ({placeholders})",
+                    [owner_id, *stale_ids],
+                )
+            for s, validated in validated_souls:
+                soul_id = s.get("soul_id")
+                stored = stored_rows.get(soul_id)
+                secret = s.get("secret")
+                existing_hash = stored.get("secret_hash") if stored else None
+                secret_hash = existing_hash
+                secret_prefix = stored.get("secret_prefix") if stored else None
+                token_expiry = stored.get("token_expiry") if stored else None
+                if secret:
+                    if existing_hash and database.verify_secret_hash(
+                        secret, existing_hash
+                    ):
+                        pass
+                    else:
+                        validate_secret(secret)
+                        secret_hash, secret_prefix = make_secret_record(secret)
+                        token_expiry = generate_token_expiry()
+                essence = (
+                    stored.get("essence")
+                    if stored and stored.get("essence") is not None
+                    else STARTING_ESSENCE
+                )
 
                 orb = s.get("orb_color", [1, 1, 1])
                 aura = s.get("aura_color", [1, 1, 1])
@@ -194,7 +360,7 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         stat_hp_base, stat_atk_base, stat_def_base, stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base,
                         stat_hp_iv, stat_atk_iv, stat_def_iv, stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv,
                         stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev,
-                        nature, secret_hash, secret_prefix, token_expiry, is_revoked
+                        nature, secret_hash, secret_prefix, updated_at, token_expiry, is_revoked
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?,
@@ -204,77 +370,75 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?,
-                        ?, ?
+                        ?, ?, ?
                     )
                 """,
-                (
-                    soul_id,
-                    owner_id,
-                    s.get("name"),
-                    s.get("first_name"),
-                    s.get("family_name"),
-                    s.get("species"),
-                    s.get("gender"),
-                    s.get("level"),
-                    s.get("xp"),
-                    s.get("mother_id"),
-                    s.get("father_id"),
-                    s.get("hp"),
-                    s.get("max_hp") or 100,
-                    s.get("satiety"),
-                    s.get("hydration"),
-                    s.get("essence"),
-                    json.dumps(s.get("position", [0, 0])),
-                    json.dumps(s.get("hometown")),
-                    s.get("birth_date"),
-                    s.get("activity"),
-                    json.dumps(orb),
+                    (
+                        soul_id,
+                        owner_id,
+                        s.get("name"),
+                        s.get("first_name"),
+                        s.get("family_name"),
+                        s.get("species"),
+                        s.get("gender"),
+                        validated["level"],
+                        validated["xp"],
+                        s.get("mother_id"),
+                        s.get("father_id"),
+                        validated["hp"],
+                        validated["max_hp"],
+                        validated["satiety"],
+                        validated["hydration"],
+                        essence,
+                        json.dumps(validated["position"]),
+                        json.dumps(s.get("hometown")),
+                        s.get("birth_date"),
+                        s.get("activity"),
+                        json.dumps(orb),
                         json.dumps(aura),
                         1 if s.get("aura_visible") else 0,
-                        s.get("stat_hp_base", 0),
-                        s.get("stat_atk_base", 0),
-                        s.get("stat_def_base", 0),
-                        s.get("stat_spa_base", 0),
-                        s.get("stat_spd_base", 0),
-                        s.get("stat_spe_base", 0),
-                        s.get("stat_vis_base", 0),
-                        s.get("stat_hp_iv", 0),
-                        s.get("stat_atk_iv", 0),
-                        s.get("stat_def_iv", 0),
-                        s.get("stat_spa_iv", 0),
-                        s.get("stat_spd_iv", 0),
-                        s.get("stat_spe_iv", 0),
-                        s.get("stat_vis_iv", 0),
-                        s.get("stat_hp_ev", 0),
-                        s.get("stat_atk_ev", 0),
-                        s.get("stat_def_ev", 0),
-                        s.get("stat_spa_ev", 0),
-                        s.get("stat_spd_ev", 0),
-                        s.get("stat_spe_ev", 0),
-                        s.get("stat_vis_ev", 0),
+                        validated["stat_hp_base"],
+                        validated["stat_atk_base"],
+                        validated["stat_def_base"],
+                        validated["stat_spa_base"],
+                        validated["stat_spd_base"],
+                        validated["stat_spe_base"],
+                        validated["stat_vis_base"],
+                        validated["stat_hp_iv"],
+                        validated["stat_atk_iv"],
+                        validated["stat_def_iv"],
+                        validated["stat_spa_iv"],
+                        validated["stat_spd_iv"],
+                        validated["stat_spe_iv"],
+                        validated["stat_vis_iv"],
+                        validated["stat_hp_ev"],
+                        validated["stat_atk_ev"],
+                        validated["stat_def_ev"],
+                        validated["stat_spa_ev"],
+                        validated["stat_spd_ev"],
+                        validated["stat_spe_ev"],
+                        validated["stat_vis_ev"],
                         s.get("nature", "Hardy"),
                         secret_hash,
                         secret_prefix,
+                        now,
                         token_expiry,
                         0,
                     ),
                 )
 
-                soul_id = s.get("soul_id")
-                inventory = s.get("inventory", {})
-                if isinstance(inventory, dict):
-                    items = inventory.get("items", [])
-                    for item in items:
-                        cursor.execute(
-                            "INSERT INTO soul_inventory (soul_id, item_name, quantity) VALUES (?, ?, ?)",
-                            (
-                                soul_id,
-                                item.get("name"),
-                                item.get("quantity", 1),
-                            ),
-                        )
+                for item in _validate_inventory_items(s.get("inventory", {})):
+                    cursor.execute(
+                        "INSERT INTO soul_inventory (soul_id, item_name, quantity) VALUES (?, ?, ?)",
+                        (
+                            soul_id,
+                            item["name"],
+                            item["quantity"],
+                        ),
+                    )
+                saved += 1
             conn.commit()
     except Exception as e:
         logger.error(f"Error in update_souls: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    return {"status": "success", "count": len(souls)}
+    return {"status": "success", "count": saved, "skipped": skipped}

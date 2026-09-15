@@ -95,6 +95,15 @@ def register_soul(client):
         }
         res = client.post("/souls", json=payload)
         assert res.status_code == 200
+        # Essence is server-owned (POST /souls ignores client essence), so
+        # fund test souls directly. Production code has no such path.
+        if essence != 100.0:
+            with database.get_db() as conn:
+                conn.execute(
+                    "UPDATE souls SET essence = ? WHERE soul_id = ?",
+                    (essence, soul_id),
+                )
+                conn.commit()
         return res.json()
 
     return _register
