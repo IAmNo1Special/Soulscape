@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from .. import database
+from .. import dormancy
 from .. import intents
 from .. import persistence
 from .. import plots
@@ -32,7 +33,11 @@ logger = logging.getLogger("soulscape_hub")
 
 router = APIRouter(prefix="/souls", tags=["Souls"], dependencies=[Depends(get_api_key)])
 
-STARTING_ESSENCE = 100.0
+# Newborn starter balance (issue #22). Single source of truth lives in
+# dormancy.STARTER_GRANT; the mint ledger entry written at birth carries
+# the same amount, so conservation accounting stays exact.
+# *** TUNABLE -- see dormancy.STARTER_GRANT. ***
+STARTING_ESSENCE = dormancy.STARTER_GRANT
 MAX_LEVEL_PER_HOUR = 10.0
 MAX_XP_PER_HOUR = 100000.0
 MAX_POSITION = 4096.0
@@ -322,7 +327,11 @@ def get_souls(
 
 
 @router.post("")
-def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_scoped)):
+def update_souls(
+    payload: SoulUpdate,
+    request: Request,
+    identity: UserIdentity = Depends(require_scoped),
+):
     """Updates souls for a custodian. Expects {custodian_id: str, souls: [...]}.
     Legacy owner_id is accepted during the migration window."""
     # IDOR Mitigation: non-operators are scoped to their own custody.
@@ -372,6 +381,10 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_s
             skipped: list[dict] = []
             validated_souls: list[tuple[dict, dict]] = []
             saved_ids: list[str] = []
+            # Newborn souls (no stored row) get the issue-#22 starter
+            # grant: cached essence = STARTER_GRANT plus a `mint` ledger
+            # row, so the ledger stays the truth behind the cache.
+            newborn_ids: list[str] = []
             for s in souls:
                 soul_id = s.get("soul_id")
                 stored = stored_rows.get(soul_id) if soul_id else None
@@ -413,6 +426,10 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_s
             for s, validated in validated_souls:
                 soul_id = s.get("soul_id")
                 stored = stored_rows.get(soul_id)
+                if stored is None:
+                    # Truly new soul: the mint ledger row below explains
+                    # the starter grant (issue #22).
+                    newborn_ids.append(soul_id)
                 secret = s.get("secret")
                 existing_hash = stored.get("secret_hash") if stored else None
                 secret_hash = existing_hash
@@ -530,6 +547,13 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_s
                     )
                 saved += 1
                 saved_ids.append(soul_id)
+            # Newborn starter grants (issue #22): one `mint` ledger row
+            # per newborn, in the same transaction as the soul INSERTs.
+            if newborn_ids:
+                tick = getattr(request.app.state, "world_tick", None)
+                tick_id = tick.tick_id if tick is not None else 0
+                for soul_id in newborn_ids:
+                    dormancy.mint_starter_grant(conn, tick_id, soul_id)
             conn.commit()
             for soul_id in saved_ids:
                 persistence.invalidate(soul_id)

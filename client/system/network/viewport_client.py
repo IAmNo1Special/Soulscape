@@ -32,6 +32,11 @@ _NORMAL_STATE = "normal"
 #: Dim factor applied to the desaturated statue color.
 _STATUE_DIM = 0.72
 
+#: Warm tint for dormant statues (issue #22): amber-shifted stone so a
+#: frozen (unfunded) soul is distinguishable from a collapsed one.
+#: Cheap distinction -- same desaturation, different hue.
+_DORMANT_TINT = (1.0, 0.78, 0.45)
+
 
 def is_statue(state: str | None) -> bool:
     """Whether a Hub soul state renders as a statue."""
@@ -50,6 +55,21 @@ def statue_orb_color(
     lum = 0.299 * r + 0.587 * g + 0.114 * b
     dimmed = lum * _STATUE_DIM
     return (dimmed, dimmed, dimmed)
+
+
+def dormant_statue_orb_color(
+    orb_color: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Amber-tinted stone for a dormant (unfunded) soul (issue #22).
+
+    Same desaturated treatment as a collapsed statue, shifted warm so
+    the two freeze states are visually distinguishable at a glance.
+    """
+    r, g, b = orb_color
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    dimmed = lum * _STATUE_DIM
+    tr, tg, tb = _DORMANT_TINT
+    return (dimmed * tr, dimmed * tg, dimmed * tb)
 
 
 def viewport_mode_enabled() -> bool:
@@ -165,6 +185,9 @@ class ViewportConsumer:
         self._clock = clock or time.monotonic
         self._tracks: dict[str, SoulTrack] = {}
         self._states: dict[str, str] = {}
+        # Dormancy (issue #22): wallet-derived freeze, orthogonal to the
+        # lifecycle state. Streams on its own delta domain + snapshot.
+        self._dormant: dict[str, bool] = {}
         self._region: tuple[float, float, float, float] | None = None
 
     @property
@@ -183,6 +206,14 @@ class ViewportConsumer:
     def soul_states(self) -> dict[str, str]:
         """Snapshot of per-soul lifecycle states for the render path."""
         return dict(self._states)
+
+    def is_dormant(self, soul_id: str) -> bool:
+        """Whether the soul is frozen (unfunded) per the Hub (issue #22)."""
+        return self._dormant.get(soul_id, False)
+
+    def dormant_souls(self) -> dict[str, bool]:
+        """Snapshot of per-soul dormancy for the render path."""
+        return dict(self._dormant)
 
     def apply_frame(self, frame: dict) -> None:
         """Apply a Hub SNAPSHOT or DELTA frame using the consumer clock."""
@@ -204,9 +235,13 @@ class ViewportConsumer:
                 float(entry.get("x", 0.0)), float(entry.get("y", 0.0)), now
             )
             self._states[sid] = entry.get("state") or _NORMAL_STATE
+            # Dormancy rides the snapshot (issue #22) so a fresh client
+            # renders frozen statues without waiting for a delta.
+            self._dormant[sid] = bool(entry.get("dormant", False))
         for sid in [key for key in self._tracks if key not in seen]:
             del self._tracks[sid]
             self._states.pop(sid, None)
+            self._dormant.pop(sid, None)
         region = frame.get("region")
         if isinstance(region, dict):
             w = float(region.get("w", 0.0))
@@ -228,6 +263,7 @@ class ViewportConsumer:
             if kind == protocol.EntityOpKind.REMOVE.value:
                 self._tracks.pop(sid, None)
                 self._states.pop(sid, None)
+                self._dormant.pop(sid, None)
                 continue
             if kind != protocol.EntityOpKind.UPSERT.value:
                 continue
@@ -236,6 +272,10 @@ class ViewportConsumer:
             # position; record the lifecycle state either way.
             if "state" in state:
                 self._states[sid] = state["state"] or _NORMAL_STATE
+            # Dormancy ops (issue #22) ride their own domain, orthogonal
+            # to the lifecycle state.
+            if op.get("domain") == "dormancy":
+                self._dormant[sid] = bool(state.get("dormant", False))
             if "x" not in state or "y" not in state:
                 continue
             track = self._track(sid)

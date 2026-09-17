@@ -45,6 +45,7 @@ from . import plots
 from . import social
 from . import world
 from . import biology
+from . import dormancy
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -220,7 +221,8 @@ class WorldTick:
         with database.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT position, custodian_id, owner_id, satiety, state "
+                "SELECT position, custodian_id, owner_id, satiety, state, "
+                "COALESCE(essence, 0.0) AS essence "
                 "FROM souls WHERE soul_id = ?",
                 (soul_id,),
             )
@@ -231,6 +233,12 @@ class WorldTick:
             if (row["state"] or biology.STATE_NORMAL) == biology.STATE_COLLAPSED:
                 # Statues don't walk: a collapsed soul cannot move.
                 self._reject(conn, intent, "collapsed")
+                return
+            # Dormancy (issue #22): frozen souls don't move. Re-checked
+            # here (defense in depth) because the WS ingress rejects
+            # early but REST/unknown paths may not.
+            if dormancy.is_dormant(row["essence"]):
+                self._reject(conn, intent, "soul_dormant")
                 return
             custodian = row["custodian_id"] or row["owner_id"]
             if intent["custodian_id"] is not None and (
@@ -340,11 +348,18 @@ class WorldTick:
             bounds = database.SCREEN_BOUNDS
             with database.get_db() as conn:
                 rows = conn.execute(
-                    "SELECT soul_id, position, velocity, move_target FROM souls"
+                    "SELECT soul_id, position, velocity, move_target, "
+                    "COALESCE(essence, 0.0) AS essence FROM souls"
                 ).fetchall()
                 closed_barrier = plots.has_closed_plots(conn)
                 for row in rows:
                     soul_id = row["soul_id"]
+                    # Dormancy (issue #22): dormant souls are skipped in
+                    # physics -- position frozen, no velocity integration.
+                    # Their move_target is left intact (frozen mid-stride);
+                    # motion resumes on wake.
+                    if dormancy.is_dormant(row["essence"]):
+                        continue
                     try:
                         x, y = _parse_pair(row["position"])
                         vx, vy = _parse_pair(row["velocity"])

@@ -49,6 +49,7 @@ import sqlite3
 import time
 
 from . import database
+from . import dormancy
 from . import persistence
 from . import viewport
 from .intents import _row_to_dict as _intent_row_to_dict
@@ -109,6 +110,7 @@ _WS_ERROR_CODES = {
     "insufficient_funds": "INSUFFICIENT_FUNDS",
     "custody": "CUSTODY_DENIED",
     "feeder_collapsed": "FEEDER_COLLAPSED",
+    "soul_dormant": "SOUL_DORMANT",
     "not_collapsed": "NOT_COLLAPSED",
     "already_fed": "ALREADY_FED",
     "escrow_short": "ESCROW_SHORT",
@@ -160,12 +162,20 @@ def _decay_soul(fields: dict, seconds: float, now: float) -> dict:
     """Closed-form biology advance over `seconds` (mutates nothing).
 
     `fields` keys: satiety, hydration, hp, max_hp, state, fed_flag,
-    rest_started_at, activity, velocity (tuple), move_target (tuple|None).
+    rest_started_at, activity, velocity (tuple), move_target (tuple|None),
+    dormant (bool).
     Returns a dict of changed columns -> new values (JSON strings for
     velocity/move_target where applicable), plus optional keys:
       "_collapsed": True when this span collapsed the soul,
       "_recovered": True when this span recovered the soul,
       "_journal": list of (event_type, payload) to journal.
+
+    Dormancy (issue #22): a dormant soul's biology runs at
+    DORMANCY_BIOLOGY_MULT, the starvation HP chip is skipped (HP is
+    floored at 1 -- the chip is the only thing that lowers HP in v1,
+    so skipping it is the floor), and the collapse transition is
+    skipped (collapse immunity). A dormant soul can never collapse,
+    even starving at HP 1.
     """
     out: dict = {}
     journal: list[tuple[str, dict]] = []
@@ -175,6 +185,7 @@ def _decay_soul(fields: dict, seconds: float, now: float) -> dict:
         return out
 
     state = fields.get("state") or STATE_NORMAL
+    dormant = bool(fields.get("dormant"))
     sat = float(fields.get("satiety") or 0.0)
     hyd = float(fields.get("hydration") or 0.0)
     hp = float(fields.get("hp") or 0.0)
@@ -188,29 +199,42 @@ def _decay_soul(fields: dict, seconds: float, now: float) -> dict:
     active = is_active(velocity, move_target, activity) and state != STATE_COLLAPSED
 
     # --- needs decay (linear in time: per-tick sum == closed form) ---
+    # Dormant souls decay at x0.25 (issue #22).
+    dorm_mult = dormancy.DORMANCY_BIOLOGY_MULT if dormant else 1.0
     sat_rate = SATIETY_REST_PER_H * (SATIETY_ACTIVE_MULT if active else 1.0)
+    sat_rate *= dorm_mult
+    hyd_rate = HYDRATION_PER_H * dorm_mult
     sat_after = max(0.0, sat - sat_rate * hours)
-    hyd_after = max(0.0, hyd - HYDRATION_PER_H * hours)
+    hyd_after = max(0.0, hyd - hyd_rate * hours)
     if sat_after != sat:
         out["satiety"] = sat_after
     if hyd_after != hyd:
         out["hydration"] = hyd_after
 
     # --- starvation HP chip: -1/h for the portion of the span with sat < 20 ---
-    if sat < STARVING_SATIETY:
+    # DORMANCY (issue #22): dormant souls skip the chip entirely -- HP
+    # is floored at 1 (the chip is the only thing that lowers HP in v1)
+    # and the collapse transition below is skipped (immunity).
+    if dormant:
+        chip = 0.0
+    elif sat < STARVING_SATIETY:
         starving_h = hours
+        chip = STARVE_CHIP_PER_H * starving_h
     else:
         t_to_starve = (sat - STARVING_SATIETY) / sat_rate if sat_rate > 0 else hours
         starving_h = max(0.0, hours - t_to_starve)
-    chip = STARVE_CHIP_PER_H * starving_h
+        chip = STARVE_CHIP_PER_H * starving_h
 
     collapsed = False
     if state == STATE_COLLAPSED:
         # Already collapsed: HP stays 0, rest accrues below. No chip.
         pass
-    # DORMANCY_HOOK (#22): when dormancy ships, skip the chip and the
-    # collapse transition here for souls with dormant_until in the future
-    # (dormancy floors HP at 1 and grants collapse immunity).
+    elif dormant:
+        # DORMANCY (issue #22): collapse immunity. A dormant soul never
+        # takes the collapse transition, whatever its HP or satiety.
+        # (A collapsed soul that drains to 0 is dormant too -- orthogonal
+        # states -- but it stays collapsed via the branch above.)
+        pass
     elif hp - chip <= 0.0:
         # HP hits 0 inside this span (or was already 0): starvation
         # collapses the soul. This is the ONLY collapse route in v1.
@@ -240,6 +264,13 @@ def _decay_soul(fields: dict, seconds: float, now: float) -> dict:
         hp_after = max(0.0, hp - chip)
         if hp_after != hp:
             out["hp"] = hp_after
+
+    # --- dormancy HP floor (issue #22): a frozen soul's HP never sits
+    # below 1, whatever drained it. Orthogonal to the lifecycle state: a
+    # collapsed soul that also drains stays collapsed, HP floored at 1
+    # (recovery still needs feeding + rest).
+    if dormant and hp < 1.0:
+        out["hp"] = 1.0
 
     # --- rest clock ---
     if state == STATE_COLLAPSED and collapsed:
@@ -309,7 +340,8 @@ def _parse_target(raw):
 
 _BIOLOGY_COLUMNS = (
     "soul_id, satiety, hydration, hp, max_hp, state, fed_flag,"
-    " rest_started_at, activity, velocity, move_target"
+    " rest_started_at, activity, velocity, move_target,"
+    " COALESCE(essence, 0.0) AS essence"
 )
 
 
@@ -351,6 +383,11 @@ def _advance_rows(
             "activity": row["activity"],
             "velocity": velocity,
             "move_target": move_target,
+            # Dormancy (issue #22): derived from the cached balance; the
+            # decay core slows rates x0.25, floors HP at 1 (no chip), and
+            # grants collapse immunity. Same core serves the live tick
+            # and the analytic catch-up path, so downtime decay matches.
+            "dormant": dormancy.is_dormant(row["essence"]),
         }
         mutations = _decay_soul(fields, seconds, now)
         journal = mutations.pop("_journal", [])
@@ -460,7 +497,10 @@ def _hold_feed_escrow(
     """Hold the 10-essence gift inside the enqueue transaction.
 
     Raises BiologyRefusal when the feeder is missing or short on funds.
+    A hold that drains the feeder to 0 freezes it (dormancy is derived);
+    the flip is journaled via note_essence_change.
     """
+    essence_before = dormancy.cached_essence(conn, feeder_soul_id)
     cursor = conn.execute(
         "UPDATE souls SET essence = essence - ? WHERE soul_id = ? AND essence >= ?",
         (FEED_SOUL_COST, feeder_soul_id, FEED_SOUL_COST),
@@ -475,6 +515,7 @@ def _hold_feed_escrow(
             "insufficient_funds",
             f"Insufficient essence to hold {FEED_SOUL_COST} for feed_soul",
         )
+    dormancy.note_essence_change(conn, feeder_soul_id, essence_before or 0.0)
     conn.execute(
         "INSERT INTO escrows "
         "(escrow_id, intent_id, soul_id, amount, status, created_at) "
@@ -491,17 +532,23 @@ def _hold_feed_escrow(
 
 
 def _release_feed_escrow(conn: sqlite3.Connection, intent_id: str) -> bool:
-    """Refund a held feed escrow to the feeder's cached balance."""
+    """Refund a held feed escrow to the feeder's cached balance.
+
+    A refund can wake a dormant feeder (funding refresh); the flip is
+    journaled via note_essence_change.
+    """
     row = conn.execute(
         "SELECT soul_id, amount FROM escrows WHERE intent_id = ? AND status = 'held'",
         (intent_id,),
     ).fetchone()
     if row is None:
         return False
+    essence_before = dormancy.cached_essence(conn, row["soul_id"])
     conn.execute(
         "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
         (float(row["amount"]), row["soul_id"]),
     )
+    dormancy.note_essence_change(conn, row["soul_id"], essence_before or 0.0)
     conn.execute(
         "UPDATE escrows SET status = 'released' "
         "WHERE intent_id = ? AND status = 'held'",
@@ -572,6 +619,14 @@ def enqueue_feed_soul(
                 if (feeder["state"] or STATE_NORMAL) == STATE_COLLAPSED:
                     raise BiologyRefusal(
                         "feeder_collapsed", "A collapsed soul cannot feed"
+                    )
+                # Dormancy (issue #22): statues don't act. (A dormant soul
+                # is broke anyway, so the escrow hold below would fail --
+                # this rejects early with a clear reason.)
+                if dormancy.soul_is_dormant(conn, soul_id):
+                    raise BiologyRefusal(
+                        "soul_dormant",
+                        "A dormant (unfunded) soul cannot feed",
                     )
                 _hold_feed_escrow(conn, intent_id, soul_id)
             conn.commit()
@@ -677,9 +732,15 @@ def adjudicate_feed_soul(tick, intent: dict) -> None:
                 "UPDATE souls SET fed_flag = 1 WHERE soul_id = ?",
                 (recipient_soul_id,),
             )
+            # The 10-essence gift is a funding refresh: it wakes a
+            # dormant recipient (issue #22 -- soul_woke journaled).
+            recipient_before = dormancy.cached_essence(conn, recipient_soul_id)
             conn.execute(
                 "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
                 (FEED_SOUL_COST, recipient_soul_id),
+            )
+            dormancy.note_essence_change(
+                conn, recipient_soul_id, recipient_before or 0.0, tick.tick_id
             )
             conn.execute(
                 "UPDATE escrows SET status = 'applied' "

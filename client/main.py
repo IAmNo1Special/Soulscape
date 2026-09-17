@@ -609,7 +609,10 @@ class SoulscapeApp:
             # Issue #21: collapsed souls render as statues -- desaturated
             # stone colors and a frozen plasma pulse.
             soul.statue = is_statue(states.get(sid))
-            if not soul.statue:
+            # Issue #22: dormant (unfunded) souls render as statues too,
+            # amber-tinted to distinguish them from collapsed statues.
+            soul.dormant_statue = consumer.is_dormant(sid)
+            if not soul.statue and not soul.dormant_statue:
                 soul.visual_tick(dt)
 
         snapshot = [

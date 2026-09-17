@@ -40,6 +40,7 @@ import time
 from typing import Any
 
 from . import database
+from . import dormancy
 from . import persistence
 from .intents import _row_to_dict as _intent_row_to_dict
 from .market import LEDGER_DEBIT, LEDGER_TAX
@@ -75,6 +76,7 @@ _WS_ERROR_CODES = {
     "custody": "CUSTODY_DENIED",
     "escrow_missing": "ESCROW_MISSING",
     "bad_payload": "BAD_PAYLOAD",
+    "soul_dormant": "SOUL_DORMANT",
     "internal": "INTERNAL",
 }
 
@@ -331,6 +333,7 @@ def _hold_claim_escrow(
 ) -> None:
     """Hold the estimated claim fee. Runs inside the enqueue
     transaction. Raises PlotRefusal when the soul is missing or short."""
+    essence_before = dormancy.cached_essence(conn, claimant_soul_id)
     cursor = conn.execute(
         "UPDATE souls SET essence = essence - ? WHERE soul_id = ? AND essence >= ?",
         (amount, claimant_soul_id, amount),
@@ -347,6 +350,9 @@ def _hold_claim_escrow(
             "insufficient_funds",
             f"Insufficient essence to hold claim fee {amount}",
         )
+    # A hold that drains the claimant to 0 freezes it (dormancy is
+    # derived); the flip is journaled.
+    dormancy.note_essence_change(conn, claimant_soul_id, essence_before or 0.0)
     conn.execute(
         "INSERT INTO escrows "
         "(escrow_id, intent_id, soul_id, amount, status, created_at) "
@@ -362,6 +368,8 @@ def _hold_claim_escrow(
 
 
 def _release_escrow(conn: sqlite3.Connection, intent_id: str) -> bool:
+    """Refund a held claim escrow. A refund is a funding refresh: it can
+    wake a dormant soul (soul_woke journaled)."""
     row = conn.execute(
         "SELECT soul_id, amount FROM escrows "
         "WHERE intent_id = ? AND status = 'held'",
@@ -369,10 +377,12 @@ def _release_escrow(conn: sqlite3.Connection, intent_id: str) -> bool:
     ).fetchone()
     if row is None:
         return False
+    essence_before = dormancy.cached_essence(conn, row["soul_id"])
     conn.execute(
         "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
         (float(row["amount"]), row["soul_id"]),
     )
+    dormancy.note_essence_change(conn, row["soul_id"], essence_before or 0.0)
     conn.execute(
         "UPDATE escrows SET status = 'released' "
         "WHERE intent_id = ? AND status = 'held'",
@@ -437,6 +447,12 @@ def enqueue_plot_intent(
                 created = False
             if created:
                 _check_claimant(conn, custodian_id, soul_id, claimant_soul_id)
+                # Dormancy (issue #22): statues don't act.
+                if dormancy.soul_is_dormant(conn, claimant_soul_id):
+                    raise PlotRefusal(
+                        "soul_dormant",
+                        "A dormant (unfunded) soul cannot claim plots",
+                    )
                 estimate = estimate_claim_fee(conn)
                 _hold_claim_escrow(conn, intent_id, claimant_soul_id, estimate)
             conn.commit()
@@ -475,6 +491,7 @@ def _apply_claim(
     fee = claim_fee(ring)
     if fee > held + 1e-9:
         extra = round(fee - held, 2)
+        essence_before = dormancy.cached_essence(conn, claimant_soul_id)
         cursor = conn.execute(
             "UPDATE souls SET essence = essence - ? "
             "WHERE soul_id = ? AND essence >= ?",
@@ -486,6 +503,10 @@ def _apply_claim(
                 "insufficient_funds",
                 f"Claim fee rose to {fee}; claimant cannot cover it",
             )
+        # The top-up debit can freeze the claimant; journal the flip.
+        dormancy.note_essence_change(
+            conn, claimant_soul_id, essence_before or 0.0, tick_id
+        )
     now = time.time()
     cursor = conn.execute(
         "UPDATE plots SET owner_type = ?, owner_id = ?, access_policy = ?, "

@@ -60,6 +60,8 @@ EVENT_MODE_CHANGE = "mode_change"
 EVENT_SOUL_COLLAPSED = "soul_collapsed"
 EVENT_SOUL_RECOVERED = "soul_recovered"
 EVENT_SOUL_FED = "soul_fed"
+EVENT_SOUL_DORMANT = "soul_dormant"
+EVENT_SOUL_WOKE = "soul_woke"
 
 _UNSET: object = object()
 
@@ -512,6 +514,8 @@ def apply_event(state: dict[str, dict], event: dict) -> None:
         EVENT_SOUL_COLLAPSED,
         EVENT_SOUL_RECOVERED,
         EVENT_SOUL_FED,
+        EVENT_SOUL_DORMANT,
+        EVENT_SOUL_WOKE,
     ):
         # Biology transitions carry no motion state; the replay state dict
         # is position/velocity/move_target only, so these are no-ops here.

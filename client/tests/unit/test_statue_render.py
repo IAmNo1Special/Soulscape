@@ -179,5 +179,124 @@ class TestSoulStatueRendering(unittest.TestCase):
         self.assertNotEqual(soul.display_orb_color(), soul.orb_color_rgb)
 
 
+def dormancy_op(soul_id, dormant):
+    return {
+        "op": protocol.EntityOpKind.UPSERT.value,
+        "soul_id": soul_id,
+        "domain": "dormancy",
+        "state": {"soul_id": soul_id, "dormant": dormant},
+    }
+
+
+class TestDormantConsumerTracking(unittest.TestCase):
+    """Issue #22: the consumer tracks wallet-derived dormancy from the
+    snapshot and the dormancy delta domain, orthogonal to the state."""
+
+    def test_snapshot_records_dormancy_per_soul(self):
+        consumer = ViewportConsumer(clock=lambda: 0.0)
+        consumer.apply_frame(
+            make_snapshot(
+                [
+                    {"soul_id": "a", "x": 1.0, "y": 2.0, "dormant": True},
+                    {"soul_id": "b", "x": 3.0, "y": 4.0, "dormant": False},
+                ]
+            )
+        )
+        self.assertTrue(consumer.is_dormant("a"))
+        self.assertFalse(consumer.is_dormant("b"))
+
+    def test_missing_dormancy_defaults_awake(self):
+        consumer = ViewportConsumer(clock=lambda: 0.0)
+        consumer.apply_frame(
+            make_snapshot([{"soul_id": "a", "x": 1.0, "y": 2.0}])
+        )
+        self.assertFalse(consumer.is_dormant("a"))
+        self.assertFalse(consumer.is_dormant("ghost"))
+
+    def test_dormancy_delta_flips_without_touching_state(self):
+        consumer = ViewportConsumer(clock=lambda: 0.0)
+        consumer.apply_frame(
+            make_snapshot(
+                [{"soul_id": "a", "x": 1.0, "y": 2.0,
+                  "state": "normal", "dormant": False}]
+            )
+        )
+        consumer.apply_frame(make_delta([dormancy_op("a", True)]))
+        self.assertTrue(consumer.is_dormant("a"))
+        self.assertEqual(consumer.soul_state("a"), "normal")
+        consumer.apply_frame(make_delta([dormancy_op("a", False)]))
+        self.assertFalse(consumer.is_dormant("a"))
+
+    def test_remove_clears_dormancy(self):
+        consumer = ViewportConsumer(clock=lambda: 0.0)
+        consumer.apply_frame(
+            make_snapshot([{"soul_id": "a", "x": 1.0, "y": 2.0, "dormant": True}])
+        )
+        consumer.apply_frame(
+            make_delta([{"op": protocol.EntityOpKind.REMOVE.value, "soul_id": "a"}])
+        )
+        self.assertFalse(consumer.is_dormant("a"))
+
+
+class TestDormantColors(unittest.TestCase):
+    """Issue #22: dormant statues are amber-tinted stone, distinct from
+    the gray of collapsed statues."""
+
+    def test_dormant_color_is_warm_not_gray(self):
+        from client.system.network.viewport_client import dormant_statue_orb_color
+
+        normal = (0.9, 0.2, 0.3)
+        warm = dormant_statue_orb_color(normal)
+        gray = statue_orb_color(normal)
+        self.assertNotEqual(warm, gray)
+        r, g, b = warm
+        self.assertGreater(r, b)  # amber shift, not neutral stone
+
+    def test_dormant_color_is_dimmed(self):
+        from client.system.network.viewport_client import dormant_statue_orb_color
+
+        normal = (0.9, 0.9, 0.9)
+        warm = dormant_statue_orb_color(normal)
+        self.assertLess(sum(warm) / 3.0, sum(normal) / 3.0)
+
+
+class TestSoulDormantRendering(unittest.TestCase):
+    def make_soul(self):
+        return Soul.from_dict(
+            {
+                "soul_id": "s1",
+                "name": "S",
+                "orb_color": [0.9, 0.2, 0.3],
+                "aura_color": [0.1, 0.8, 0.5],
+            },
+        )
+
+    def test_dormant_soul_uses_amber_stone_colors(self):
+        from client.system.network.viewport_client import dormant_statue_orb_color
+
+        soul = self.make_soul()
+        soul.dormant_statue = True
+        self.assertEqual(
+            soul.display_orb_color(), dormant_statue_orb_color((0.9, 0.2, 0.3))
+        )
+        self.assertEqual(
+            soul.display_aura_color(), dormant_statue_orb_color((0.1, 0.8, 0.5))
+        )
+        self.assertNotEqual(soul.display_orb_color(), soul.orb_color_rgb)
+        self.assertNotEqual(
+            soul.display_orb_color(), statue_orb_color((0.9, 0.2, 0.3))
+        )
+
+    def test_dormant_wins_over_collapsed_statue(self):
+        soul = self.make_soul()
+        soul.statue = True
+        soul.dormant_statue = True
+        from client.system.network.viewport_client import dormant_statue_orb_color
+
+        self.assertEqual(
+            soul.display_orb_color(), dormant_statue_orb_color((0.9, 0.2, 0.3))
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

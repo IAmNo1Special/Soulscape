@@ -45,6 +45,7 @@ import time
 from typing import Any
 
 from . import database
+from . import dormancy
 from . import persistence
 from .intents import _row_to_dict as _intent_row_to_dict
 from .market import LEDGER_DEBIT, _release_escrow
@@ -156,6 +157,7 @@ def _hold_social_escrow(
     Runs inside the enqueue transaction. Raises SocialRefusal when the
     soul is missing or short on essence.
     """
+    essence_before = dormancy.cached_essence(conn, author_soul_id)
     cursor = conn.execute(
         "UPDATE souls SET essence = essence - ? WHERE soul_id = ? AND essence >= ?",
         (amount, author_soul_id, amount),
@@ -172,6 +174,9 @@ def _hold_social_escrow(
             "insufficient_funds",
             f"Insufficient essence to post (needs {amount})",
         )
+    # A hold that drains the author to 0 freezes it (dormancy is
+    # derived); the flip is journaled.
+    dormancy.note_essence_change(conn, author_soul_id, essence_before or 0.0)
     conn.execute(
         "INSERT INTO escrows "
         "(escrow_id, intent_id, soul_id, amount, status, created_at) "
@@ -318,6 +323,24 @@ def enqueue_social_intent(
                 created = True
             except sqlite3.IntegrityError:
                 created = False
+            if created:
+                # Dormancy (issue #22): dormant souls cannot author social
+                # content -- statues don't act. Tamer-authored content is
+                # exempt (tamers have no wallet; the intent soul is the
+                # tamer, which is never dormant).
+                acting_soul: str | None = None
+                if kind in (KIND_SOCIAL_POST, KIND_SOCIAL_REPLY):
+                    if clean.get("author_type") == AUTHOR_SOUL:
+                        acting_soul = clean.get("author_id")
+                elif kind in (KIND_SOCIAL_EDIT, KIND_SOCIAL_DELETE):
+                    acting_soul = soul_id
+                if acting_soul is not None and dormancy.soul_is_dormant(
+                    conn, acting_soul
+                ):
+                    raise SocialRefusal(
+                        "soul_dormant",
+                        "A dormant (unfunded) soul cannot author social content",
+                    )
             if created and kind in PAID_KINDS:
                 author_type = clean["author_type"]
                 author_id = clean["author_id"]
@@ -348,6 +371,13 @@ def _apply_post(
     _check_author(
         conn, intent["custodian_id"], intent["soul_id"], author_type, author_id
     )
+    # Dormancy (issue #22): re-checked at adjudication because WS
+    # intents bypass the REST enqueue -- a soul that drained between
+    # enqueue and adjudication cannot publish.
+    if author_type == AUTHOR_SOUL and dormancy.soul_is_dormant(conn, author_id):
+        raise SocialRefusal(
+            "soul_dormant", "A dormant (unfunded) soul cannot post"
+        )
     if not payload.get("title"):
         raise SocialRefusal("title_required", "Posts require a non-empty title")
     amount = _paid_amount(author_type, KIND_SOCIAL_POST)
@@ -395,6 +425,11 @@ def _apply_reply(
         conn, intent["custodian_id"], intent["soul_id"], author_type, author_id
     )
     _check_parent(conn, payload["parent_id"])
+    # Dormancy (issue #22): see _apply_post -- WS intents adjudicate here.
+    if author_type == AUTHOR_SOUL and dormancy.soul_is_dormant(conn, author_id):
+        raise SocialRefusal(
+            "soul_dormant", "A dormant (unfunded) soul cannot reply"
+        )
     amount = _paid_amount(author_type, KIND_SOCIAL_REPLY)
     if amount > 0:
         _require_held_escrow(conn, intent["intent_id"])
@@ -437,6 +472,14 @@ def _apply_edit(
     message = _get_message(conn, payload["message_id"])
     if message["deleted"]:
         raise SocialRefusal("message_deleted", "Cannot edit a deleted message")
+    # Dormancy (issue #22): a dormant soul cannot exercise its agency,
+    # even through the operator (the operator acts AS the soul).
+    if message["author_type"] == AUTHOR_SOUL and dormancy.soul_is_dormant(
+        conn, message["author_id"]
+    ):
+        raise SocialRefusal(
+            "soul_dormant", "A dormant (unfunded) soul cannot edit messages"
+        )
     _check_mutation_custody(conn, intent["custodian_id"], intent["soul_id"], message)
     if intent["custodian_id"] is None:
         database.log_audit(
@@ -458,6 +501,13 @@ def _apply_delete(
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     message = _get_message(conn, payload["message_id"])
+    # Dormancy (issue #22): see _apply_edit.
+    if message["author_type"] == AUTHOR_SOUL and dormancy.soul_is_dormant(
+        conn, message["author_id"]
+    ):
+        raise SocialRefusal(
+            "soul_dormant", "A dormant (unfunded) soul cannot delete messages"
+        )
     _check_mutation_custody(conn, intent["custodian_id"], intent["soul_id"], message)
     if intent["custodian_id"] is None:
         database.log_audit(

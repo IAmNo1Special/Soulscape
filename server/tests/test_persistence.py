@@ -15,8 +15,8 @@ from ..world_tick import INTENT_MOVE_SPEED, TICK_DT, WorldTick
 
 def _insert_soul(db_conn, soul_id, x=100.0, y=100.0, vx=0.0, vy=0.0, target=None):
     db_conn.execute(
-        "INSERT INTO souls (soul_id, owner_id, position, velocity, move_target) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO souls (soul_id, owner_id, position, velocity, move_target, essence) "
+        "VALUES (?, ?, ?, ?, ?, 100.0)",
         (
             soul_id,
             f"owner_{soul_id}",

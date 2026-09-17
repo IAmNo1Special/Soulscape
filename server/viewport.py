@@ -77,6 +77,19 @@ def _state_op(soul_id: str, state: str) -> dict:
     }
 
 
+def _dormancy_op(soul_id: str, dormant: bool) -> dict:
+    """Dormancy stream (issue #22): a wallet-derived freeze rides the
+    viewport as a priority op on its own domain, orthogonal to the
+    lifecycle state stream above. Clients render dormant souls as
+    statues, tinted distinctly from collapsed ones."""
+    return {
+        "op": protocol.EntityOpKind.UPSERT.value,
+        "soul_id": soul_id,
+        "domain": "dormancy",
+        "state": {"soul_id": soul_id, "dormant": dormant},
+    }
+
+
 def read_positions() -> dict[str, tuple[float, float]]:
     """Position map with the read-through view: the tick's unflushed dirty
     set overlaid on the DB, so the viewport never lags a flush."""
@@ -92,6 +105,21 @@ def read_soul_states() -> dict[str, str]:
     for row in rows:
         states[row["soul_id"]] = row["state"] or "normal"
     return states
+
+
+def read_dormancy() -> dict[str, bool]:
+    """Per-soul dormancy (issue #22) for the viewport stream: derived
+    from the cached essence, orthogonal to the lifecycle state."""
+    from . import dormancy
+
+    dormant: dict[str, bool] = {}
+    with database.get_db() as conn:
+        rows = conn.execute(
+            "SELECT soul_id, COALESCE(essence, 0.0) AS essence FROM souls"
+        ).fetchall()
+    for row in rows:
+        dormant[row["soul_id"]] = dormancy.is_dormant(row["essence"])
+    return dormant
 
 
 def read_wallets() -> list[dict]:
@@ -144,6 +172,19 @@ def diff_states(
     return ops
 
 
+def diff_dormancy(
+    current: dict[str, bool],
+    committed: dict[str, bool],
+) -> list[tuple[dict, str]]:
+    """Diff per-soul dormancy (issue #22); flips become priority ops on
+    the dormancy domain so the frozen-statue visual streams promptly."""
+    ops: list[tuple[dict, str]] = []
+    for soul_id, dormant in current.items():
+        if committed.get(soul_id) != dormant:
+            ops.append((_dormancy_op(soul_id, dormant), _DOMAIN_PRIORITY))
+    return ops
+
+
 class ViewportSession:
     def __init__(self, owner_id: str, ring_size: int = RING_BUFFER_SIZE) -> None:
         self.conn_id = uuid.uuid4().hex
@@ -152,6 +193,7 @@ class ViewportSession:
         self.ring: collections.deque = collections.deque(maxlen=ring_size)
         self.committed: dict[str, tuple[float, float]] = {}
         self.committed_states: dict[str, str] = {}
+        self.committed_dormancy: dict[str, bool] = {}
         self.pending_moves: dict[str, dict] = {}
         self.pending_priority: list[dict] = []
         self.flush_interval = PUMP_INTERVAL_SECONDS
@@ -197,8 +239,18 @@ def build_snapshot(
 ) -> dict:
     positions = read_positions()
     states = read_soul_states()
+    dormant = read_dormancy()
     souls = [
-        {"soul_id": soul_id, "x": x, "y": y, "state": states.get(soul_id, "normal")}
+        {
+            "soul_id": soul_id,
+            "x": x,
+            "y": y,
+            "state": states.get(soul_id, "normal"),
+            # Dormancy (issue #22) rides the snapshot so a fresh client
+            # renders frozen statues immediately, without waiting for a
+            # delta. SoulWireState allows extra fields.
+            "dormant": dormant.get(soul_id, False),
+        }
         for soul_id, (x, y) in positions.items()
     ]
     protocol.Snapshot(
@@ -220,6 +272,7 @@ def build_snapshot(
     session.next_seq += 1
     session.committed = dict(positions)
     session.committed_states = dict(states)
+    session.committed_dormancy = dict(dormant)
     session.touch()
     return frame
 
@@ -230,6 +283,7 @@ async def flush(
     tick_id: int,
     send: SendFn,
     states: dict[str, str] | None = None,
+    dormant: dict[str, bool] | None = None,
 ) -> str:
     async with session._lock:
         if session.pending_count() == 0:
@@ -265,6 +319,8 @@ async def flush(
         session.committed = dict(positions)
         if states is not None:
             session.committed_states = dict(states)
+        if dormant is not None:
+            session.committed_dormancy = dict(dormant)
         session.slow_flushes = 0
         session.flush_interval = PUMP_INTERVAL_SECONDS
         session.touch()
@@ -361,6 +417,7 @@ class ViewportManager:
                 session.next_seq += 1
             session.committed = dict(old.committed)
             session.committed_states = dict(old.committed_states)
+            session.committed_dormancy = dict(old.committed_dormancy)
             session.touch()
         if old is not session:
             self.drop(old.conn_id)

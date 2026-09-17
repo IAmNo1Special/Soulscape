@@ -111,8 +111,8 @@ def test_validate_payload_bad_coords():
 def test_adjudication_rejects_custody_change():
     with database.get_db() as conn:
         conn.execute(
-            "INSERT INTO souls (soul_id, owner_id, custodian_id, position) "
-            "VALUES ('cs1', 'o1', 'tam2', '[100, 100]')"
+            "INSERT INTO souls (soul_id, owner_id, custodian_id, position, essence) "
+            "VALUES ('cs1', 'o1', 'tam2', '[100, 100]', 100.0)"
         )
         conn.commit()
     record = intents.enqueue_intent(
@@ -132,8 +132,8 @@ def test_move_to_clamped_to_reachable_radius(monkeypatch):
     monkeypatch.setattr(database, "SCREEN_BOUNDS", (10000, 10000))
     with database.get_db() as conn:
         conn.execute(
-            "INSERT INTO souls (soul_id, owner_id, position) "
-            "VALUES ('cl1', 'o1', '[100, 100]')"
+            "INSERT INTO souls (soul_id, owner_id, position, essence) "
+            "VALUES ('cl1', 'o1', '[100, 100]', 100.0)"
         )
         conn.commit()
     record = intents.enqueue_intent(
@@ -272,8 +272,8 @@ async def test_ws_forged_soul_rejected(client: TestClient):
     token = login.json()["token"]
     with database.get_db() as conn:
         conn.execute(
-            "INSERT INTO souls (soul_id, owner_id, custodian_id, position) "
-            "VALUES ('victim', 'o9', 'other-tamer', '[100, 100]')"
+            "INSERT INTO souls (soul_id, owner_id, custodian_id, position, essence) "
+            "VALUES ('victim', 'o9', 'other-tamer', '[100, 100]', 100.0)"
         )
         conn.commit()
     with client.websocket_connect(f"/ws/{tamer_id}?token={token}") as ws:
@@ -311,8 +311,8 @@ async def test_ws_tamer_own_soul_accepted(client: TestClient):
     token = login.json()["token"]
     with database.get_db() as conn:
         conn.execute(
-            "INSERT INTO souls (soul_id, owner_id, custodian_id, position) "
-            "VALUES ('mine', 'o9', ?, '[100, 100]')",
+            "INSERT INTO souls (soul_id, owner_id, custodian_id, position, essence) "
+            "VALUES ('mine', 'o9', ?, '[100, 100]', 100.0)",
             (tamer_id,),
         )
         conn.commit()

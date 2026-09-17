@@ -36,6 +36,7 @@ import time
 from typing import Any
 
 from . import database
+from . import dormancy
 from . import persistence
 from .intents import _row_to_dict as _intent_row_to_dict
 
@@ -68,6 +69,7 @@ _WS_ERROR_CODES = {
     "seller_not_found": "SOUL_NOT_FOUND",
     "custody": "CUSTODY_DENIED",
     "escrow_short": "ESCROW_SHORT",
+    "soul_dormant": "SOUL_DORMANT",
     "internal": "INTERNAL",
 }
 
@@ -135,6 +137,7 @@ def _hold_escrow(
     if row is None:
         raise MarketRefusal("listing_not_found", "Listing not found")
     price = round(float(row["price"]), 2)
+    essence_before = dormancy.cached_essence(conn, buyer_soul_id)
     cursor = conn.execute(
         "UPDATE souls SET essence = essence - ? "
         "WHERE soul_id = ? AND essence >= ?",
@@ -150,6 +153,9 @@ def _hold_escrow(
             "insufficient_funds",
             f"Insufficient essence to hold {price} for listing {listing_id}",
         )
+    # A hold that drains the buyer to 0 freezes it (dormancy is
+    # derived); the flip is journaled.
+    dormancy.note_essence_change(conn, buyer_soul_id, essence_before or 0.0)
     conn.execute(
         "INSERT INTO escrows "
         "(escrow_id, intent_id, soul_id, amount, status, created_at) "
@@ -162,7 +168,8 @@ def _hold_escrow(
 
 def _release_escrow(conn: sqlite3.Connection, intent_id: str) -> bool:
     """Refund a held escrow to the cached balance. Returns True if one
-    was released."""
+    was released. A refund is a funding refresh: it can wake a dormant
+    soul (soul_woke journaled)."""
     row = conn.execute(
         "SELECT soul_id, amount FROM escrows "
         "WHERE intent_id = ? AND status = 'held'",
@@ -170,10 +177,12 @@ def _release_escrow(conn: sqlite3.Connection, intent_id: str) -> bool:
     ).fetchone()
     if row is None:
         return False
+    essence_before = dormancy.cached_essence(conn, row["soul_id"])
     conn.execute(
         "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
         (float(row["amount"]), row["soul_id"]),
     )
+    dormancy.note_essence_change(conn, row["soul_id"], essence_before or 0.0)
     conn.execute(
         "UPDATE escrows SET status = 'released' "
         "WHERE intent_id = ? AND status = 'held'",
@@ -233,16 +242,38 @@ def enqueue_market_intent(
             except sqlite3.IntegrityError:
                 created = False
             if created:
+                # Dormancy (issue #22): dormant souls cannot author market
+                # intents -- statues don't act. The one deliberate
+                # exception: a dormant soul's listings REMAIN BUYABLE,
+                # because the buyer acts, not the soul; the sale proceeds
+                # are a funding refresh that wakes the seller (soul_woke
+                # journaled at adjudication).
                 if kind == KIND_MARKET_BUY:
+                    if dormancy.soul_is_dormant(conn, soul_id):
+                        raise MarketRefusal(
+                            "soul_dormant",
+                            "A dormant (unfunded) soul cannot buy",
+                        )
                     _hold_escrow(conn, intent_id, soul_id, payload["listing_id"])
                 elif kind == KIND_MARKET_LIST:
+                    seller_soul_id = payload["seller_soul_id"]
                     seller = conn.execute(
                         "SELECT 1 FROM souls WHERE soul_id = ?",
-                        (payload["seller_soul_id"],),
+                        (seller_soul_id,),
                     ).fetchone()
                     if seller is None:
                         raise MarketRefusal("seller_not_found", "Seller soul not found")
+                    if dormancy.soul_is_dormant(conn, seller_soul_id):
+                        raise MarketRefusal(
+                            "soul_dormant",
+                            "A dormant (unfunded) soul cannot list items",
+                        )
                 elif kind == KIND_MARKET_CANCEL:
+                    if dormancy.soul_is_dormant(conn, soul_id):
+                        raise MarketRefusal(
+                            "soul_dormant",
+                            "A dormant (unfunded) soul cannot cancel listings",
+                        )
                     _preface_cancel(conn, custodian_id, soul_id, payload["listing_id"])
             conn.commit()
         except Exception:
@@ -379,10 +410,17 @@ def _apply_buy(
         _release_escrow(conn, intent_id)
         raise MarketRefusal("escrow_short", "Held escrow does not cover the price")
     debit, seller_net, tax = split_price(price)
+    # Sale proceeds are a funding refresh: buying a dormant soul's
+    # listing wakes the seller (issue #22 -- soul_woke journaled).
+    seller_before = dormancy.cached_essence(conn, seller_id)
     seller_row = conn.execute(
         "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
         (seller_net, seller_id),
     )
+    if seller_row.rowcount:
+        dormancy.note_essence_change(
+            conn, seller_id, seller_before or 0.0, tick_id
+        )
     if seller_row.rowcount == 0:
         logger.warning(
             "buy %s: seller soul %s gone; credit kept in ledger only",
@@ -619,7 +657,11 @@ def verify_balances(
     deltas = conn.execute(
         "SELECT soul_id, "
         "SUM(CASE WHEN entry_type = 'debit' THEN -amount "
-        "WHEN entry_type = 'credit' THEN amount ELSE 0.0 END) AS delta "
+        "WHEN entry_type = 'credit' THEN amount "
+        # Newborn starter grants (issue #22) are conservation-explicit:
+        # a mint is created essence, counted like a credit.
+        "WHEN entry_type = 'mint' THEN amount "
+        "ELSE 0.0 END) AS delta "
         "FROM ledger WHERE soul_id IS NOT NULL GROUP BY soul_id"
     ).fetchall()
     for row in deltas:

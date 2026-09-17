@@ -206,7 +206,7 @@ def test_insufficient_funds_leaves_no_trace(client: TestClient, register_soul):
     assert "Insufficient" in res.json()["detail"]
     with database.get_db() as conn:
         assert conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"] == 0
-        assert conn.execute("SELECT COUNT(*) AS n FROM ledger").fetchone()["n"] == 0
+        assert conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE entry_type != 'mint'").fetchone()["n"] == 0
         assert conn.execute("SELECT COUNT(*) AS n FROM escrows").fetchone()["n"] == 0
         assert conn.execute("SELECT COUNT(*) AS n FROM intents").fetchone()["n"] == 0
     assert _essence("poor") == 10.0
@@ -233,7 +233,7 @@ def test_reply_to_deleted_parent_refused_at_preface(client: TestClient, register
         ).fetchall()
         assert rows == []
         # Only the post's own debit exists; the refused reply wrote none.
-        assert conn.execute("SELECT COUNT(*) AS n FROM ledger").fetchone()["n"] == 1
+        assert conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE entry_type != 'mint'").fetchone()["n"] == 1
         assert (
             conn.execute(
                 "SELECT COUNT(*) AS n FROM escrows WHERE status = 'held'"
@@ -299,7 +299,7 @@ def test_reply_refused_at_adjudication_refunds(client: TestClient, register_soul
             ).fetchone()["n"]
             == 0
         )
-        assert conn.execute("SELECT COUNT(*) AS n FROM ledger").fetchone()["n"] == 1
+        assert conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE entry_type != 'mint'").fetchone()["n"] == 1
     assert _essence("adj") == 80.0
 
 
@@ -367,7 +367,7 @@ def test_tamer_authors_free(client: TestClient, tamer_a):
         ).fetchone()
         assert msg["author_type"] == "tamer"
         assert msg["author_id"] == tamer_a["tamer_id"]
-        assert conn.execute("SELECT COUNT(*) AS n FROM ledger").fetchone()["n"] == 0
+        assert conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE entry_type != 'mint'").fetchone()["n"] == 0
         assert conn.execute("SELECT COUNT(*) AS n FROM escrows").fetchone()["n"] == 0
         assert (
             conn.execute(
@@ -526,7 +526,9 @@ def test_adjudication_refuses_without_held_escrow(client: TestClient,
             == 0
         )
         assert (
-            conn.execute("SELECT COUNT(*) AS n FROM ledger").fetchone()["n"]
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM ledger WHERE entry_type != 'mint'"
+            ).fetchone()["n"]
             == 0
         )
     # The hold deduction is NOT refunded here: the hold row itself is

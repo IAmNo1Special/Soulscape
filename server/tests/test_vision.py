@@ -29,8 +29,8 @@ def _insert_soul(
 ):
     db_conn.execute(
         "INSERT INTO souls (soul_id, owner_id, position, velocity, "
-        "stat_vis_base, stat_vis_iv, stat_vis_ev) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "stat_vis_base, stat_vis_iv, stat_vis_ev, essence) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 100.0)",
         (
             soul_id,
             f"owner_{soul_id}",

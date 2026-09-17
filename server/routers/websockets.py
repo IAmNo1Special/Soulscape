@@ -22,6 +22,7 @@ from fastapi import (
 from shared import protocol
 
 from .. import database
+from .. import dormancy
 from .. import intents
 from .. import market
 from .. import plots
@@ -138,7 +139,8 @@ async def _handle_intent(
     custodian = _intent_custodian(identity)
     with database.get_db() as conn:
         row = conn.execute(
-            "SELECT custodian_id, owner_id FROM souls WHERE soul_id = ?",
+            "SELECT custodian_id, owner_id, COALESCE(essence, 0.0) AS essence "
+            "FROM souls WHERE soul_id = ?",
             (soul_id,),
         ).fetchone()
     if row is None:
@@ -213,6 +215,20 @@ async def _handle_intent(
             return
         await websocket.send_json(_intent_ack(record))
         return
+    # Generic kinds (move_to): dormancy is rejected early here for a fast,
+    # clear error; _adjudicate_move_to re-checks at the tick pump (defense
+    # in depth -- kind-specific enqueues above do their own checks).
+    # Dormancy (issue #22): statues don't act.
+    if dormancy.is_dormant(row["essence"]):
+        await websocket.send_json(
+            protocol.envelope(
+                protocol.MessageType.ERROR,
+                code="SOUL_DORMANT",
+                message="Intent rejected: SOUL_DORMANT",
+                nonce=nonce,
+            )
+        )
+        return
     record = intents.enqueue_intent(
         session_id, nonce, custodian, soul_id, kind, payload
     )
@@ -232,13 +248,19 @@ async def _viewport_pump(
             await asyncio.sleep(session.flush_interval)
             positions = viewport.read_positions()
             states = viewport.read_soul_states()
+            dormant = viewport.read_dormancy()
             tick_id = _current_tick_id(websocket)
             for op, domain in viewport.diff_positions(positions, session.committed):
                 session.enqueue(op, domain)
             for op, domain in viewport.diff_states(states, session.committed_states):
                 session.enqueue(op, domain)
+            for op, domain in viewport.diff_dormancy(
+                dormant, session.committed_dormancy
+            ):
+                session.enqueue(op, domain)
             result = await viewport.flush(
-                session, positions, tick_id, websocket.send_json, states=states
+                session, positions, tick_id, websocket.send_json,
+                states=states, dormant=dormant,
             )
             if result == "closed":
                 await websocket.close(

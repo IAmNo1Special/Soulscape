@@ -13,7 +13,7 @@ from ..world_tick import TICK_DT, TICK_HZ, WorldTick, hub_authoritative_enabled
 
 def _insert_soul(db_conn, soul_id, x=100.0, y=200.0, vx=0.0, vy=0.0):
     db_conn.execute(
-        "INSERT INTO souls (soul_id, owner_id, position, velocity) VALUES (?, ?, ?, ?)",
+        "INSERT INTO souls (soul_id, owner_id, position, velocity, essence) VALUES (?, ?, ?, ?, 100.0)",
         (
             soul_id,
             f"owner_{soul_id}",
@@ -60,7 +60,7 @@ def test_step_integrates_velocity(db_conn):
 def test_step_skips_stationary_souls(db_conn):
     _insert_soul(db_conn, "s1", vx=0.0, vy=0.0)
     db_conn.execute(
-        "INSERT INTO souls (soul_id, owner_id, position) VALUES (?, ?, ?)",
+        "INSERT INTO souls (soul_id, owner_id, position, essence) VALUES (?, ?, ?, 100.0)",
         ("s2", "owner_s2", json.dumps([50.0, 50.0])),
     )
     db_conn.commit()
@@ -83,7 +83,7 @@ def test_step_clamps_to_screen_bounds(db_conn):
 
 def test_step_ignores_malformed_rows(db_conn):
     db_conn.execute(
-        "INSERT INTO souls (soul_id, owner_id, position, velocity) VALUES (?, ?, ?, ?)",
+        "INSERT INTO souls (soul_id, owner_id, position, velocity, essence) VALUES (?, ?, ?, ?, 100.0)",
         ("bad", "owner_bad", "not-json", "[1, 2, 3]"),
     )
     db_conn.commit()
@@ -220,7 +220,7 @@ def test_flag_on_lifespan_advances_ticks(monkeypatch, db_conn):
 def test_tick_benchmark(db_conn):
     n = 500
     db_conn.executemany(
-        "INSERT INTO souls (soul_id, owner_id, position, velocity) VALUES (?, ?, ?, ?)",
+        "INSERT INTO souls (soul_id, owner_id, position, velocity, essence) VALUES (?, ?, ?, ?, 100.0)",
         [
             (
                 f"bench_{i}",
