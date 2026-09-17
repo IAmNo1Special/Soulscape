@@ -64,6 +64,8 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM intents")
     cursor.execute("DELETE FROM journal")
     cursor.execute("DELETE FROM snapshots")
+    cursor.execute("DELETE FROM escrows")
+    cursor.execute("DELETE FROM ledger")
     # The journal is append-only in production, so recovery treats its seq
     # column as gapless. Reset the AUTOINCREMENT sequences too, or a test that
     # leaves journal/snapshot rows behind would hand the next test a journal
@@ -72,6 +74,10 @@ def clear_db(db_conn):
         "DELETE FROM sqlite_sequence WHERE name IN ('journal', 'snapshots')"
     )
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'essence_fund'")
+    cursor.execute(
+        "DELETE FROM globals WHERE key = 'ledger_fund_baseline' "
+        "OR key LIKE 'ledger_base:%'"
+    )
     db_conn.commit()
     from .. import persistence
 

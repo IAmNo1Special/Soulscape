@@ -758,6 +758,44 @@ def init_db():
                     created_at REAL NOT NULL
                 )
             """)
+            # Market escrows (issue #17): buyer funds held between intent
+            # ack and tick-boundary adjudication.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS escrows (
+                    escrow_id TEXT PRIMARY KEY,
+                    intent_id TEXT UNIQUE NOT NULL,
+                    soul_id TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'held',
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_escrows_status
+                ON escrows(status)
+            """)
+            # Append-only essence ledger (issue #17): every market essence
+            # movement is a row. souls.essence and the essence_fund global
+            # are caches derived from these rows.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ledger (
+                    ledger_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tick_id INTEGER NOT NULL,
+                    intent_id TEXT NOT NULL,
+                    entry_type TEXT NOT NULL,
+                    soul_id TEXT,
+                    amount REAL NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ledger_intent
+                ON ledger(intent_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ledger_soul
+                ON ledger(soul_id)
+            """)
             _migrate_souls(cursor)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")

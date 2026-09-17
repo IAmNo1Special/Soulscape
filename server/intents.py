@@ -35,7 +35,69 @@ def _validate_move_to(
     return {"x": x, "y": y}, None
 
 
-_KIND_VALIDATORS = {"move_to": _validate_move_to}
+def _validate_market_list(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    item = message.get("item")
+    seller_soul_id = message.get("seller_soul_id")
+    try:
+        price = float(message["price"])
+    except (KeyError, TypeError, ValueError):
+        return None, "BAD_PAYLOAD"
+    if (
+        not isinstance(item, dict)
+        or not isinstance(seller_soul_id, str)
+        or not seller_soul_id
+        or not math.isfinite(price)
+        or price <= 0
+    ):
+        return None, "BAD_PAYLOAD"
+    payload: dict[str, Any] = {
+        "item": item,
+        "price": price,
+        "seller_soul_id": seller_soul_id,
+    }
+    if message.get("listing_id") is not None:
+        if not isinstance(message["listing_id"], str) or not message["listing_id"]:
+            return None, "BAD_PAYLOAD"
+        payload["listing_id"] = message["listing_id"]
+    if message.get("seller_name") is not None:
+        if not isinstance(message["seller_name"], str):
+            return None, "BAD_PAYLOAD"
+        payload["seller_name"] = message["seller_name"]
+    return payload, None
+
+
+def _validate_market_buy(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    listing_id = message.get("listing_id")
+    buyer_soul_id = message.get("buyer_soul_id")
+    if (
+        not isinstance(listing_id, str)
+        or not listing_id
+        or not isinstance(buyer_soul_id, str)
+        or not buyer_soul_id
+    ):
+        return None, "BAD_PAYLOAD"
+    return {"listing_id": listing_id, "buyer_soul_id": buyer_soul_id}, None
+
+
+def _validate_market_cancel(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    listing_id = message.get("listing_id")
+    if not isinstance(listing_id, str) or not listing_id:
+        return None, "BAD_PAYLOAD"
+    return {"listing_id": listing_id}, None
+
+
+_KIND_VALIDATORS = {
+    "move_to": _validate_move_to,
+    "market_list": _validate_market_list,
+    "market_buy": _validate_market_buy,
+    "market_cancel": _validate_market_cancel,
+}
 
 
 def validate_payload(

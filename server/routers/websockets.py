@@ -23,6 +23,7 @@ from shared import protocol
 
 from .. import database
 from .. import intents
+from .. import market
 from .. import viewport
 from ..managers import manager
 from ..models import WsTicketResponse
@@ -90,12 +91,15 @@ def _intent_custodian(identity: UserIdentity) -> str | None:
 
 def _intent_ack(record: dict) -> dict:
     ack_status = {"pending": "accepted"}.get(record["status"], record["status"])
-    return protocol.envelope(
+    ack = protocol.envelope(
         protocol.MessageType.INTENT_ACK,
         nonce=record["nonce"],
         intent_id=record["intent_id"],
         status=ack_status,
     )
+    if record["status"] not in ("pending",) and record.get("result") is not None:
+        ack["result"] = record["result"]
+    return ack
 
 
 async def _handle_intent(
@@ -155,6 +159,23 @@ async def _handle_intent(
                 nonce=nonce,
             )
         )
+        return
+    if kind in market.MARKET_KINDS:
+        try:
+            record, _created = market.enqueue_market_intent(
+                session_id, nonce, custodian, soul_id, kind, payload
+            )
+        except market.MarketRefusal as refusal:
+            await websocket.send_json(
+                protocol.envelope(
+                    protocol.MessageType.ERROR,
+                    code=refusal.ws_code,
+                    message=f"Intent rejected: {refusal.ws_code}",
+                    nonce=nonce,
+                )
+            )
+            return
+        await websocket.send_json(_intent_ack(record))
         return
     record = intents.enqueue_intent(
         session_id, nonce, custodian, soul_id, kind, payload

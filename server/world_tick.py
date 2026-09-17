@@ -35,6 +35,7 @@ import time
 
 from . import database
 from . import intents
+from . import market
 from . import persistence
 
 logger = logging.getLogger("soulscape_hub")
@@ -76,7 +77,7 @@ class WorldTick:
         self.souls_moved_last_tick = 0
         self.skipped_ticks = 0
         self._task: asyncio.Task | None = None
-        self._step_lock = threading.Lock()
+        self._step_lock = threading.RLock()
         self._last_flush_at = time.monotonic()
         self._last_snapshot_tick = 0
 
@@ -144,10 +145,18 @@ class WorldTick:
 
     def pump_intents(self) -> int:
         done = 0
+        with self._step_lock:
+            done = self._pump_intents_locked()
+        return done
+
+    def _pump_intents_locked(self) -> int:
+        done = 0
         for intent in intents.pending_intents():
             try:
                 if intent["kind"] == "move_to":
                     self._adjudicate_move_to(intent)
+                elif intent["kind"] in market.MARKET_KINDS:
+                    market.adjudicate_market_intent(self, intent)
                 else:
                     with database.get_db() as conn:
                         self._reject(conn, intent, "unknown_kind")

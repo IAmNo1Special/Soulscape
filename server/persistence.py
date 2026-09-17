@@ -483,6 +483,8 @@ def apply_event(state: dict[str, dict], event: dict) -> None:
         entry = state.get(payload.get("soul_id", ""))
         if entry is None:
             return
+        if "velocity" not in payload:
+            return
         entry["velocity"] = [float(payload["velocity"][0]), float(payload["velocity"][1])]
         target = payload.get("move_target")
         entry["move_target"] = (
@@ -566,12 +568,15 @@ def replay_tail(
 
 
 def reconcile_escrows(conn: sqlite3.Connection) -> int:
-    """Boot sweep for open escrows.
+    """Boot sweep for open market escrows (issue #17).
 
-    No escrow concept exists in the schema yet (marketplace escrows land
-    with issue #17); this is the hook the boot reconciler calls. When a
-    table named `escrows` exists, open rows are counted and logged so a
-    future settlement pass has a defined entry point.
+    Escrows are held between intent ack and tick-boundary adjudication.
+    A crash in that window leaves (intent=pending, escrow=held): the
+    intent is still pending so the tick pump settles it exactly once and
+    the escrow is left alone here. Escrows whose intent already settled
+    are finished off: adjudicated -> applied, rejected (or intent row
+    missing) -> released with the held funds refunded to the cached
+    balance. Returns the number of escrows settled by this sweep.
     """
     tables = {
         row["name"]
@@ -580,26 +585,57 @@ def reconcile_escrows(conn: sqlite3.Connection) -> int:
         )
     }
     if "escrows" not in tables:
-        logger.info("reconcile_escrows: no escrows table yet (issue #17 hook)")
+        logger.info("reconcile_escrows: no escrows table yet")
         return 0
-    cols = {
-        row["name"]
-        for row in conn.execute("PRAGMA table_info(escrows)")
-    }
-    if "status" not in cols:
-        logger.warning("reconcile_escrows: escrows table has no status column")
-        return 0
-    row = conn.execute(
-        "SELECT COUNT(*) AS n FROM escrows WHERE status = 'open'"
-    ).fetchone()
-    count = int(row["n"])
-    if count:
-        logger.warning(
-            "reconcile_escrows: %d open escrows found; settlement "
-            "semantics belong to issue #17",
-            count,
-        )
-    return count
+    rows = conn.execute(
+        "SELECT e.escrow_id, e.intent_id, e.soul_id, e.amount, "
+        "i.status AS intent_status "
+        "FROM escrows e LEFT JOIN intents i "
+        "ON i.intent_id = e.intent_id "
+        "WHERE e.status = 'held'"
+    ).fetchall()
+    settled = 0
+    for row in rows:
+        intent_status = row["intent_status"]
+        if intent_status == "pending":
+            continue
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if intent_status == "adjudicated":
+                conn.execute(
+                    "UPDATE escrows SET status = 'applied' "
+                    "WHERE escrow_id = ? AND status = 'held'",
+                    (row["escrow_id"],),
+                )
+                logger.warning(
+                    "reconcile_escrows: escrow %s held past adjudication; "
+                    "marked applied",
+                    row["escrow_id"],
+                )
+            else:
+                conn.execute(
+                    "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
+                    (float(row["amount"]), row["soul_id"]),
+                )
+                conn.execute(
+                    "UPDATE escrows SET status = 'released' "
+                    "WHERE escrow_id = ? AND status = 'held'",
+                    (row["escrow_id"],),
+                )
+                logger.warning(
+                    "reconcile_escrows: escrow %s refunded %.2f to %s "
+                    "(intent %s)",
+                    row["escrow_id"],
+                    float(row["amount"]),
+                    row["soul_id"],
+                    intent_status,
+                )
+            conn.commit()
+            settled += 1
+        except Exception:
+            conn.rollback()
+            raise
+    return settled
 
 
 def recover_world(tick, now: float | None = None) -> dict:
