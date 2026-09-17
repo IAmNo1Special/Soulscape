@@ -2,6 +2,7 @@
 WebSocket handlers for real-time presence and hub-wide communication.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -21,6 +22,7 @@ from fastapi import (
 from shared import protocol
 
 from .. import database
+from .. import viewport
 from ..managers import manager
 from ..models import WsTicketResponse
 from ..security import (
@@ -61,6 +63,36 @@ def _verify_hmac(hmac_key: str, payload: str, signature: str) -> bool:
     """Verify HMAC-SHA256 signature."""
     expected = hmac.new(hmac_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+def _current_tick_id(websocket: WebSocket) -> int:
+    tick = getattr(websocket.app.state, "world_tick", None)
+    return tick.tick_id if tick is not None else 0
+
+
+async def _viewport_pump(
+    websocket: WebSocket, session: viewport.ViewportSession
+) -> None:
+    try:
+        while True:
+            await asyncio.sleep(session.flush_interval)
+            positions = viewport.read_positions()
+            tick_id = _current_tick_id(websocket)
+            for op, domain in viewport.diff_positions(positions, session.committed):
+                session.enqueue(op, domain)
+            result = await viewport.flush(
+                session, positions, tick_id, websocket.send_json
+            )
+            if result == "closed":
+                await websocket.close(
+                    code=status.WS_1013_TRY_AGAIN_LATER,
+                    reason="resumable: slow_consumer",
+                )
+                return
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.error(f"Viewport pump error: {e}")
 
 
 @router.websocket("/ws/{owner_id}")
@@ -118,6 +150,10 @@ async def websocket_presence(
 
     await manager.connect(owner_id, websocket)
 
+    vp_session = viewport.viewport.create(owner_id)
+    tick_id = _current_tick_id(websocket)
+    pump_task = asyncio.create_task(_viewport_pump(websocket, vp_session))
+
     try:
         # Send session info + current online owners to the newly connected client
         online = manager.get_online_owners()
@@ -125,8 +161,14 @@ async def websocket_presence(
             protocol.envelope(
                 protocol.MessageType.CONNECTED,
                 session_id=session_id,
+                conn_id=vp_session.conn_id,
                 online_owners=[oid for oid in online if oid != owner_id],
             )
+        )
+
+        # Initial viewport snapshot (protocol v2 downstream)
+        await websocket.send_json(
+            viewport.build_snapshot(vp_session, protocol.SnapReason.JOIN, tick_id)
         )
 
         # Broadcast to others that this owner came online
@@ -158,6 +200,24 @@ async def websocket_presence(
 
                 message = json.loads(data)
                 msg_type = message.get("type")
+
+                if msg_type == "resume":
+                    outcome = await viewport.viewport.resume(
+                        vp_session,
+                        message.get("conn_id"),
+                        message.get("last_seq"),
+                        _current_tick_id(websocket),
+                        websocket.send_json,
+                    )
+                    if outcome == "snapshot":
+                        await websocket.send_json(
+                            viewport.build_snapshot(
+                                vp_session,
+                                protocol.SnapReason.RESYNC,
+                                _current_tick_id(websocket),
+                            )
+                        )
+                    continue
 
                 if msg_type == "soul_update":
                     # Verify HMAC signature
@@ -293,6 +353,8 @@ async def websocket_presence(
     except Exception as e:
         logger.error(f"WebSocket error for {owner_id}: {e}")
     finally:
+        pump_task.cancel()
+        vp_session.live = False
         database.delete_ws_session(session_id)
         manager.disconnect(owner_id)
         await manager.broadcast(

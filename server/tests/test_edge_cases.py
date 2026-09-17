@@ -141,6 +141,7 @@ async def test_websocket_malformed_json(client: TestClient):
     # Test line 725-726: JSONDecodeError in WS
     with client.websocket_connect("/ws/user1") as ws:
         ws.receive_json()
+        assert ws.receive_json()["type"] == "snapshot"
         ws.send_text("{invalid")
         # Connection should stay alive (ping/pong to verify)
         ws.send_text("ping")
@@ -153,6 +154,7 @@ async def test_websocket_handle_message_exception(client: TestClient):
     # Send a JSON list, which parses but fails .get("type")
     with client.websocket_connect("/ws/user1") as ws:
         ws.receive_json()
+        assert ws.receive_json()["type"] == "snapshot"
         ws.send_text("[]")
         # Connection should stay alive
         ws.send_text("ping")

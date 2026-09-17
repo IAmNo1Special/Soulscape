@@ -10,6 +10,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import database
+from .. import viewport
 from ..models import BuyRequest, MarketListing
 from ..rate_limit import market_write_limit, read_limit
 from ..security import UserIdentity, get_api_key
@@ -190,6 +191,9 @@ def buy_item(
             )
             conn.commit()
             _marketplace_cache["timestamp"] = 0.0
+
+        viewport.viewport.notify_economy_soul(buyer_id)
+        viewport.viewport.notify_economy_soul(seller_id)
 
         return {
             "status": "success",
