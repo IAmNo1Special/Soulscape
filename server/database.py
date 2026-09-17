@@ -768,6 +768,64 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_llm_usage_soul
                 ON llm_usage(soul_id)
             """)
+            # Metering stage-1 (issue #27): idempotent usage events per
+            # #25 llm_usage row, decision traces joining deliberation ->
+            # usage event -> intents -> outcomes, and the runtime pricing
+            # knob (per-model USD/1k rates + essence_per_usd).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS metering_events (
+                    event_id TEXT PRIMARY KEY,
+                    soul_id TEXT NOT NULL,
+                    tier TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL,
+                    completion_tokens INTEGER NOT NULL,
+                    cost_usd_estimate REAL NOT NULL,
+                    essence_charged REAL,
+                    shortfall_essence REAL NOT NULL DEFAULT 0.0,
+                    batch_id TEXT,
+                    settled_at REAL,
+                    settled_by TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_metering_events_soul
+                ON metering_events(soul_id, settled_at)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_metering_events_batch
+                ON metering_events(batch_id)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS decision_traces (
+                    trace_id TEXT PRIMARY KEY,
+                    soul_id TEXT NOT NULL,
+                    deliberation_id INTEGER,
+                    usage_event_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'deliberated',
+                    rationale TEXT NOT NULL DEFAULT '',
+                    intents_json TEXT NOT NULL DEFAULT '[]',
+                    intent_ids_json TEXT NOT NULL DEFAULT '[]',
+                    outcomes_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_decision_traces_soul
+                ON decision_traces(soul_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_decision_traces_event
+                ON decision_traces(usage_event_id)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS metering_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
             # Memory tiers (issue #26): episodic log, weekly digests,
             # SQLite-backed semantic store. vocab_version stamps every
             # row so memories stay interpretable across vocabulary

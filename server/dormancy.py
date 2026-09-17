@@ -153,6 +153,9 @@ def note_essence_change(
     soul_id: str,
     essence_before: float,
     tick_id: int | None = None,
+    *,
+    reason: str | None = None,
+    shortfall: float | None = None,
 ) -> tuple[bool, bool]:
     """Journal dormancy transitions after a cached-essence write.
 
@@ -160,7 +163,9 @@ def note_essence_change(
     souls.essence. Compares the derived dormancy before/after: on a
     freeze flip journals `soul_dormant`; on a wake flip journals
     `soul_woke` and resets the #24 think-schedule hook. No flip, no
-    journal. Returns (dormant_now, flipped).
+    journal. reason/shortfall (issue #27) ride the soul_dormant
+    payload when the freeze came from an unpayable debit. Returns
+    (dormant_now, flipped).
     """
     if tick_id is None:
         tick_id = _current_tick_id(conn)
@@ -173,22 +178,23 @@ def note_essence_change(
         return now_dormant, False
     now = time.time()
     if now_dormant:
-        persistence.append_event(
-            conn,
-            tick_id,
-            EVENT_SOUL_DORMANT,
-            {
-                "soul_id": soul_id,
-                "essence_before": essence_before,
-                "essence_after": essence_after,
-                "at": now,
-            },
-        )
+        payload = {
+            "soul_id": soul_id,
+            "essence_before": essence_before,
+            "essence_after": essence_after,
+            "at": now,
+        }
+        if reason is not None:
+            payload["reason"] = reason
+        if shortfall is not None:
+            payload["shortfall"] = shortfall
+        persistence.append_event(conn, tick_id, EVENT_SOUL_DORMANT, payload)
         logger.info(
-            "dormancy: soul %s froze (essence %.2f -> %.2f)",
+            "dormancy: soul %s froze (essence %.2f -> %.2f)%s",
             soul_id,
             essence_before,
             essence_after,
+            f" reason={reason}" if reason else "",
         )
     else:
         persistence.append_event(

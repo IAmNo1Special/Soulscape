@@ -197,3 +197,12 @@ class KeyMetadata(BaseModel):
     rotated_at: Optional[float] = None
     revoked_at: Optional[float] = None
     superseded_by: Optional[str] = None
+
+
+class PricingUpdate(BaseModel):
+    """Operator pricing-knob update (issue #27). Both fields optional;
+    omitted fields keep their current values. Affects new settlements
+    only."""
+
+    essence_per_usd: Optional[float] = None
+    model_rates: Optional[Dict[str, List[float]]] = None

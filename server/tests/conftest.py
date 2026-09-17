@@ -77,6 +77,9 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM plots")
     cursor.execute("DELETE FROM llm_keys")
     cursor.execute("DELETE FROM llm_usage")
+    cursor.execute("DELETE FROM metering_events")
+    cursor.execute("DELETE FROM decision_traces")
+    cursor.execute("DELETE FROM metering_config")
     cursor.execute("DELETE FROM episodes")
     cursor.execute("DELETE FROM weekly_digests")
     cursor.execute("DELETE FROM semantic_memories")
@@ -86,7 +89,7 @@ def clear_db(db_conn):
     # that starts mid-sequence and looks corrupt.
     cursor.execute(
         "DELETE FROM sqlite_sequence WHERE name IN "
-        "('journal', 'snapshots', 'episodes', 'weekly_digests')"
+        "('journal', 'snapshots', 'episodes', 'weekly_digests', 'llm_usage')"
     )
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'essence_fund'")
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'plot_claim_seq'")

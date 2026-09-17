@@ -47,6 +47,7 @@ from . import world
 from . import biology
 from . import dormancy
 from . import agents
+from .agents import metering
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -176,6 +177,8 @@ class WorldTick:
                     plots.adjudicate_plot_intent(self, intent)
                 elif intent["kind"] in biology.BIOLOGY_KINDS:
                     biology.adjudicate_feed_soul(self, intent)
+                elif intent["kind"] in metering.METERING_KINDS:
+                    metering.adjudicate_metering_intent(self, intent)
                 elif intent["kind"] in agents.consume.CONSUME_KINDS:
                     agents.consume.adjudicate_consume(
                         self, intent, agents.reflex.NullProvider()
@@ -356,6 +359,10 @@ class WorldTick:
             # #26: cheap nightly-summarizer check (in-memory guard;
             # hits the DB at most once per hour).
             agents.memory.tick_maintenance()
+            # #27: metering batcher -- ingest + cadence/threshold batch
+            # creation. New debit intents settle in pump_intents() below,
+            # on this same tick.
+            metering.maybe_run_batch()
             self.pump_intents()
             if (self.tick_id + 1) % biology.BIOLOGY_EVERY_TICKS == 0:
                 # 0.1 Hz server-side biology: needs decay, starvation-only

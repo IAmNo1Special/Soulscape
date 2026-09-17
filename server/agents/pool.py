@@ -34,7 +34,7 @@ import secrets
 import time
 
 from .. import biology, database, dormancy, intents, persistence
-from . import drives, memory, reflex, scheduler, sensations, vocab
+from . import drives, memory, metering, reflex, scheduler, sensations, vocab
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -457,6 +457,10 @@ class AgentPool:
             )
             if intent_id is not None:
                 enqueued.append(intent_id)
+        # #27: join the deliberation's trace to the intents it produced.
+        trace_id = result.get("trace_id")
+        if trace_id and enqueued:
+            metering.attach_intent_ids(trace_id, enqueued)
         self.think_scheduler.schedule_next(soul_id, now)
         return {
             "soul_id": soul_id,
@@ -467,6 +471,7 @@ class AgentPool:
             "model": result.get("model"),
             "fallback_used": result.get("fallback_used"),
             "enqueued": enqueued,
+            "trace_id": trace_id,
         }
 
     async def think_batch(

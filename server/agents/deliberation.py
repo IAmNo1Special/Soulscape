@@ -88,7 +88,7 @@ import time
 import urllib.request
 
 from .. import database, key_vault, persistence, plots
-from . import drives, memory, reflex, scheduler, sensations, vocab
+from . import drives, memory, metering, reflex, scheduler, sensations, vocab
 from . import pool as agent_pool
 
 logger = logging.getLogger("soulscape_hub")
@@ -616,13 +616,13 @@ def record_usage(
         return int(cursor.lastrowid)
 
 
-def _journal(tick_id: int, event_type: str, payload: dict, conn=None) -> None:
+def _journal(tick_id: int, event_type: str, payload: dict, conn=None) -> int:
     if conn is None:
         with database.get_db() as owned:
-            persistence.append_event(owned, tick_id, event_type, payload)
+            seq = persistence.append_event(owned, tick_id, event_type, payload)
             owned.commit()
-    else:
-        persistence.append_event(conn, tick_id, event_type, payload)
+            return seq
+    return persistence.append_event(conn, tick_id, event_type, payload)
 
 
 def default_provider_call(
@@ -854,7 +854,7 @@ class Deliberator:
             completion_tokens = estimate_tokens(raw)
             cost = estimate_cost(model, prompt_tokens, completion_tokens)
             first = chain[0] if chain else provider
-            record_usage(
+            usage_id = record_usage(
                 soul_id,
                 tier,
                 provider,
@@ -865,7 +865,12 @@ class Deliberator:
                 latency_ms,
                 fallback_used=provider != first,
             )
-            _journal(
+            # #27: one idempotent metering event per usage row, one
+            # decision trace per deliberation (rationale + intents;
+            # intent ids and outcomes join later). Event + trace share
+            # one transaction so a crash can never leave an event
+            # without its trace.
+            seq = _journal(
                 tick_id,
                 EVENT_LLM_DELIBERATION,
                 {
@@ -880,6 +885,22 @@ class Deliberator:
                     "vocab_version": vocab.VOCAB_VERSION,
                 },
             )
+            with database.get_db() as mconn:
+                event_id = metering.record_event_for_usage(usage_id, mconn)
+                trace_id = metering.record_decision_trace(
+                    mconn,
+                    trace_id=f"{metering.TRACE_ID_PREFIX}{usage_id}",
+                    soul_id=soul_id,
+                    deliberation_id=seq,
+                    usage_event_id=event_id,
+                    status="deliberated",
+                    rationale=rationale,
+                    intents=[
+                        {"action": action, "params": params}
+                        for action, params in validated
+                    ],
+                )
+                mconn.commit()
             self.tracker.mark_deliberated(soul_id, now)
             return {
                 "status": "deliberated",
@@ -890,9 +911,10 @@ class Deliberator:
                 "rationale": rationale,
                 "fallback_used": provider != first,
                 "prompt_tokens": prompt_tokens,
+                "trace_id": trace_id,
             }
         reason = (last_error or "chain_exhausted")[:200]
-        _journal(
+        degraded_seq = _journal(
             tick_id,
             EVENT_LLM_DEGRADED,
             {
@@ -904,7 +926,7 @@ class Deliberator:
                 "fallback": "heuristic_reflex",
             },
         )
-        record_usage(
+        usage_id = record_usage(
             soul_id,
             "heuristic",
             "heuristic",
@@ -915,6 +937,21 @@ class Deliberator:
             0.0,
             fallback_used=True,
         )
+        # Event + trace share one transaction (same crash-safety
+        # reasoning as the deliberated path above).
+        with database.get_db() as mconn:
+            event_id = metering.record_event_for_usage(usage_id, mconn)
+            trace_id = metering.record_decision_trace(
+                mconn,
+                trace_id=f"{metering.TRACE_ID_PREFIX}{usage_id}",
+                soul_id=soul_id,
+                deliberation_id=degraded_seq,
+                usage_event_id=event_id,
+                status="heuristic",
+                rationale=reason,
+                intents=[],
+            )
+            mconn.commit()
         self.tracker.mark_deliberated(soul_id, now)
         return {
             "status": "heuristic",
@@ -922,4 +959,5 @@ class Deliberator:
             "intents": [],
             "fallback_used": True,
             "degraded_reason": reason,
+            "trace_id": trace_id,
         }
