@@ -801,6 +801,43 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_ledger_soul
                 ON ledger(soul_id)
             """)
+            # Plot grid (issue #19): square-plot territory layer. The
+            # origin plot is the unclaimable origin Commons; rings
+            # divisible by 3 are unclaimable road rings; the rest are
+            # claimable. access_policy is 'open' or 'closed'.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS plots (
+                    plot_id TEXT PRIMARY KEY,
+                    grid_x INTEGER NOT NULL,
+                    grid_y INTEGER NOT NULL,
+                    ring INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    owner_type TEXT,
+                    owner_id TEXT,
+                    access_policy TEXT NOT NULL DEFAULT 'open',
+                    claimed_at REAL,
+                    claim_seq INTEGER,
+                    CONSTRAINT chk_plots_kind CHECK (
+                        kind IN ('commons', 'road', 'claimable')),
+                    CONSTRAINT chk_plots_access CHECK (
+                        access_policy IN ('open', 'closed'))
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plots_owner
+                ON plots(owner_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plots_ring
+                ON plots(ring)
+            """)
+            cursor.execute(
+                "INSERT OR IGNORE INTO globals (key, value) "
+                "VALUES ('plot_claim_seq', 0.0)"
+            )
+            from . import plots as plots_module
+
+            plots_module.seed_plots(conn)
             _migrate_souls(cursor)
         _migrate_social(conn)
     except Exception as e:

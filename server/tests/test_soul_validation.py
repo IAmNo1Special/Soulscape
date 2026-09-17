@@ -113,7 +113,13 @@ def test_malformed_position_defaults(client: TestClient):
         cursor.execute("SELECT position FROM souls WHERE soul_id = 's1'")
         import json
 
-        assert json.loads(cursor.fetchone()["position"]) == [0, 0]
+        # Newborn souls materialize at the origin Commons center
+        # (issue #19), overriding any posted position.
+        from .. import plots
+
+        assert json.loads(cursor.fetchone()["position"]) == list(
+            plots.commons_center()
+        )
 
 
 def test_inventory_quantities_clamped(client: TestClient):

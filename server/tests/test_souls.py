@@ -121,8 +121,12 @@ def test_souls_json_parsing(client: TestClient):
     data = response.json()
     soul = data[0]
 
-    # Check that these fields came back as parsed objects, not strings
-    assert soul["position"] == [10, 20]
+    # Check that these fields came back as parsed objects, not strings.
+    # Newborn souls materialize at the origin Commons center (issue #19),
+    # so the posted position is overridden for a new soul.
+    from .. import plots
+
+    assert soul["position"] == list(plots.commons_center())
     assert soul["hometown"] == {"x": 1, "y": 1}
     assert soul["orb_color"] == [255, 0, 0]
     assert soul["aura_color"] == [0, 255, 0]

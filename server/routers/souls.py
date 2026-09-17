@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import database
 from .. import persistence
+from .. import plots
 from ..models import SoulResponse, SoulUpdate
 from ..rate_limit import read_limit
 from ..security import (
@@ -143,6 +144,9 @@ def _validate_soul_state(
         float(_clamp(pos[0], 0.0, MAX_POSITION)),
         float(_clamp(pos[1], 0.0, MAX_POSITION)),
     ]
+    if stored is None:
+        cx, cy = plots.commons_center()
+        out["position"] = [cx, cy]
     vel = s.get("velocity", [0, 0])
     if (
         not isinstance(vel, (list, tuple))

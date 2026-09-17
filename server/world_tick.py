@@ -37,6 +37,7 @@ from . import database
 from . import intents
 from . import market
 from . import persistence
+from . import plots
 from . import social
 
 logger = logging.getLogger("soulscape_hub")
@@ -160,6 +161,8 @@ class WorldTick:
                     market.adjudicate_market_intent(self, intent)
                 elif intent["kind"] in social.SOCIAL_KINDS:
                     social.adjudicate_social_intent(self, intent)
+                elif intent["kind"] in plots.PLOT_KINDS:
+                    plots.adjudicate_plot_intent(self, intent)
                 else:
                     with database.get_db() as conn:
                         self._reject(conn, intent, "unknown_kind")
@@ -233,6 +236,15 @@ class WorldTick:
                 max(float(payload["y"]), _POSITION_MARGIN),
                 database.SCREEN_BOUNDS[1] - _POSITION_MARGIN,
             )
+            if not plots.can_enter_plot(
+                conn,
+                soul_id,
+                tx,
+                ty,
+                is_operator=intent["custodian_id"] is None,
+            ):
+                self._reject(conn, intent, "plot_closed")
+                return
             dx, dy = tx - x, ty - y
             dist = math.hypot(dx, dy)
             clamped = False
@@ -304,36 +316,45 @@ class WorldTick:
                 rows = conn.execute(
                     "SELECT soul_id, position, velocity, move_target FROM souls"
                 ).fetchall()
-            for row in rows:
-                soul_id = row["soul_id"]
-                try:
-                    x, y = _parse_pair(row["position"])
-                    vx, vy = _parse_pair(row["velocity"])
-                except (ValueError, TypeError, KeyError, IndexError):
-                    continue
-                unflushed = persistence.dirty_get(soul_id)
-                if unflushed is not None:
-                    if unflushed.get("position") is not None:
-                        x, y = unflushed["position"]
-                    if unflushed.get("velocity") is not None:
-                        vx, vy = unflushed["velocity"]
-                    target = unflushed.get("move_target", None)
-                    if "move_target" not in unflushed:
+                closed_barrier = plots.has_closed_plots(conn)
+                for row in rows:
+                    soul_id = row["soul_id"]
+                    try:
+                        x, y = _parse_pair(row["position"])
+                        vx, vy = _parse_pair(row["velocity"])
+                    except (ValueError, TypeError, KeyError, IndexError):
+                        continue
+                    unflushed = persistence.dirty_get(soul_id)
+                    if unflushed is not None:
+                        if unflushed.get("position") is not None:
+                            x, y = unflushed["position"]
+                        if unflushed.get("velocity") is not None:
+                            vx, vy = unflushed["velocity"]
+                        target = unflushed.get("move_target", None)
+                        if "move_target" not in unflushed:
+                            target = self._parse_target(row["move_target"])
+                    else:
                         target = self._parse_target(row["move_target"])
-                else:
-                    target = self._parse_target(row["move_target"])
-                if vx == 0.0 and vy == 0.0:
-                    continue
-                (nx, ny), (nvx, nvy), new_target = persistence.integrate_soul(
-                    (x, y), (vx, vy), target, self.tick_dt, bounds
-                )
-                persistence.dirty.mark(
-                    soul_id,
-                    position=[nx, ny],
-                    velocity=[nvx, nvy],
-                    move_target=new_target,
-                )
-                moved += 1
+                    if vx == 0.0 and vy == 0.0:
+                        continue
+                    (nx, ny), (nvx, nvy), new_target = persistence.integrate_soul(
+                        (x, y), (vx, vy), target, self.tick_dt, bounds
+                    )
+                    if closed_barrier and not plots.can_enter_plot(
+                        conn, soul_id, nx, ny
+                    ):
+                        (nx, ny), (nvx, nvy), new_target = (
+                            (x, y),
+                            (0.0, 0.0),
+                            None,
+                        )
+                    persistence.dirty.mark(
+                        soul_id,
+                        position=[nx, ny],
+                        velocity=[nvx, nvy],
+                        move_target=new_target,
+                    )
+                    moved += 1
             self.tick_id += 1
             self.souls_moved_last_tick = moved
             self._maybe_flush()

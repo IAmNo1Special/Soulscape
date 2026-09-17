@@ -170,6 +170,21 @@ def _validate_social_delete(
     return {"message_id": message_id}, None
 
 
+def _validate_plot_claim(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    claimant_soul_id = message.get("claimant_soul_id")
+    if not isinstance(claimant_soul_id, str) or not claimant_soul_id:
+        return None, "BAD_PAYLOAD"
+    access_policy = message.get("access_policy", "open")
+    if access_policy not in ("open", "closed"):
+        return None, "BAD_PAYLOAD"
+    return {
+        "claimant_soul_id": claimant_soul_id,
+        "access_policy": access_policy,
+    }, None
+
+
 _KIND_VALIDATORS = {
     "move_to": _validate_move_to,
     "market_list": _validate_market_list,
@@ -179,6 +194,7 @@ _KIND_VALIDATORS = {
     "social_reply": _validate_social_reply,
     "social_edit": _validate_social_edit,
     "social_delete": _validate_social_delete,
+    "plot_claim": _validate_plot_claim,
 }
 
 
