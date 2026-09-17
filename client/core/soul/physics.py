@@ -7,8 +7,6 @@ import random
 import time
 from typing import TYPE_CHECKING, Callable
 
-import pyautogui
-
 from ...constants import (
     HOVER_AMPLITUDE,
     HOVER_FREQUENCY,
@@ -107,13 +105,9 @@ class SoulPhysics:
 
         self.width: int = SOUL_WIDTH
         self.height: int = SOUL_HEIGHT
-        log.debug(
-            f"Soul: {self.name} initialized with position ({self.x}, {self.y})"
-        )
+        log.debug(f"Soul: {self.name} initialized with position ({self.x}, {self.y})")
 
-    def on_mouse_press(
-        self, x: int, y: int, button: int, modifiers: int
-    ) -> None:
+    def on_mouse_press(self, x: int, y: int, button: int, modifiers: int) -> None:
         """Handles mouse press events to initiate dragging.
 
         Args:
@@ -129,12 +123,9 @@ class SoulPhysics:
                 self.x <= x <= self.x + self.width
                 and self.y <= y <= self.y + self.height
             ):
-
                 # Check for double click (within 300ms)
                 current_time = time.time()
-                if (
-                    current_time - self.last_click_time < 0.3
-                ):  # Double click detected
+                if current_time - self.last_click_time < 0.3:  # Double click detected
                     self.follow_mouse = not self.follow_mouse
 
                     if self.follow_mouse:
@@ -156,9 +147,7 @@ class SoulPhysics:
                 self.vx = 0.0  # Stop independent movement
                 self.vy = 0.0
 
-    def on_mouse_release(
-        self, x: int, y: int, button: int, modifiers: int
-    ) -> None:
+    def on_mouse_release(self, x: int, y: int, button: int, modifiers: int) -> None:
         """Handles mouse release events to stop dragging."""
         if button == 1:  # 1 is LEFT mouse button
             was_dragging = self.is_dragging
@@ -229,9 +218,7 @@ class SoulPhysics:
             )
             self.y = max(
                 -WINDOW_OVERSHOOT,
-                min(
-                    self.y, self.screen_height - self.height + WINDOW_OVERSHOOT
-                ),
+                min(self.y, self.screen_height - self.height + WINDOW_OVERSHOOT),
             )
 
             # Update soul position
@@ -311,12 +298,8 @@ class SoulPhysics:
                 self.target_location is None or random.random() < 0.005
             ):
                 padding = min(self.screen_width, self.screen_height) * 0.1
-                tx = random.uniform(
-                    padding, self.screen_width - self.width - padding
-                )
-                ty = random.uniform(
-                    padding, self.screen_height - self.height - padding
-                )
+                tx = random.uniform(padding, self.screen_width - self.width - padding)
+                ty = random.uniform(padding, self.screen_height - self.height - padding)
                 self.target_location = (tx, ty)
 
             # Move towards target
@@ -326,9 +309,7 @@ class SoulPhysics:
                 )
                 if reached:
                     self.target_location = None
-                    self.roaming_pause = random.uniform(
-                        ROAM_PAUSE_MIN, ROAM_PAUSE_MAX
-                    )
+                    self.roaming_pause = random.uniform(ROAM_PAUSE_MIN, ROAM_PAUSE_MAX)
                     if self.on_move_end:
                         self.on_move_end(self.soul, self.x, self.y)
 
@@ -400,9 +381,7 @@ class SoulPhysics:
             self.soul.x = self.x
             self.soul.y = self.y
 
-    def _move_towards_target(
-        self, target_x: float, target_y: float, dt: float
-    ) -> bool:
+    def _move_towards_target(self, target_x: float, target_y: float, dt: float) -> bool:
         """Moves the soul towards a target position with smooth deceleration.
 
         Args:
@@ -439,9 +418,7 @@ class SoulPhysics:
         dy *= inv_distance
 
         # Calculate speed with smooth deceleration using an ease-out curve
-        deceleration_distance = (
-            50.0  # Distance over which to decelerate (pixels)
-        )
+        deceleration_distance = 50.0  # Distance over which to decelerate (pixels)
         speed_factor = min(1.0, distance / deceleration_distance)
 
         # Apply a smoother curve (ease-out cubic)
@@ -463,9 +440,7 @@ class SoulPhysics:
         # Clamp to screen edges with sub-pixel precision
         self.x = max(
             float(-WINDOW_OVERSHOOT),
-            min(
-                self.x, self.screen_width - self.width + float(WINDOW_OVERSHOOT)
-            ),
+            min(self.x, self.screen_width - self.width + float(WINDOW_OVERSHOOT)),
         )
         self.y = max(
             float(-WINDOW_OVERSHOOT),
@@ -490,6 +465,8 @@ class SoulPhysics:
         Args:
             dt: Delta time.
         """
+        import pyautogui
+
         mouse_x, mouse_y = pyautogui.position()
         target_x = float(mouse_x) - (self.width // 2)
         target_y = float(mouse_y) - (self.height // 2)

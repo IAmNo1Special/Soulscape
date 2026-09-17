@@ -54,8 +54,11 @@ class PresenceManager:
         self._hmac_key: str | None = None
         self._pending_acks: dict[str, asyncio.Future] = {}
 
-        # Build WS URL from Hub URL (http -> ws)
-        hub_url = os.getenv("HUB_URL", "http://localhost:9785")
+        # Build WS URL from the configured Hub address
+        # (HUB_URL env, then hub_url setting)
+        from ..persistence import resolve_hub_url
+
+        hub_url = resolve_hub_url() or "http://localhost:9785"
         # Case-insensitive replacement of HTTP scheme
         hub_url_lower = hub_url.lower()
         if hub_url_lower.startswith("https://"):

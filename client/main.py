@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
-import os
 import random
 import sys
 import threading
@@ -33,7 +32,13 @@ from .system.network.viewport_client import (
     viewport_mode_enabled,
 )
 from .system.network_service import NetworkService
-from .system.persistence import load_settings, load_souls, save_settings
+from .system.persistence import (
+    get_client_mode,
+    load_settings,
+    load_souls,
+    resolve_hub_url,
+    save_settings,
+)
 from .system.tray import TrayController
 from .system.window_manager import get_cursor_pos, get_window_manager
 from .system.dirty_tracker import DirtyTracker
@@ -159,7 +164,14 @@ class SoulscapeApp:
             self.load_initial_souls()
 
         # 5. Start Network Service
-        if os.getenv("HUB_URL"):
+        if self.viewport_mode:
+            hub_url = resolve_hub_url()
+            if not hub_url:
+                raise RuntimeError(
+                    "Soulscape is in Online (Hub) mode but no Hub URL is "
+                    "configured. Set HUB_URL or the Hub URL in Settings. "
+                    "Refusing to silently fall back to Offline."
+                )
             self.network_service.start()
             # Force initial secure sync of loaded souls (HTTP)
             self.initial_hub_sync()
@@ -784,6 +796,7 @@ class SoulscapeApp:
                     "current_opacity": self.global_opacity,
                     "run_on_startup": run_on_startup,
                     "current_hub_url": current_hub_url,
+                    "current_mode": get_client_mode(),
                 }
             )
 
@@ -833,6 +846,7 @@ class SoulscapeApp:
                     opacity = data.get("opacity")
                     startup = data.get("startup")
                     hub_url = data.get("hub_url")
+                    mode = data.get("mode", "offline")
 
                     # Apply settings
                     self.global_opacity = opacity
@@ -843,15 +857,20 @@ class SoulscapeApp:
                     current_settings = load_settings()
                     current_settings["opacity"] = opacity
                     current_settings["hub_url"] = hub_url
+                    if mode in ("offline", "online"):
+                        current_settings["mode"] = mode
                     save_settings(current_settings)
+                    self.saved_settings = current_settings
 
                     # Startup reg
                     self._set_windows_startup(startup)
                     log.debug(
-                        "Applied global settings: opacity=%d, startup=%s, hub_url=%s",
+                        "Applied global settings: opacity=%d, startup=%s, "
+                        "hub_url=%s, mode=%s",
                         opacity,
                         startup,
                         hub_url,
+                        mode,
                     )
 
                 elif cmd_type == GuiCommand.SHOW_CONTEXT_MENU:

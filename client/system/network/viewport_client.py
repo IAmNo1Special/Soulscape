@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import collections
 import math
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from shared import protocol
+
+from ..persistence import MODE_ONLINE, get_client_mode
 
 INTERP_DELAY_SECONDS = 0.2
 MAX_EXTRAPOLATE_SECONDS = 0.4
@@ -26,9 +27,8 @@ _MAX_TURN_RATE = 2.0 * math.pi
 
 
 def viewport_mode_enabled() -> bool:
-    """Viewport mode is active only with the flag set AND a Hub URL."""
-    flag = os.getenv("HUB_AUTHORITATIVE", "").lower() in ("1", "true", "yes")
-    return flag and bool(os.getenv("HUB_URL"))
+    """Viewport mode is the explicit online client mode from settings."""
+    return get_client_mode() == MODE_ONLINE
 
 
 @dataclass

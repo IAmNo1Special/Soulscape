@@ -14,6 +14,7 @@ import pytest
 from shared import protocol
 
 from client.core.commands import ViewportFrameCommand
+from client.system.network import viewport_client
 from client.system.network.presence import PresenceManager
 from client.system.network.viewport_client import (
     INTERP_DELAY_SECONDS,
@@ -272,20 +273,17 @@ class TestViewportMapper:
         assert mapper.region is None
 
 
-class TestFlagSemantics:
-    def test_viewport_mode_needs_flag_and_hub_url(self, monkeypatch):
-        monkeypatch.setenv("HUB_AUTHORITATIVE", "1")
-        monkeypatch.setenv("HUB_URL", "http://localhost:9785")
+class TestModeSemantics:
+    def test_online_mode_enables_viewport(self, monkeypatch):
+        monkeypatch.setattr(viewport_client, "get_client_mode", lambda: "online")
         assert viewport_mode_enabled() is True
 
-    def test_flag_unset_disables(self, monkeypatch):
-        monkeypatch.delenv("HUB_AUTHORITATIVE", raising=False)
-        monkeypatch.setenv("HUB_URL", "http://localhost:9785")
+    def test_offline_mode_disables_viewport(self, monkeypatch):
+        monkeypatch.setattr(viewport_client, "get_client_mode", lambda: "offline")
         assert viewport_mode_enabled() is False
 
-    def test_offline_disables_even_with_flag(self, monkeypatch):
-        monkeypatch.setenv("HUB_AUTHORITATIVE", "1")
-        monkeypatch.delenv("HUB_URL", raising=False)
+    def test_unknown_mode_disables_viewport(self, monkeypatch):
+        monkeypatch.setattr(viewport_client, "get_client_mode", lambda: "bogus")
         assert viewport_mode_enabled() is False
 
 

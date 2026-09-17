@@ -39,8 +39,7 @@ class SoulSettingsDialog:
         """
         self.on_apply = on_apply
         self.result: (
-            tuple[str, tuple[float, float, float], tuple[float, float, float]]
-            | None
+            tuple[str, tuple[float, float, float], tuple[float, float, float]] | None
         ) = None
 
         # Create the window
@@ -72,19 +71,13 @@ class SoulSettingsDialog:
         frame.pack(fill=tk.BOTH, expand=True)
 
         # Name entry
-        ttk.Label(frame, text="Soul Name:").grid(
-            row=0, column=0, sticky=tk.W, pady=5
-        )
+        ttk.Label(frame, text="Soul Name:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.name_entry = ttk.Entry(frame, width=25)
         self.name_entry.insert(0, name)
-        self.name_entry.grid(
-            row=0, column=1, columnspan=2, sticky=tk.EW, pady=5
-        )
+        self.name_entry.grid(row=0, column=1, columnspan=2, sticky=tk.EW, pady=5)
 
         # Orb color picker
-        ttk.Label(frame, text="Orb Color:").grid(
-            row=1, column=0, sticky=tk.W, pady=5
-        )
+        ttk.Label(frame, text="Orb Color:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.orb_color_btn = ttk.Button(
             frame,
             text="Choose...",
@@ -98,9 +91,7 @@ class SoulSettingsDialog:
         self._update_orb_preview()
 
         # Aura color picker
-        ttk.Label(frame, text="Aura Color:").grid(
-            row=2, column=0, sticky=tk.W, pady=5
-        )
+        ttk.Label(frame, text="Aura Color:").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.aura_color_btn = ttk.Button(
             frame,
             text="Choose...",
@@ -115,21 +106,17 @@ class SoulSettingsDialog:
 
         # Stats Display (Read-only for now)
         if self.stats:
-            stats_frame = ttk.Labelframe(
-                frame, text="Gene Sequence", padding=10
-            )
-            stats_frame.grid(
-                row=3, column=0, columnspan=3, sticky=tk.EW, pady=15
-            )
+            stats_frame = ttk.Labelframe(frame, text="Gene Sequence", padding=10)
+            stats_frame.grid(row=3, column=0, columnspan=3, sticky=tk.EW, pady=15)
 
             # Nature
             nature = self.stats.get("nature", "Unknown")
             ttk.Label(stats_frame, text=f"Nature: {nature}").grid(
                 row=0, column=0, columnspan=2, sticky=tk.W
             )
-            ttk.Label(
-                stats_frame, text=f"Level: {self.stats.get('level', 1)}"
-            ).grid(row=0, column=2, columnspan=2, sticky=tk.E)
+            ttk.Label(stats_frame, text=f"Level: {self.stats.get('level', 1)}").grid(
+                row=0, column=2, columnspan=2, sticky=tk.E
+            )
 
             # Stat Grid
             stats_data = [
@@ -142,18 +129,18 @@ class SoulSettingsDialog:
             ]
 
             # Grid headers
-            ttk.Label(
-                stats_frame, text="Stat", font=("Segoe UI", 9, "bold")
-            ).grid(row=1, column=0, sticky=tk.W, padx=2)
-            ttk.Label(
-                stats_frame, text="IV", font=("Segoe UI", 9, "bold")
-            ).grid(row=1, column=1, padx=2)
-            ttk.Label(
-                stats_frame, text="EV", font=("Segoe UI", 9, "bold")
-            ).grid(row=1, column=2, padx=2)
-            ttk.Label(
-                stats_frame, text="Base", font=("Segoe UI", 9, "bold")
-            ).grid(row=1, column=3, padx=2)
+            ttk.Label(stats_frame, text="Stat", font=("Segoe UI", 9, "bold")).grid(
+                row=1, column=0, sticky=tk.W, padx=2
+            )
+            ttk.Label(stats_frame, text="IV", font=("Segoe UI", 9, "bold")).grid(
+                row=1, column=1, padx=2
+            )
+            ttk.Label(stats_frame, text="EV", font=("Segoe UI", 9, "bold")).grid(
+                row=1, column=2, padx=2
+            )
+            ttk.Label(stats_frame, text="Base", font=("Segoe UI", 9, "bold")).grid(
+                row=1, column=3, padx=2
+            )
 
             ivs = self.stats.get("ivs", {})
             evs = self.stats.get("evs", {})
@@ -234,10 +221,7 @@ class SoulSettingsDialog:
 
     def show(
         self,
-    ) -> (
-        tuple[str, tuple[float, float, float], tuple[float, float, float]]
-        | None
-    ):
+    ) -> tuple[str, tuple[float, float, float], tuple[float, float, float]] | None:
         """Show the dialog and wait for it to close."""
         self.root.grab_set()
         self.root.wait_window()
@@ -269,9 +253,7 @@ class SoulContextMenu:
         self.on_toggle_aura = on_toggle_aura
         self.on_dismiss = on_dismiss
         self.parent = parent
-        self.root: tk.Tk | None = (
-            None  # Used if we create our own root/toplevel
-        )
+        self.root: tk.Tk | None = None  # Used if we create our own root/toplevel
         self.menu: tk.Menu | None = None  # Keep reference
 
     def show(self, x: int, y: int) -> None:
@@ -360,7 +342,8 @@ class GlobalSettingsDialog:
         current_opacity: float = 100.0,
         run_on_startup: bool = False,
         current_hub_url: str = "http://localhost:9785",
-        on_apply: Callable[[float, bool, str], None] | None = None,
+        current_mode: str = "offline",
+        on_apply: Callable[[float, bool, str, str], None] | None = None,
     ):
         """Initialize the global settings dialog.
 
@@ -369,7 +352,8 @@ class GlobalSettingsDialog:
             current_opacity: Current opacity percentage (15-100).
             run_on_startup: Whether app runs on Windows startup.
             current_hub_url: Current URL of the Hub.
-            on_apply: Callback with (opacity, run_on_startup, hub_url).
+            current_mode: Explicit client mode, "offline" or "online".
+            on_apply: Callback with (opacity, run_on_startup, hub_url, mode).
         """
         self.on_apply = on_apply
         self.result: tuple[float, bool, str] | None = None
@@ -382,7 +366,7 @@ class GlobalSettingsDialog:
 
         # Center the window
         window_width = 350
-        window_height = 250
+        window_height = 350
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x = (screen_width - window_width) // 2
@@ -395,6 +379,9 @@ class GlobalSettingsDialog:
         self.opacity_var = tk.IntVar(value=ui_opacity)
         self.run_on_startup_var = tk.BooleanVar(value=run_on_startup)
         self.hub_url_var = tk.StringVar(value=current_hub_url)
+        self.mode_var = tk.StringVar(
+            value=current_mode if current_mode in ("offline", "online") else "offline"
+        )
 
         self._create_widgets()
 
@@ -405,9 +392,7 @@ class GlobalSettingsDialog:
         frame.pack(fill=tk.BOTH, expand=True)
 
         # Hub URL entry
-        ttk.Label(frame, text="Hub URL:").grid(
-            row=0, column=0, sticky=tk.W, pady=5
-        )
+        ttk.Label(frame, text="Hub URL:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.hub_url_entry = ttk.Entry(frame, width=25)
         self.hub_url_entry.insert(0, self.hub_url_var.get())
         self.hub_url_entry.grid(row=0, column=1, columnspan=2, sticky=tk.EW, pady=5)
@@ -438,9 +423,31 @@ class GlobalSettingsDialog:
             bootstyle="round-toggle",
         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
 
+        # Client mode: explicit Offline vs Online (Hub) choice
+        ttk.Label(frame, text="Mode:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        mode_frame = ttk.Frame(frame)
+        mode_frame.grid(row=3, column=1, columnspan=2, sticky=tk.W, pady=5)
+        ttk.Radiobutton(
+            mode_frame,
+            text="Offline (local game)",
+            value="offline",
+            variable=self.mode_var,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Radiobutton(
+            mode_frame,
+            text="Online (Hub)",
+            value="online",
+            variable=self.mode_var,
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            frame,
+            text="Mode takes effect on restart.",
+            font=("TkDefaultFont", 8),
+        ).grid(row=4, column=0, columnspan=2, sticky=tk.W)
+
         # Buttons frame
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=3, column=0, columnspan=2, pady=20)
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=20)
 
         ttk.Button(
             btn_frame,
@@ -463,10 +470,13 @@ class GlobalSettingsDialog:
         real_opacity = self._ui_to_real(ui_opacity)
         run_on_startup = self.run_on_startup_var.get()
         hub_url = self.hub_url_entry.get().strip() or "http://localhost:9785"
+        mode = self.mode_var.get()
+        if mode not in ("offline", "online"):
+            mode = "offline"
 
-        self.result = (real_opacity, run_on_startup, hub_url)
+        self.result = (real_opacity, run_on_startup, hub_url, mode)
         if self.on_apply:
-            self.on_apply(real_opacity, run_on_startup, hub_url)
+            self.on_apply(real_opacity, run_on_startup, hub_url, mode)
         self.root.destroy()
 
     def _real_to_ui(self, real_val: float) -> int:

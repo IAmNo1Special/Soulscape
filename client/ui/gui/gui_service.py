@@ -182,11 +182,16 @@ class GuiService:
             msg: Message data.
         """
 
-        def on_apply(opacity: float, startup: bool, hub_url: str) -> None:
+        def on_apply(opacity: float, startup: bool, hub_url: str, mode: str) -> None:
             self.result_queue.put(
                 {
                     "type": GuiCommand.SHOW_GLOBAL_SETTINGS,
-                    "data": {"opacity": opacity, "startup": startup, "hub_url": hub_url},
+                    "data": {
+                        "opacity": opacity,
+                        "startup": startup,
+                        "hub_url": hub_url,
+                        "mode": mode,
+                    },
                 }
             )
 
@@ -195,6 +200,7 @@ class GuiService:
             current_opacity=msg.get("current_opacity"),  # type: ignore
             run_on_startup=msg.get("run_on_startup"),  # type: ignore
             current_hub_url=msg.get("current_hub_url", "http://localhost:9785"),  # type: ignore
+            current_mode=msg.get("current_mode", "offline"),  # type: ignore
             on_apply=on_apply,
         )
         d.show()
@@ -271,9 +277,7 @@ class GuiService:
                     }
                 )
 
-            def on_edit(
-                requester_id: int, message_id: str, content: str
-            ) -> None:
+            def on_edit(requester_id: int, message_id: str, content: str) -> None:
                 self.result_queue.put(
                     {
                         "type": GuiCommand.EDIT_SOCIAL_MESSAGE,

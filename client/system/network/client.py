@@ -36,7 +36,7 @@ class NetworkClient:
                 self.base_url = env_url
             else:
                 try:
-                    from ..system.persistence import load_settings
+                    from ..persistence import load_settings
 
                     settings = load_settings()
                     self.base_url = settings.get("hub_url", "http://localhost:9785")
