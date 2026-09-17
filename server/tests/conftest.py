@@ -76,13 +76,12 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM ledger")
     cursor.execute("DELETE FROM plots")
     cursor.execute("DELETE FROM llm_keys")
+    cursor.execute("DELETE FROM llm_usage")
     # The journal is append-only in production, so recovery treats its seq
     # column as gapless. Reset the AUTOINCREMENT sequences too, or a test that
     # leaves journal/snapshot rows behind would hand the next test a journal
     # that starts mid-sequence and looks corrupt.
-    cursor.execute(
-        "DELETE FROM sqlite_sequence WHERE name IN ('journal', 'snapshots')"
-    )
+    cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('journal', 'snapshots')")
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'essence_fund'")
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'plot_claim_seq'")
     cursor.execute(

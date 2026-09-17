@@ -254,6 +254,13 @@ class AgentPool:
         except (ValueError, TypeError, IndexError):
             x, y = 0.0, 0.0
         observations = vision.detail_observations(soul_id)
+        # Feed #25's escalation tracker: wallet sightings (every ledger
+        # applier flows through here) and detail-vision enters. Lazy
+        # import: deliberation imports this module at top level.
+        from . import deliberation as _delib
+
+        _delib.tracker().note_wallet(soul_id, float(row.get("essence") or 0.0), now)
+        _delib.tracker().check_detail_enters(soul_id, observations, now)
         drive_vec = drives.compute_drives(
             row.get("nature"),
             row.get("satiety"),
@@ -315,6 +322,73 @@ class AgentPool:
             "emote": result["emote"],
         }
 
+    async def deliberate(
+        self,
+        soul_id: str,
+        vision,
+        provider: reflex.FoodWaterProvider,
+        tick_id: int,
+        now: float,
+        escalation: str | None,
+        deliberator=None,
+    ) -> dict:
+        """One #25 deliberation for one soul (the promoted think path).
+
+        Runs under the same semaphore as reflex thinks. The deliberator
+        walks the provider chain; validated intents go through the same
+        validate_and_enqueue path as reflex intents. On total provider
+        failure (or any unexpected crash) the soul still acts: the #24
+        reflex think runs instead. Nothing here ever raises out.
+        """
+        from . import deliberation as _delib
+
+        row = self._load_soul(soul_id)
+        if row is None:
+            self.think_scheduler.forget(soul_id)
+            return {"soul_id": soul_id, "status": "missing"}
+        if (row.get("state") or biology.STATE_NORMAL) == biology.STATE_COLLAPSED:
+            self.think_scheduler.schedule_next(soul_id, now)
+            return {"soul_id": soul_id, "status": "collapsed"}
+        if dormancy.is_dormant(row.get("essence")):
+            self.think_scheduler.schedule_next(soul_id, now)
+            return {"soul_id": soul_id, "status": "dormant"}
+        _delib.tracker().note_wallet(soul_id, float(row.get("essence") or 0.0), now)
+        thinker = deliberator or _delib.Deliberator(self)
+        try:
+            result = thinker.deliberate(
+                soul_id, row, vision, provider, now, escalation, tick_id
+            )
+        except Exception:
+            logger.exception("deliberation crashed for %s; reflex fallback", soul_id)
+            result = {
+                "status": "heuristic",
+                "intents": [],
+                "fallback_used": True,
+            }
+        if result.get("status") == "heuristic":
+            summary = await self.think(soul_id, vision, provider, tick_id, now)
+            summary["deliberation"] = "heuristic_fallback"
+            summary["degraded_reason"] = result.get("degraded_reason")
+            return summary
+        enqueued: list[str] = []
+        for action, payload in result.get("intents", []):
+            intent_id = self.validate_and_enqueue(
+                soul_id, action, payload, provider, tick_id
+            )
+            if intent_id is not None:
+                enqueued.append(intent_id)
+        self.think_scheduler.schedule_next(soul_id, now)
+        return {
+            "soul_id": soul_id,
+            "status": "deliberated",
+            "escalation": escalation,
+            "tier": result.get("tier"),
+            "provider": result.get("provider"),
+            "model": result.get("model"),
+            "fallback_used": result.get("fallback_used"),
+            "enqueued": enqueued,
+        }
+
     async def think_batch(
         self,
         soul_ids: list[str],
@@ -322,13 +396,37 @@ class AgentPool:
         provider: reflex.FoodWaterProvider,
         tick_id: int,
         now: float,
+        deliberate_ids: frozenset[str] | set[str] | None = None,
+        escalations: dict[str, str] | None = None,
+        deliberator=None,
     ) -> list[dict]:
-        """Run thinks for due souls under the concurrency bound."""
+        """Run thinks for due souls under the concurrency bound.
+
+        Souls in deliberate_ids take the #25 deliberation path (with
+        their escalation reason); the rest take the reflex path. One
+        shared deliberator keeps flash-failure counters across the batch.
+        """
+        deliberate_ids = deliberate_ids or frozenset()
+        escalations = escalations or {}
+        if deliberate_ids and deliberator is None:
+            from . import deliberation as _delib
+
+            deliberator = _delib.Deliberator(self)
         sem = asyncio.Semaphore(self.max_concurrent)
 
         async def _one(soul_id: str) -> dict:
             async with sem:
                 try:
+                    if soul_id in deliberate_ids:
+                        return await self.deliberate(
+                            soul_id,
+                            vision,
+                            provider,
+                            tick_id,
+                            now,
+                            escalations.get(soul_id),
+                            deliberator,
+                        )
                     return await self.think(soul_id, vision, provider, tick_id, now)
                 except Exception:
                     logger.exception("agent think failed for %s", soul_id)
@@ -343,7 +441,21 @@ class AgentPool:
         provider: reflex.FoodWaterProvider,
         tick_id: int,
         now: float | None = None,
+        deliberate_ids: frozenset[str] | set[str] | None = None,
+        escalations: dict[str, str] | None = None,
+        deliberator=None,
     ) -> list[dict]:
         """Sync entry for the tick loop (which runs off the event loop)."""
         now = time.time() if now is None else now
-        return asyncio.run(self.think_batch(soul_ids, vision, provider, tick_id, now))
+        return asyncio.run(
+            self.think_batch(
+                soul_ids,
+                vision,
+                provider,
+                tick_id,
+                now,
+                deliberate_ids=deliberate_ids,
+                escalations=escalations,
+                deliberator=deliberator,
+            )
+        )

@@ -427,6 +427,8 @@ class WorldTick:
         """
         now = time.time()
         sched = agents.scheduler.default()
+        tracker = agents.deliberation.tracker()
+        tracker.bind_scheduler(sched)
         for soul_id, events in coarse_events.items():
             if events.get("entered"):
                 sched.note_vision_enter(soul_id, now)
@@ -437,6 +439,7 @@ class WorldTick:
             self._agent_soul_count = count
             if sched.needs_boot():
                 sched.rebuild_on_boot(candidates, now)
+                tracker.seed_stagger(candidates, now)
             else:
                 sched.prune(set(candidates))
         else:
@@ -445,9 +448,31 @@ class WorldTick:
                 return
             candidates = self._agent_candidates()
         due = sched.due(now, candidates)
+        # #25 promotion: escalated souls deliberate instead of reflex-
+        # thinking. Idle-floor souls (eligible at most every 5 min) are
+        # lowest priority and capped per tick -- idle souls think rarely.
+        escalations: dict[str, str] = {}
+        for soul_id in due:
+            reason = tracker.should_escalate(soul_id, now)
+            if reason is not None:
+                escalations[soul_id] = reason
+        idle_left = agents.deliberation.IDLE_DELIBERATIONS_PER_TICK
+        for soul_id in due:
+            if soul_id in escalations or idle_left <= 0:
+                continue
+            if tracker.idle_eligible(soul_id, now):
+                escalations[soul_id] = "idle"
+                idle_left -= 1
+        reflex_ids = [s for s in due if s not in escalations]
         if due:
             self.agent_pool.run_thinks(
-                due, self.vision, agents.reflex.NullProvider(), self.tick_id, now
+                reflex_ids,
+                self.vision,
+                agents.reflex.NullProvider(),
+                self.tick_id,
+                now,
+                deliberate_ids=set(escalations),
+                escalations=escalations,
             )
 
     def _agent_candidates(self) -> list[str]:

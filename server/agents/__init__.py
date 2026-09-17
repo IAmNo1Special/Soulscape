@@ -25,12 +25,17 @@ consume:    tick-side adjudication of the reflex-only eat/drink intents
             returns none makes these intents unreachable in production).
 pool:       bounded async pool; execution-time revalidation just before
             enqueue; stale intents rejected silently into the journal.
+deliberation: #25 LLM tier: escalation triggers promote thinks,
+            flash/pro routing, token-capped prompts, structured JSON
+            outputs, provider fallback chain, llm_usage metering.
 
 Design decisions
 ---------------
-- No LLM here (#25 owns deliberation). Reflexes are pure arithmetic so
+- No LLM in the reflex path. Reflexes are pure arithmetic so
   a 500-soul tick stays inside its 14.3ms envelope; the per-tick
-  think budget (K=4) spreads work across ticks.
+  think budget (K=4) spreads work across ticks. The metered LLM tier
+  lives in deliberation.py and runs under the same pool semaphore,
+  never on the tick hot path.
 - Execution-time revalidation is the agent-side pre-enqueue check.
   #14/#17 already revalidate at adjudication; this is the earlier,
   cheaper gate, and stale intents are journaled (not surfaced).
@@ -41,10 +46,11 @@ Design decisions
   sensation "no food in sight" and emits nothing.
 """
 
-from . import consume, drives, pool, reflex, scheduler, sensations, vocab
+from . import consume, deliberation, drives, pool, reflex, scheduler, sensations, vocab
 
 __all__ = [
     "consume",
+    "deliberation",
     "drives",
     "pool",
     "reflex",

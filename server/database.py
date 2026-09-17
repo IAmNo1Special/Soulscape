@@ -747,6 +747,27 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_llm_keys_owner
                 ON llm_keys(tamer_id, provider)
             """)
+            # Per-deliberation LLM metering (issue #25): one row per
+            # deliberation, including heuristic fallbacks; #27 consumes.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS llm_usage (
+                    usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    tier TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL,
+                    completion_tokens INTEGER NOT NULL,
+                    estimated_cost_usd REAL NOT NULL,
+                    latency_ms REAL NOT NULL,
+                    fallback_used INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_llm_usage_soul
+                ON llm_usage(soul_id)
+            """)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS intents (
                     intent_id TEXT PRIMARY KEY,
@@ -897,12 +918,8 @@ def _migrate_souls(cursor) -> None:
     )
     _add_column_if_missing(cursor, "souls", "fed_flag INTEGER DEFAULT 0")
     _add_column_if_missing(cursor, "souls", "rest_started_at REAL")
-    cursor.execute(
-        "UPDATE souls SET state = 'normal' WHERE state IS NULL"
-    )
-    cursor.execute(
-        "UPDATE souls SET fed_flag = 0 WHERE fed_flag IS NULL"
-    )
+    cursor.execute("UPDATE souls SET state = 'normal' WHERE state IS NULL")
+    cursor.execute("UPDATE souls SET fed_flag = 0 WHERE fed_flag IS NULL")
     # Legacy rows may carry NULL biology fields; the server default for a
     # new soul is full (100), matching the REST layer's defaults. Add the
     # columns first for ultra-legacy tables that predate them entirely.
@@ -912,9 +929,7 @@ def _migrate_souls(cursor) -> None:
     _add_column_if_missing(cursor, "souls", "max_hp REAL")
     cursor.execute("UPDATE souls SET satiety = 100.0 WHERE satiety IS NULL")
     cursor.execute("UPDATE souls SET hydration = 100.0 WHERE hydration IS NULL")
-    cursor.execute(
-        "UPDATE souls SET hp = COALESCE(max_hp, 100.0) WHERE hp IS NULL"
-    )
+    cursor.execute("UPDATE souls SET hp = COALESCE(max_hp, 100.0) WHERE hp IS NULL")
     cursor.execute(
         "UPDATE souls SET custodian_id = owner_id "
         "WHERE custodian_id IS NULL AND owner_id IS NOT NULL"
@@ -963,9 +978,7 @@ def _migrate_social(conn: sqlite3.Connection) -> None:
     """
     tables = {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
     if "social_posts" not in tables and "social_replies" not in tables:
         return
@@ -1007,9 +1020,7 @@ def _migrate_social(conn: sqlite3.Connection) -> None:
                     "author_name, NULL, content, timestamp, NULL, 0 "
                     "FROM social_replies"
                 )
-            after = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()[
-                "n"
-            ]
+            after = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
             if after - before != post_count + reply_count:
                 raise RuntimeError(
                     "social migration row-count mismatch: "
@@ -1027,8 +1038,7 @@ def _migrate_social(conn: sqlite3.Connection) -> None:
     violations = conn.execute("PRAGMA foreign_key_check(messages)").fetchall()
     if violations:
         logger.warning(
-            "social migration: %d orphaned message(s) kept with dangling "
-            "parent_id: %s",
+            "social migration: %d orphaned message(s) kept with dangling parent_id: %s",
             len(violations),
             [dict(v) for v in violations],
         )
