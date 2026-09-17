@@ -29,7 +29,10 @@ from .system.logger import log, setup_logging
 from .system.network_service import NetworkService
 from .system.persistence import load_settings, load_souls, save_settings
 from .system.tray import TrayController
-from .system.window_manager import get_window_manager
+from .system.window_manager import get_cursor_pos, get_window_manager
+from .system.dirty_tracker import DirtyTracker
+from .system.dpi import declare_per_monitor_v2_dpi_awareness
+from .system.fullscreen import foreground_is_exclusive_fullscreen
 from .ui.graphics.scene_renderer import SceneRenderer
 from .ui.gui.gui_service import GuiCommand, run_gui_service
 
@@ -74,6 +77,11 @@ class SoulscapeApp:
         self._is_saving_souls: bool = False  # Lock for background saves
         self._force_broadcast: bool = False  # Force sync when peers join
 
+        # Dirty-driven render loop: scene only redraws when flagged dirty.
+        self.dirty_tracker = DirtyTracker()
+        self._overlay_parked: bool = False
+        self._last_render_snapshot: list | None = None
+
         # Unified Network Service
         self.network_service = NetworkService(owner_id=self.instance_id)
 
@@ -115,6 +123,8 @@ class SoulscapeApp:
         log.info("GUI Service started.")
 
         # 1. Setup Window Manager (Creates Overlay Window)
+        if sys.platform == "win32":
+            declare_per_monitor_v2_dpi_awareness()
         self.window_manager = get_window_manager()
         self.overlay_window = self.window_manager.window
 
@@ -134,6 +144,7 @@ class SoulscapeApp:
 
         # 3. Setup Input Handling
         self._setup_window_events()
+        self._gate_draw_on_dirty()
 
         # 4. Load Content
         self.load_initial_souls()
@@ -144,13 +155,16 @@ class SoulscapeApp:
             # Force initial secure sync of loaded souls (HTTP)
             self.initial_hub_sync()
 
-        self.window_manager.window.set_visible(True)
+        self.window_manager.show_window()
         self._setup_tray()
         log.debug("Entering main loop.")
 
         pyglet.clock.schedule_interval(lambda dt: self.check_gui_results(), 0.1)
 
         pyglet.clock.schedule_interval(self.update_souls, 1 / 60.0)
+
+        if sys.platform == "win32":
+            pyglet.clock.schedule_interval(self._overlay_housekeeping, 1.0 / 12.0)
 
         try:
             pyglet.app.run()
@@ -220,6 +234,54 @@ class SoulscapeApp:
                     x, y, button, modifiers, self.overlay_window.height
                 )
                 self.input_router.dragged_soul = None
+
+    def _gate_draw_on_dirty(self) -> None:
+        """Wrap the Pyglet window draw so GL work only happens when dirty.
+
+        Pyglet dispatches on_draw and flips buffers on every loop tick; gating
+        draw() itself is what makes a static scene truly zero-flip idle.
+        """
+        original_draw = self.overlay_window.draw
+
+        def gated_draw(dt: float) -> None:
+            if self.dirty_tracker.consume():
+                original_draw(dt)
+
+        self.overlay_window.draw = gated_draw  # type: ignore[method-assign]
+
+    def _overlay_housekeeping(self, dt: float) -> None:
+        """Windows overlay policy tick: click-through, parking, DPI."""
+        try:
+            self._poll_click_through()
+            self._poll_fullscreen_parking()
+            if self.window_manager.check_dpi_changed():
+                self.dirty_tracker.mark_dirty()
+        except Exception as e:
+            log.debug(f"Overlay housekeeping tick failed: {e}")
+
+    def _poll_click_through(self) -> None:
+        """Toggle WS_EX_TRANSPARENT based on cursor-over-Soul hit-testing."""
+        pos = get_cursor_pos()
+        if pos is None or self.input_router is None:
+            return
+        soul = self.input_router.poll_soul_under_cursor(
+            self.active_souls, pos, self.overlay_window.height
+        )
+        self.window_manager.update_click_through(soul)
+
+    def _poll_fullscreen_parking(self) -> None:
+        """Hide the overlay while an exclusive-fullscreen app is foreground."""
+        hwnd = getattr(self.window_manager, "hwnd", None)
+        fullscreen = foreground_is_exclusive_fullscreen(own_hwnd=hwnd)
+        if fullscreen and not self._overlay_parked:
+            self.overlay_window.set_visible(False)
+            self._overlay_parked = True
+            log.info("Exclusive fullscreen detected; overlay parked.")
+        elif not fullscreen and self._overlay_parked:
+            self._overlay_parked = False
+            self.window_manager.show_window()
+            self.dirty_tracker.mark_dirty()
+            log.info("Fullscreen ended; overlay restored.")
 
     def handle_empty_click(self, x: int, y: int) -> None:
         """Handle click on empty space."""
@@ -372,6 +434,7 @@ class SoulscapeApp:
                 soul.cleanup()
                 if soul in self.active_souls:
                     self.active_souls.remove(soul)
+            self.dirty_tracker.mark_dirty()
 
     def _on_owner_offline_sync(self, owner_id: str) -> None:
         """Handle owner going offline."""
@@ -379,6 +442,7 @@ class SoulscapeApp:
         self.active_souls[:] = [s for s in self.active_souls if s.owner_id != owner_id]
         if len(self.active_souls) < active_len:
             log.info(f"Removed souls for offline owner: {owner_id}")
+            self.dirty_tracker.mark_dirty()
 
     def _on_soul_updated_sync(self, souls_data: list[dict], owner_id: str) -> None:
         """Handle soul updates."""
@@ -412,6 +476,7 @@ class SoulscapeApp:
                 )
                 self.active_souls.append(soul)
                 log.info(f"New remote soul: {soul.biology.name}")
+                self.dirty_tracker.mark_dirty()
 
     def update_souls(self, dt: float) -> None:
         """Updates all active souls."""
@@ -462,6 +527,14 @@ class SoulscapeApp:
         if time.time() - self.last_topmost_time > 5:
             self.window_manager.set_always_on_top()
             self.last_topmost_time = time.time()
+
+        snapshot = [
+            (soul.biology.soul_id, round(soul.x, 3), round(soul.y, 3))
+            for soul in self.active_souls
+        ]
+        if snapshot != self._last_render_snapshot:
+            self._last_render_snapshot = snapshot
+            self.dirty_tracker.mark_dirty()
 
     def create_soul(
         self,
@@ -517,6 +590,7 @@ class SoulscapeApp:
         soul.aura_visible = self.global_aura_visible
         self.active_souls.append(soul)
         log.debug(f"Spawned new soul: {name}")
+        self.dirty_tracker.mark_dirty()
         self.persist_souls_state()
         return soul
 
@@ -613,6 +687,7 @@ class SoulscapeApp:
         for soul in self.active_souls:
             soul.aura_visible = self.global_aura_visible
 
+        self.dirty_tracker.mark_dirty()
         log.info(f"Global aura visibility set to: {self.global_aura_visible}")
 
     def show_global_settings(self) -> None:
@@ -681,6 +756,7 @@ class SoulscapeApp:
                     # Apply settings
                     self.global_opacity = opacity
                     self.window_manager.set_opacity(opacity)
+                    self.dirty_tracker.mark_dirty()
 
                     # Persist
                     current_settings = load_settings()
@@ -712,11 +788,13 @@ class SoulscapeApp:
                                 self.show_soul_settings(target_soul)
                             elif action == "TOGGLE_AURA":
                                 target_soul.aura_visible = not target_soul.aura_visible
+                                self.dirty_tracker.mark_dirty()
                                 self.persist_souls_state()
                             elif action == "DISMISS":
                                 self.active_souls.remove(target_soul)
                                 target_soul.cleanup()
                                 log.debug(f"Dismissed soul: {target_soul.biology.name}")
+                                self.dirty_tracker.mark_dirty()
                                 self.persist_souls_state()
 
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_POST:
@@ -793,6 +871,7 @@ class SoulscapeApp:
                             )
 
                             log.debug(f"Updated soul {target_soul.biology.name}")
+                            self.dirty_tracker.mark_dirty()
                             self.persist_souls_state()
 
                 elif cmd_type == GuiCommand.SHOW_ADD_SOUL:

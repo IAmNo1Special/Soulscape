@@ -8,6 +8,22 @@ if TYPE_CHECKING:
     from ..core import Soul
 
 
+def screen_to_window_coords(
+    screen_x: int, screen_y: int, window_height: int
+) -> tuple[int, int]:
+    """Convert Win32 screen coords (top-left origin) to Pyglet coords.
+
+    Args:
+        screen_x: Screen X coordinate (e.g. from GetCursorPos).
+        screen_y: Screen Y coordinate (top-left origin).
+        window_height: Height of the overlay window for Y-inversion.
+
+    Returns:
+        tuple[int, int]: (x, y) in Pyglet coordinates (bottom-left origin).
+    """
+    return screen_x, window_height - screen_y
+
+
 class InputRouter:
     """Handles input routing and hit testing for Soul entities on the overlay window.
 
@@ -49,3 +65,22 @@ class InputRouter:
                 return soul
 
         return None
+
+    def poll_soul_under_cursor(
+        self,
+        souls: list[Soul],
+        cursor_xy: tuple[int, int],
+        window_height: int,
+    ) -> Soul | None:
+        """Hit-test the cursor position against Souls for click-through polling.
+
+        Args:
+            souls: List of Soul instances (assumed drawn in order).
+            cursor_xy: (x, y) cursor position in screen coords (top-left origin).
+            window_height: Height of the overlay window for Y-inversion.
+
+        Returns:
+            The Soul under the cursor, or None when the cursor is over empty space.
+        """
+        x, y = screen_to_window_coords(cursor_xy[0], cursor_xy[1], window_height)
+        return self.get_soul_at(souls, x, y, window_height)
