@@ -1,6 +1,0 @@
-Metadata-Version: 2.4
-Name: shared
-Version: 0.1.0
-Summary: Shared models and enums for Soulscape client and server
-Requires-Python: >=3.12
-Requires-Dist: pydantic>=2.12.5
