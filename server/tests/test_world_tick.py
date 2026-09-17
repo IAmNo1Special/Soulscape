@@ -25,6 +25,11 @@ def _insert_soul(db_conn, soul_id, x=100.0, y=200.0, vx=0.0, vy=0.0):
 
 
 def _position(db_conn, soul_id):
+    from .. import persistence
+
+    unflushed = persistence.dirty_get(soul_id)
+    if unflushed is not None and unflushed.get("position") is not None:
+        return [float(unflushed["position"][0]), float(unflushed["position"][1])]
     row = db_conn.execute(
         "SELECT position FROM souls WHERE soul_id = ?", (soul_id,)
     ).fetchone()

@@ -26,16 +26,26 @@ def _place_soul(soul_id, x, y, custodian_id=None):
 
 
 def _soul_state(soul_id):
+    from .. import persistence
+
     with database.get_db() as conn:
         row = conn.execute(
             "SELECT position, velocity, move_target FROM souls WHERE soul_id = ?",
             (soul_id,),
         ).fetchone()
-        return (
-            json.loads(row["position"]),
-            json.loads(row["velocity"] or "[0, 0]"),
-            json.loads(row["move_target"]) if row["move_target"] else None,
-        )
+        position = json.loads(row["position"])
+        velocity = json.loads(row["velocity"] or "[0, 0]")
+        target = json.loads(row["move_target"]) if row["move_target"] else None
+    unflushed = persistence.dirty_get(soul_id)
+    if unflushed is not None:
+        if unflushed.get("position") is not None:
+            position = [float(unflushed["position"][0]), float(unflushed["position"][1])]
+        if unflushed.get("velocity") is not None:
+            velocity = [float(unflushed["velocity"][0]), float(unflushed["velocity"][1])]
+        if "move_target" in unflushed:
+            raw = unflushed["move_target"]
+            target = None if raw is None else [float(raw[0]), float(raw[1])]
+    return (position, velocity, target)
 
 
 def _intent_frame(key, session_id, nonce, kind, soul_id, **fields):

@@ -17,6 +17,12 @@ any target a Tamer could plausibly click (within 3000 px) is accepted
 verbatim; only far-away forged targets are pulled back along the original
 direction, so a clamped move still heads the way the client asked. Arrival
 stops within INTENT_ARRIVAL_EPS of the target.
+
+Durable persistence (issue #16) lives in server/persistence.py: the tick
+integrates positions into an in-memory dirty set and flushes it to SQLite
+every 5 s or 1000 dirty entries (RPO <= 5 s + WAL fsync). Adjudicated
+intent outcomes are journaled in the same commit as the intent status
+update (RPO = 0). See persistence.py for the full RPO statement.
 """
 
 import asyncio
@@ -24,21 +30,23 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 
 from . import database
 from . import intents
+from . import persistence
 
 logger = logging.getLogger("soulscape_hub")
 
 TICK_HZ = 5
 TICK_DT = 1.0 / TICK_HZ
 WORLD_EPOCH = 0.0
-_POSITION_MARGIN = 10.0
+_POSITION_MARGIN = persistence.POSITION_MARGIN
 
 INTENT_MOVE_SPEED = 600.0
 INTENT_HORIZON_SECONDS = 5.0
-INTENT_ARRIVAL_EPS = 2.0
+INTENT_ARRIVAL_EPS = persistence.ARRIVAL_EPS
 
 
 def hub_authoritative_enabled() -> bool:
@@ -68,6 +76,9 @@ class WorldTick:
         self.souls_moved_last_tick = 0
         self.skipped_ticks = 0
         self._task: asyncio.Task | None = None
+        self._step_lock = threading.Lock()
+        self._last_flush_at = time.monotonic()
+        self._last_snapshot_tick = 0
 
     async def start(self) -> None:
         if self.running:
@@ -85,7 +96,25 @@ class WorldTick:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        await asyncio.to_thread(self._finalize)
         self.enabled = False
+
+    def _finalize(self) -> None:
+        with self._step_lock:
+            try:
+                self.flush()
+                with database.get_db() as conn:
+                    persistence.take_snapshot(conn, self.tick_id)
+                    persistence.prune_snapshots(conn)
+                self._last_snapshot_tick = self.tick_id
+            except Exception:
+                logger.exception("final flush/snapshot on stop failed")
+
+    def flush(self) -> int:
+        with database.get_db() as conn:
+            count = persistence.flush_dirty(conn, self.tick_id)
+        self._last_flush_at = time.monotonic()
+        return count
 
     async def _run_loop(self) -> None:
         next_deadline = time.monotonic() + self.tick_dt
@@ -120,14 +149,45 @@ class WorldTick:
                 if intent["kind"] == "move_to":
                     self._adjudicate_move_to(intent)
                 else:
-                    intents.mark_rejected(
-                        intent["intent_id"], {"reason": "unknown_kind"}
-                    )
+                    with database.get_db() as conn:
+                        self._reject(conn, intent, "unknown_kind")
             except Exception:
                 logger.exception("Intent adjudication failed: %s", intent["intent_id"])
-                intents.mark_rejected(intent["intent_id"], {"reason": "internal"})
+                with database.get_db() as conn:
+                    try:
+                        self._reject(conn, intent, "internal")
+                    except Exception:
+                        logger.exception(
+                            "Intent rejection failed: %s", intent["intent_id"]
+                        )
             done += 1
         return done
+
+    def _reject(
+        self, conn, intent: dict, reason: str
+    ) -> None:
+        result = {"reason": reason}
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "UPDATE intents SET status = ?, result = ? WHERE intent_id = ?",
+                ("rejected", json.dumps(result), intent["intent_id"]),
+            )
+            persistence.append_event(
+                conn,
+                self.tick_id,
+                persistence.EVENT_INTENT_REJECTED,
+                {
+                    "intent_id": intent["intent_id"],
+                    "kind": intent["kind"],
+                    "soul_id": intent["soul_id"],
+                    "reason": reason,
+                },
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     def _adjudicate_move_to(self, intent: dict) -> None:
         intent_id = intent["intent_id"]
@@ -141,15 +201,18 @@ class WorldTick:
             )
             row = cursor.fetchone()
             if row is None:
-                intents.mark_rejected(intent_id, {"reason": "soul_not_found"})
+                self._reject(conn, intent, "soul_not_found")
                 return
             custodian = row["custodian_id"] or row["owner_id"]
             if intent["custodian_id"] is not None and (
                 custodian != intent["custodian_id"]
             ):
-                intents.mark_rejected(intent_id, {"reason": "custody"})
+                self._reject(conn, intent, "custody")
                 return
             x, y = _parse_pair(row["position"])
+            unflushed = persistence.dirty_get(soul_id)
+            if unflushed is not None and unflushed.get("position") is not None:
+                x, y = unflushed["position"]
             tx = min(
                 max(float(payload["x"]), _POSITION_MARGIN),
                 database.SCREEN_BOUNDS[0] - _POSITION_MARGIN,
@@ -169,94 +232,133 @@ class WorldTick:
                 logger.warning(
                     "Intent %s target clamped to reachable radius", intent_id
                 )
-            if math.hypot(tx - x, ty - y) <= INTENT_ARRIVAL_EPS:
-                cursor.execute(
-                    "UPDATE souls SET velocity = ?, move_target = NULL "
-                    "WHERE soul_id = ?",
-                    (json.dumps([0.0, 0.0]), soul_id),
-                )
-            else:
-                dist = math.hypot(tx - x, ty - y)
-                vx, vy = (
-                    (tx - x) / dist * INTENT_MOVE_SPEED,
-                    (ty - y) / dist * INTENT_MOVE_SPEED,
-                )
-                cursor.execute(
-                    "UPDATE souls SET velocity = ?, move_target = ? WHERE soul_id = ?",
-                    (json.dumps([vx, vy]), json.dumps([tx, ty]), soul_id),
-                )
-            conn.commit()
-        intents.mark_adjudicated(
-            intent_id,
-            {
+            result = {
                 "x": tx,
                 "y": ty,
                 "clamped": clamped,
                 "speed": INTENT_MOVE_SPEED,
-            },
+            }
+            if math.hypot(tx - x, ty - y) <= INTENT_ARRIVAL_EPS:
+                velocity = [0.0, 0.0]
+                move_target = None
+            else:
+                dist = math.hypot(tx - x, ty - y)
+                velocity = [
+                    (tx - x) / dist * INTENT_MOVE_SPEED,
+                    (ty - y) / dist * INTENT_MOVE_SPEED,
+                ]
+                move_target = [tx, ty]
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor.execute(
+                    "UPDATE souls SET velocity = ?, move_target = ? WHERE soul_id = ?",
+                    (
+                        json.dumps(velocity),
+                        json.dumps(move_target) if move_target is not None else None,
+                        soul_id,
+                    ),
+                )
+                cursor.execute(
+                    "UPDATE intents SET status = ?, result = ? WHERE intent_id = ?",
+                    ("adjudicated", json.dumps(result), intent_id),
+                )
+                persistence.append_event(
+                    conn,
+                    self.tick_id,
+                    persistence.EVENT_INTENT_ADJUDICATED,
+                    {
+                        "intent_id": intent_id,
+                        "kind": "move_to",
+                        "soul_id": soul_id,
+                        "params": result,
+                        "velocity": velocity,
+                        "move_target": move_target,
+                    },
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        persistence.dirty.mark(
+            soul_id, position=[x, y], velocity=velocity, move_target=move_target
         )
 
     def step(self) -> int:
-        self.pump_intents()
-        moved: list[tuple[str, str]] = []
-        width, height = database.SCREEN_BOUNDS
-        with database.get_db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.cursor()
-            cursor.execute("SELECT soul_id, position, velocity, move_target FROM souls")
-            for row in cursor.fetchall():
+        with self._step_lock:
+            self.pump_intents()
+            moved = 0
+            bounds = database.SCREEN_BOUNDS
+            with database.get_db() as conn:
+                rows = conn.execute(
+                    "SELECT soul_id, position, velocity, move_target FROM souls"
+                ).fetchall()
+            for row in rows:
+                soul_id = row["soul_id"]
                 try:
                     x, y = _parse_pair(row["position"])
                     vx, vy = _parse_pair(row["velocity"])
                 except (ValueError, TypeError, KeyError, IndexError):
                     continue
+                unflushed = persistence.dirty_get(soul_id)
+                if unflushed is not None:
+                    if unflushed.get("position") is not None:
+                        x, y = unflushed["position"]
+                    if unflushed.get("velocity") is not None:
+                        vx, vy = unflushed["velocity"]
+                    target = unflushed.get("move_target", None)
+                    if "move_target" not in unflushed:
+                        target = self._parse_target(row["move_target"])
+                else:
+                    target = self._parse_target(row["move_target"])
                 if vx == 0.0 and vy == 0.0:
                     continue
-                nx = min(
-                    max(x + vx * self.tick_dt, _POSITION_MARGIN),
-                    width - _POSITION_MARGIN,
+                (nx, ny), (nvx, nvy), new_target = persistence.integrate_soul(
+                    (x, y), (vx, vy), target, self.tick_dt, bounds
                 )
-                ny = min(
-                    max(y + vy * self.tick_dt, _POSITION_MARGIN),
-                    height - _POSITION_MARGIN,
+                persistence.dirty.mark(
+                    soul_id,
+                    position=[nx, ny],
+                    velocity=[nvx, nvy],
+                    move_target=new_target,
                 )
-                target = None
-                raw_target = row["move_target"]
-                if raw_target:
-                    try:
-                        target = _parse_pair(raw_target)
-                    except (ValueError, TypeError, IndexError):
-                        target = None
-                if target is not None:
-                    tx, ty = target
-                    remaining = math.hypot(tx - nx, ty - ny)
-                    passed = (tx - nx) * vx + (ty - ny) * vy <= 0.0
-                    if remaining <= INTENT_ARRIVAL_EPS or passed:
-                        nx, ny = tx, ty
-                        cursor.execute(
-                            "UPDATE souls SET velocity = ?, move_target = "
-                            "NULL WHERE soul_id = ?",
-                            (json.dumps([0.0, 0.0]), row["soul_id"]),
-                        )
-                moved.append((json.dumps([nx, ny]), row["soul_id"]))
-            if moved:
-                cursor.executemany(
-                    "UPDATE souls SET position = ? WHERE soul_id = ?", moved
-                )
-            conn.commit()
-        self.tick_id += 1
-        self.souls_moved_last_tick = len(moved)
-        return len(moved)
+                moved += 1
+            self.tick_id += 1
+            self.souls_moved_last_tick = moved
+            self._maybe_flush()
+            self._maybe_snapshot()
+            return moved
+
+    @staticmethod
+    def _parse_target(raw) -> tuple[float, float] | None:
+        if not raw:
+            return None
+        try:
+            return _parse_pair(raw)
+        except (ValueError, TypeError, IndexError):
+            return None
+
+    def _maybe_flush(self) -> None:
+        if (
+            time.monotonic() - self._last_flush_at >= persistence.FLUSH_INTERVAL_S
+            or len(persistence.dirty) >= persistence.FLUSH_MAX_DIRTY
+        ):
+            self.flush()
+
+    def _maybe_snapshot(self) -> None:
+        if self.tick_id - self._last_snapshot_tick >= persistence.SNAPSHOT_EVERY_TICKS:
+            with database.get_db() as conn:
+                persistence.take_snapshot(conn, self.tick_id)
+                persistence.prune_snapshots(conn)
+            self._last_snapshot_tick = self.tick_id
 
     def snapshot(self) -> dict:
-        positions = []
+        positions = [
+            {"soul_id": soul_id, "x": x, "y": y}
+            for soul_id, (x, y) in persistence.read_positions_through().items()
+        ]
         with database.get_db() as conn:
-            for row in conn.execute("SELECT soul_id, position FROM souls"):
-                try:
-                    x, y = _parse_pair(row["position"])
-                except (ValueError, TypeError, KeyError, IndexError):
-                    x, y = 0.0, 0.0
-                positions.append({"soul_id": row["soul_id"], "x": x, "y": y})
+            journal_seq = persistence.journal_head(conn)
+            snaps = persistence.latest_snapshots(conn, limit=1)
         return {
             "enabled": self.enabled,
             "running": self.running,
@@ -270,4 +372,8 @@ class WorldTick:
             "skipped_ticks": self.skipped_ticks,
             "soul_count": len(positions),
             "positions": positions,
+            "dirty_entries": len(persistence.dirty),
+            "journal_head_seq": journal_seq,
+            "last_snapshot": snaps[0] if snaps else None,
+            "rpo_seconds": persistence.FLUSH_INTERVAL_S,
         }

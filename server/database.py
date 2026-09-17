@@ -18,9 +18,12 @@ logger = logging.getLogger("soulscape_hub")
 # Argon2 hasher for soul secrets
 _hasher = PasswordHasher()
 
-# Ensure DB path is absolute relative to this file
+# Ensure DB path is absolute relative to this file. SOULSCAPE_DB_PATH overrides
+# the default location (used by isolated integration tests and deployments).
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "soulscape_hub.db")
+DB_PATH = os.environ.get("SOULSCAPE_DB_PATH") or os.path.join(
+    BASE_DIR, "soulscape_hub.db"
+)
 
 
 def _get_connection() -> sqlite3.Connection:
@@ -732,6 +735,28 @@ def init_db():
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_intents_status
                 ON intents(status, created_at)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS journal (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tick_id INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_journal_tick
+                ON journal(tick_id)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tick_id INTEGER NOT NULL,
+                    journal_seq INTEGER NOT NULL,
+                    blob BLOB NOT NULL,
+                    created_at REAL NOT NULL
+                )
             """)
             _migrate_souls(cursor)
     except Exception as e:

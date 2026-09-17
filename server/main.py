@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .database import init_db
+from . import persistence
 from .routers import marketplace, social, souls, tamers, websockets
 from .security import UserIdentity, get_api_key
 from .world_tick import TICK_HZ, WorldTick, hub_authoritative_enabled
@@ -55,7 +56,19 @@ async def lifespan(app: FastAPI):
 
     app.state.world_tick = WorldTick()
     if hub_authoritative_enabled():
-        recovered = await asyncio.to_thread(app.state.world_tick.pump_intents)
+        tick = app.state.world_tick
+        report = await asyncio.to_thread(persistence.recover_world, tick)
+        logger.info(
+            "boot recovery: mode=%s regime=%s souls=%d journal_replayed=%d "
+            "gap=%.1fs tick_id=%d",
+            report["mode"],
+            report["regime"],
+            report["souls"],
+            report["journal_replayed"],
+            report["gap_seconds"],
+            report["tick_id"],
+        )
+        recovered = await asyncio.to_thread(tick.pump_intents)
         if recovered:
             logger.info("boot recovery: adjudicated %d pending intents", recovered)
         logger.info("hub_authoritative=1: starting world tick at %d Hz", TICK_HZ)

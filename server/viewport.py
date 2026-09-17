@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import collections
-import json
 import logging
 import math
 import time
@@ -20,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from shared import protocol
 
 from . import database
+from . import persistence
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -66,27 +66,10 @@ def _economy_op(soul_id: str, essence: float) -> dict:
     }
 
 
-def _parse_position(raw: object) -> tuple[float, float]:
-    if raw is None:
-        return (0.0, 0.0)
-    if isinstance(raw, str):
-        raw = json.loads(raw)
-    x, y = float(raw[0]), float(raw[1])
-    if not math.isfinite(x) or not math.isfinite(y):
-        raise ValueError("non-finite position")
-    return (x, y)
-
-
 def read_positions() -> dict[str, tuple[float, float]]:
-    positions: dict[str, tuple[float, float]] = {}
-    with database.get_db() as conn:
-        rows = conn.execute("SELECT soul_id, position FROM souls").fetchall()
-    for row in rows:
-        try:
-            positions[row["soul_id"]] = _parse_position(row["position"])
-        except (ValueError, TypeError, IndexError):
-            continue
-    return positions
+    """Position map with the read-through view: the tick's unflushed dirty
+    set overlaid on the DB, so the viewport never lags a flush."""
+    return persistence.read_positions_through()
 
 
 def read_wallets() -> list[dict]:

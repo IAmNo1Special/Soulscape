@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import database
+from .. import persistence
 from ..models import SoulResponse, SoulUpdate
 from ..rate_limit import read_limit
 from ..security import (
@@ -293,6 +294,18 @@ def get_souls(
                             s[key] = json.loads(s[key])
                         except (json.JSONDecodeError, TypeError, ValueError):
                             pass
+                unflushed = persistence.dirty_get(s["soul_id"])
+                if unflushed is not None:
+                    if unflushed.get("position") is not None:
+                        s["position"] = [
+                            float(unflushed["position"][0]),
+                            float(unflushed["position"][1]),
+                        ]
+                    if unflushed.get("velocity") is not None:
+                        s["velocity"] = [
+                            float(unflushed["velocity"][0]),
+                            float(unflushed["velocity"][1]),
+                        ]
             return souls
     except Exception as e:
         logger.error(f"Error in get_souls: {e}")
@@ -349,6 +362,7 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_s
             saved = 0
             skipped: list[dict] = []
             validated_souls: list[tuple[dict, dict]] = []
+            saved_ids: list[str] = []
             for s in souls:
                 soul_id = s.get("soul_id")
                 stored = stored_rows.get(soul_id) if soul_id else None
@@ -506,7 +520,10 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_s
                         ),
                     )
                 saved += 1
+                saved_ids.append(soul_id)
             conn.commit()
+            for soul_id in saved_ids:
+                persistence.invalidate(soul_id)
     except Exception as e:
         logger.error(f"Error in update_souls: {e}")
         raise HTTPException(status_code=500, detail=str(e))

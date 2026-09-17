@@ -62,8 +62,20 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM rate_limits")
     cursor.execute("DELETE FROM audit_log")
     cursor.execute("DELETE FROM intents")
+    cursor.execute("DELETE FROM journal")
+    cursor.execute("DELETE FROM snapshots")
+    # The journal is append-only in production, so recovery treats its seq
+    # column as gapless. Reset the AUTOINCREMENT sequences too, or a test that
+    # leaves journal/snapshot rows behind would hand the next test a journal
+    # that starts mid-sequence and looks corrupt.
+    cursor.execute(
+        "DELETE FROM sqlite_sequence WHERE name IN ('journal', 'snapshots')"
+    )
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'essence_fund'")
     db_conn.commit()
+    from .. import persistence
+
+    persistence.dirty.clear()
     from ..routers.marketplace import _marketplace_cache
 
     _marketplace_cache["timestamp"] = 0.0
