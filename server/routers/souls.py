@@ -18,6 +18,7 @@ from .. import intents
 from .. import persistence
 from .. import plots
 from .. import quips
+from .. import recap
 from .. import viewport
 from ..models import FeedSoulRequest, QuipRequest, SoulResponse, SoulUpdate
 from ..rate_limit import market_write_limit, read_limit
@@ -812,3 +813,31 @@ def request_quip(
         "quips_remaining_today": quips.QUIPS_PER_SOUL_PER_DAY - used,
         "fallback_used": gen["fallback_used"],
     }
+
+
+@router.get("/{soul_id}/recaps", dependencies=[Depends(read_limit)])
+def get_recaps(
+    soul_id: str,
+    limit: int = Query(default=30, ge=1, le=100),
+    identity: UserIdentity = Depends(get_api_key),
+):
+    """Browsable overnight recaps for a soul, newest first (issue #33).
+
+    Custody-scoped like the rest of the soul surface: soul-users may
+    only read their own soul; tamers only souls in their custody.
+    """
+    with database.get_db() as conn:
+        row = conn.execute(
+            "SELECT custodian_id, owner_id FROM souls WHERE soul_id = ?",
+            (soul_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Soul {soul_id} not found")
+    if identity.role == "user":
+        if soul_id != identity.id:
+            raise HTTPException(
+                status_code=403, detail="Soul-users may only read their own recaps"
+            )
+    else:
+        assert_custody(identity, row["custodian_id"] or row["owner_id"])
+    return {"recaps": recap.list_recaps(soul_id, limit=limit)}

@@ -37,6 +37,9 @@ DEFAULT_DURATIONS = {
     # Issue #32: soul questions for the tamer stay up longer -- the
     # tamer may need a moment to notice and open the mailbag.
     "mailbag": 10.0,
+    # Issue #33: the morning note carries up to 3 lines of overnight
+    # highlights; give the tamer time to read it.
+    "morning_note": 10.0,
 }
 
 

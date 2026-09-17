@@ -44,6 +44,7 @@ from . import market
 from . import persistence
 from . import plots
 from . import presence as presence_module
+from . import recap
 from . import social
 from . import world
 from . import biology
@@ -458,6 +459,23 @@ class WorldTick:
                     mailbag.sweep_expired(time.time(), self.tick_id)
                 except Exception:
                     logger.exception("mailbag sweep failed")
+            # Issue #33: ambient recap sweep every 12 min (no new thread;
+            # the lazy on-unlock path is primary -- this backstops souls
+            # whose tamers never unlock) and 30-day retention compaction
+            # daily. The sweep skips tick 0 (boot): generation writes
+            # journal rows, and the first tick must stay journal-silent
+            # for the persistence/replay tests; the next sweep 12 min
+            # later covers any overdue souls.
+            if self.tick_id > 0 and self.tick_id % recap.RECAP_SWEEP_EVERY_TICKS == 0:
+                try:
+                    recap.sweep_recaps(time.time())
+                except Exception:
+                    logger.exception("recap sweep failed")
+            if self.tick_id % recap.COMPACT_EVERY_TICKS == 0:
+                try:
+                    recap.compact_retention(time.time())
+                except Exception:
+                    logger.exception("retention compaction failed")
             self._run_agent_pool(coarse_events)
             self.tick_id += 1
             self.souls_moved_last_tick = moved

@@ -39,7 +39,15 @@ def _manager(clock=None, **kw) -> BubbleManager:
 class TestBubbleKinds(unittest.TestCase):
     def test_closed_kind_set(self):
         self.assertEqual(
-            BUBBLE_KINDS, {"speech", "quip", "system", "greeting", "mailbag"}
+            BUBBLE_KINDS,
+            {
+                "speech",
+                "quip",
+                "system",
+                "greeting",
+                "mailbag",
+                "morning_note",
+            },
         )
 
     def test_unknown_kind_raises(self):
@@ -51,6 +59,31 @@ class TestBubbleKinds(unittest.TestCase):
         mgr = _manager()
         result = mgr.show_bubble("s1", "   ")
         self.assertFalse(result.accepted)
+
+
+class TestMorningNote(unittest.TestCase):
+    """Issue #33: solicited-adjacent -- bypasses quiet hours and caps,
+    but a per-soul mute still blocks it."""
+
+    def test_morning_note_bypasses_quiet_hours(self):
+        clock = FakeClock()
+        settings = NoiseSettings(quiet_start="00:00", quiet_end="23:59")
+        policy = NoisePolicy(settings, clock=clock)
+        mgr = BubbleManager(policy=policy, clock=clock)
+        result = mgr.show_bubble(
+            "s1",
+            "overnight:\nmailbag: 1 unanswered",
+            kind="morning_note",
+            solicited=True,
+        )
+        self.assertTrue(result.accepted, result.reason)
+
+    def test_morning_note_respects_mute(self):
+        mgr = _manager()
+        mgr.policy.settings.mutes = frozenset({"s1"})
+        result = mgr.show_bubble("s1", "overnight", kind="morning_note", solicited=True)
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.reason, "muted")
 
 
 class TestLifecycle(unittest.TestCase):

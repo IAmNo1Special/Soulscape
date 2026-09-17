@@ -1066,6 +1066,24 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_recap_sources_kind
                 ON recap_sources (kind, created_at)
             """)
+            # Issue #33: ambient recaps. One row per soul per day: the
+            # deterministic highlight lines (JSON), when generated, and
+            # when the morning-note bubble consumed it (shown_at NULL =
+            # fresh, eligible for exactly one morning note).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recaps (
+                    recap_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    lines TEXT NOT NULL,
+                    generated_at REAL NOT NULL,
+                    shown_at REAL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_recaps_soul_day
+                ON recaps (soul_id, generated_at)
+            """)
             _add_column_if_missing(
                 cursor, "tamers", "presence_app_opt_in INTEGER DEFAULT 0"
             )

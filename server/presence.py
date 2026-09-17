@@ -318,6 +318,15 @@ def adjudicate_presence_intent(tick, intent: dict[str, Any]) -> None:
         if absent_long and was_away and back_now:
             _note_tamer_return(tamer_id, now)
             returned = True
+    # Issue #33: an unlock is a wake. Generate the overnight recap when
+    # due (>22 h) and emit at most one morning-note bubble per cycle.
+    if validated.get("event") == EVENT_UNLOCK:
+        from . import recap as recap_module
+
+        try:
+            recap_module.on_unlock(tamer_id, now=now)
+        except Exception:
+            logger.exception("morning-note hook failed: tamer=%s", tamer_id)
     intents.mark_adjudicated(
         intent_id,
         {"stored": True, "tamer_return": returned},

@@ -7,6 +7,9 @@ Issue #30 grows the original menu into a dashboard:
   (economy ops / snapshot wallets).
 - Mailbag: badge slot showing the pending-question count (#32):
   "Mailbag (N)", enabled, opens the mailbag answer surface on click.
+- Morning recap (#33): per-soul submenu of recaps by day; clicking a
+  day calls on_open_recap(soul_id, day) so the app can show the full
+  lines (tray notification). Disabled slot when no recaps exist.
 - Whereabouts submenu: per-soul location string (plot label from Hub
   world coords, "traveling..." for traveling souls, "home" when no
   position is known). Richer abroad strings arrive with #35.
@@ -59,6 +62,8 @@ class TrayController:
         on_open_mailbag: Callable[[], None] | None = None,
         on_request_quip: Callable[[str], dict[str, Any]] | None = None,
         notify_bubble: Callable[[str, str], None] | None = None,
+        get_recaps: Callable[[], dict[str, list[dict[str, Any]]]] | None = None,
+        on_open_recap: Callable[[str, str], None] | None = None,
     ) -> None:
         """Initialize the tray controller.
 
@@ -83,6 +88,11 @@ class TrayController:
                 response dict (success or rejection).
             notify_bubble: Called with (soul_id, text, kind) to show a
                 local system bubble -- used to surface quip rejections.
+            get_recaps: Returns {soul_id: [recap, ...]} where each recap
+                is {soul_id, day, lines, generated_at, shown_at}, newest
+                first; feeds the "Morning recap" dashboard submenu.
+            on_open_recap: Called with (soul_id, day) when a recap day is
+                clicked; None disables the day items.
         """
         self.on_add_soul = on_add_soul
         self.on_toggle_auras = on_toggle_auras
@@ -100,6 +110,8 @@ class TrayController:
         self.on_open_mailbag = on_open_mailbag
         self.on_request_quip = on_request_quip
         self.notify_bubble = notify_bubble
+        self.get_recaps = get_recaps or (lambda: {})
+        self.on_open_recap = on_open_recap
         self.icon: pystray.Icon | None = None
         self._thread: threading.Thread | None = None
 
@@ -193,6 +205,38 @@ class TrayController:
             )
         return pystray.Menu(*items)
 
+    def _recap_menu(self) -> pystray.Menu:
+        """Morning-recap dashboard submenu (issue #33): per-soul recaps
+        by day; clicking a day opens the full lines via on_open_recap."""
+        souls = {s["soul_id"]: s for s in self.get_souls()}
+        recaps = self.get_recaps() or {}
+        soul_items = []
+        for soul_id in sorted(recaps):
+            days = recaps[soul_id] or []
+            if not days:
+                continue
+            name = souls.get(soul_id, {}).get("name", soul_id)
+            day_items = []
+            for recap in days:
+                day = recap.get("day", "?")
+                n = len(recap.get("lines") or [])
+                label = f"{day} — {n} highlight{'s' if n != 1 else ''}"
+                if self.on_open_recap is None:
+                    day_items.append(self._info(label))
+                else:
+                    day_items.append(
+                        Item(
+                            label,
+                            lambda icon, item, sid=soul_id, d=day: self._on_open_recap(
+                                sid, d
+                            ),
+                        )
+                    )
+            soul_items.append(Item(f"{name}", pystray.Menu(*day_items)))
+        if not soul_items:
+            return pystray.Menu(self._info("no recaps yet"))
+        return pystray.Menu(*soul_items)
+
     def _create_menu(self) -> pystray.Menu:
         """Create the right-click context menu (rebuilt on refresh)."""
         mailbag_count = self.get_mailbag_count()
@@ -209,6 +253,7 @@ class TrayController:
                 self._on_open_mailbag,
                 enabled=self.on_open_mailbag is not None,
             ),
+            Item("Morning recap", self._recap_menu()),
             Item("Whereabouts", self._whereabouts_menu()),
             Item("Quips", self._quips_menu()),
             pystray.Menu.SEPARATOR,
@@ -299,6 +344,11 @@ class TrayController:
         """Handle Mailbag menu click (issue #32): open the answer surface."""
         if self.on_open_mailbag:
             self.on_open_mailbag()
+
+    def _on_open_recap(self, soul_id: str, day: str) -> None:
+        """Handle a recap-day click (issue #33): open the full lines."""
+        if self.on_open_recap:
+            self.on_open_recap(soul_id, day)
 
     def _on_pause_toggle(self, icon: Any, item: Any) -> None:
         """Handle Pause simulation toggle."""

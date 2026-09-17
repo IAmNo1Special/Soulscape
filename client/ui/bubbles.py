@@ -56,9 +56,20 @@ KIND_QUIP = "quip"
 KIND_SYSTEM = "system"
 KIND_GREETING = "greeting"
 KIND_MAILBAG = "mailbag"
+#: Issue #33: the overnight morning-note bubble. Solicited-adjacent
+#: (the tamer's own unlock), so it bypasses caps/quiet hours/work
+#: mode -- but per-soul mutes still block it (see system/noise.py).
+KIND_MORNING_NOTE = "morning_note"
 
 BUBBLE_KINDS = frozenset(
-    {KIND_SPEECH, KIND_QUIP, KIND_SYSTEM, KIND_GREETING, KIND_MAILBAG}
+    {
+        KIND_SPEECH,
+        KIND_QUIP,
+        KIND_SYSTEM,
+        KIND_GREETING,
+        KIND_MAILBAG,
+        KIND_MORNING_NOTE,
+    }
 )
 
 #: Pixels above the orb center where the bubble baseline sits.

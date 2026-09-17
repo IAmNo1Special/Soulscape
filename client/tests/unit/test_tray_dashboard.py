@@ -12,6 +12,11 @@ import unittest
 
 
 def _install_fake_pystray():
+    # Idempotent: test_tray_recap.py installs the same stub when it
+    # runs first. Clobbering breaks Menu.SEPARATOR identity across
+    # the two test modules.
+    if "pystray" in sys.modules:
+        return sys.modules["pystray"]
     fake = types.ModuleType("pystray")
 
     class MenuItem:

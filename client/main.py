@@ -63,8 +63,15 @@ from .system.dpi import declare_per_monitor_v2_dpi_awareness
 from .system.fullscreen import foreground_is_exclusive_fullscreen
 from .ui.graphics.scene_renderer import SceneRenderer
 from .ui.graphics.visual_reflexes import VisualReflexController
-from .ui.bubbles import BUBBLE_KINDS, KIND_MAILBAG, Bubble, BubbleManager
+from .ui.bubbles import (
+    BUBBLE_KINDS,
+    KIND_MAILBAG,
+    KIND_MORNING_NOTE,
+    Bubble,
+    BubbleManager,
+)
 from .system.mailbag_client import MailbagClient
+from .system.recap_client import RecapClient
 from .ui.gui.gui_service import GuiCommand, run_gui_service
 
 # Explicitly load dotenv
@@ -113,6 +120,12 @@ class SoulscapeApp:
             resolve_hub_secret=lambda: os.getenv("HUB_SECRET_KEY", ""),
         )
         self._mailbag_count_cache: tuple[float, int] = (0.0, 0)
+        # Issue #33: Hub client for the morning-recap dashboard view.
+        self.recap_client = RecapClient(
+            resolve_hub_url=resolve_hub_url,
+            resolve_hub_secret=lambda: os.getenv("HUB_SECRET_KEY", ""),
+        )
+        self._recaps_cache: tuple[float, dict] = (0.0, {})
         # Pause toggle (tray): freezes local sim + reflex visuals.
         self.sim_paused: bool = False
 
@@ -560,6 +573,10 @@ class SoulscapeApp:
             on_open_mailbag=on_tray_open_mailbag,
             on_request_quip=self._request_quip,
             notify_bubble=notify_bubble,
+            get_recaps=self._cached_recaps,
+            on_open_recap=lambda soul_id, day: self._open_recap_view(
+                soul_id, day
+            ),
         )
         # Start the tray controller (it handles its own thread)
         self.tray_controller.start()
@@ -741,6 +758,10 @@ class SoulscapeApp:
         """
         if bubble.kind == KIND_MAILBAG:
             self._open_mailbag_tab()
+        elif bubble.kind == KIND_MORNING_NOTE:
+            # Issue #33: tapping the morning note opens that soul's
+            # recap view (latest day).
+            self._open_recap_view(bubble.soul_id)
 
     def _open_mailbag_tab(self) -> None:
         """Ask the GUI process to show the message board's Mailbag tab."""
@@ -761,6 +782,56 @@ class SoulscapeApp:
         val = self.mailbag_client.count()
         self._mailbag_count_cache = (time.time(), val)
         return val
+
+    def _cached_recaps(self) -> dict:
+        """Recaps per soul for the tray dashboard, cached 5 min so menu
+        rebuilds on the tray thread never block on network I/O."""
+        ts, val = self._recaps_cache
+        if time.time() - ts < 300:
+            return val
+        out: dict = {}
+        for soul in self.active_souls:
+            soul_id = getattr(soul.biology, "soul_id", None)
+            if not soul_id:
+                continue
+            recaps = self.recap_client.list_recaps(soul_id)
+            if recaps:
+                out[soul_id] = recaps
+        self._recaps_cache = (time.time(), out)
+        return out
+
+    def _open_recap_view(self, soul_id: str, day: str | None = None) -> None:
+        """Show a soul's recap lines for a day (issue #33 dashboard view).
+
+        The tray submenu is the browse surface; the full lines arrive
+        as a tray notification (the existing transient surface). Runs
+        off the tray thread: cache first, background fetch on miss.
+        """
+        def _show(recaps: list) -> None:
+            recap = None
+            if day is not None:
+                recap = next((r for r in recaps if r.get("day") == day), None)
+            if recap is None and recaps:
+                recap = recaps[0]
+            if recap is None:
+                self.tray_controller._notify("No recaps yet.", "Morning recap")
+                return
+            lines = [
+                str(line.get("text", ""))
+                for line in recap.get("lines", [])
+                if line.get("text")
+            ]
+            body = "\n".join(lines[:6]) or "quiet night — nothing new"
+            self.tray_controller._notify(body, f"Morning recap — {recap['day']}")
+
+        cached = (self._recaps_cache[1] or {}).get(soul_id)
+        if cached:
+            _show(cached)
+            return
+        threading.Thread(
+            target=lambda: _show(self.recap_client.list_recaps(soul_id)),
+            daemon=True,
+        ).start()
 
     def _on_connect_sync(self, online_owners: list[str]) -> None:
         """Reconciles local state with Hub truth."""
