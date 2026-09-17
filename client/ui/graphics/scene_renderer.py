@@ -73,6 +73,9 @@ def _soul_state(soul: Soul, base_color: tuple[float, float, float]) -> dict:
         "reflex": soul.reflex_kind,
         "reflex_t": soul.reflex_t,
         "base_color": base_color,
+        # Issue #35: expedition walk-off/walk-in fade; defaults to 1.0
+        # (fully opaque) for souls that never fade.
+        "fade_alpha": getattr(soul, "fade_alpha", 1.0),
     }
 
 

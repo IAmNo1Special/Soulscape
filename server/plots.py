@@ -527,6 +527,10 @@ def _apply_claim(
             (tick_id, intent_id, LEDGER_TAX, None, fee, now),
         ],
     )
+    # Issue #35: a claimed plot becomes the claimant's home plot.
+    from . import expeditions as expeditions_module
+
+    expeditions_module.set_home_plot(conn, claimant_soul_id, plot_id, now)
     return {
         "plot_id": plot_id,
         "ring": ring,

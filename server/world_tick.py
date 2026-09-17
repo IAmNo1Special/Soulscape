@@ -51,6 +51,7 @@ from . import biology
 from . import dormancy
 from . import affection
 from . import agents
+from . import expeditions
 from . import resources
 from .agents import metering
 
@@ -383,6 +384,18 @@ class WorldTick:
             # on this same tick.
             metering.maybe_run_batch()
             self.pump_intents()
+            # Issue #35: expedition trigger sweep every 60 s (drive-driven,
+            # never raises), then advance active expeditions BEFORE movement
+            # integration so this tick's steering moves souls immediately.
+            if self.tick_id % expeditions.TRIGGER_SWEEP_EVERY_TICKS == 0:
+                try:
+                    expeditions.maybe_trigger(self.tick_id, time.time())
+                except Exception:
+                    logger.exception("expedition trigger sweep failed")
+            try:
+                expeditions.advance_tick(self.tick_id, time.time())
+            except Exception:
+                logger.exception("expedition advance failed")
             if (self.tick_id + 1) % biology.BIOLOGY_EVERY_TICKS == 0:
                 # 0.1 Hz server-side biology: needs decay, starvation-only
                 # collapse, fed+rested recovery (issue #21). Fires after

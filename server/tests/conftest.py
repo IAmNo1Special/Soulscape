@@ -90,6 +90,8 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM mailbag")
     cursor.execute("DELETE FROM recap_sources")
     cursor.execute("DELETE FROM recaps")
+    cursor.execute("DELETE FROM expeditions")
+    cursor.execute("DELETE FROM soul_home_plots")
     # The journal is append-only in production, so recovery treats its seq
     # column as gapless. Reset the AUTOINCREMENT sequences too, or a test that
     # leaves journal/snapshot rows behind would hand the next test a journal

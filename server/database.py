@@ -1094,6 +1094,9 @@ def init_db():
 
             resources_module.ensure_schema(conn)
             resources_module.seed_resource_nodes(conn)
+            from . import expeditions as expeditions_module
+
+            expeditions_module.ensure_schema(conn)
             _migrate_souls(cursor)
         _migrate_social(conn)
     except Exception as e:

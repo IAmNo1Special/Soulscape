@@ -40,6 +40,9 @@ DEFAULT_DURATIONS = {
     # Issue #33: the morning note carries up to 3 lines of overnight
     # highlights; give the tamer time to read it.
     "morning_note": 10.0,
+    # Issue #35: expedition farewell/welcome bubbles are cinematic
+    # moments -- long enough to read, short enough to stay transient.
+    "expedition": 6.0,
 }
 
 

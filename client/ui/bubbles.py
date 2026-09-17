@@ -60,6 +60,9 @@ KIND_MAILBAG = "mailbag"
 #: (the tamer's own unlock), so it bypasses caps/quiet hours/work
 #: mode -- but per-soul mutes still block it (see system/noise.py).
 KIND_MORNING_NOTE = "morning_note"
+#: Issue #35: expedition departure/arrival bubbles. Unsolicited
+#: cinematic moments, subject to the noise caps like mailbag questions.
+KIND_EXPEDITION = "expedition"
 
 BUBBLE_KINDS = frozenset(
     {
@@ -69,6 +72,7 @@ BUBBLE_KINDS = frozenset(
         KIND_GREETING,
         KIND_MAILBAG,
         KIND_MORNING_NOTE,
+        KIND_EXPEDITION,
     }
 )
 

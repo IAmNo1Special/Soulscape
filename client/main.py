@@ -28,7 +28,12 @@ from .core import MessageBoard, Soul
 from .core.soul import physics as soul_physics
 from .core.commands import ViewportFrameCommand
 from .system.input_router import InputRouter
-from .system.location import whereabouts_label
+from .system.location import (
+    abroad_label,
+    abroad_tooltip,
+    walkoff_direction,
+    whereabouts_label,
+)
 from .system.logger import log, setup_logging
 from .system.network.viewport_client import (
     ViewportConsumer,
@@ -90,8 +95,18 @@ logging.getLogger("pyglet").setLevel(logging.WARNING)
 class SoulscapeApp:
     """Main application class for Soulscape."""
 
+    #: Seconds for the expedition walk-off/walk-in fade (issue #35).
+    ABROAD_FADE_SECONDS = 0.6
+    #: Walk-off drift speed toward the screen edge, px/s.
+    ABROAD_WALKOFF_PX_S = 260.0
+
     def __init__(self) -> None:
         self.active_souls: list[Soul] = []
+        # Issue #35: souls currently away on expedition (abroad
+        # channel), plus in-progress walk-off/walk-in fades.
+        self._away_souls: set[str] = set()
+        self._walkoff_fades: dict[str, dict] = {}
+        self._walkin_fades: set[str] = set()
         self.window_manager: Any = None
         self.overlay_window: Any = None
         self.tray_controller: Any = None
@@ -503,13 +518,20 @@ class SoulscapeApp:
             infos: list[dict] = []
             positions: dict[str, tuple[float, float]] = {}
             bounds: tuple[float, float] | None = None
+            abroad: dict[str, dict] = {}
             if self.viewport_consumer is not None:
                 positions = self.viewport_consumer.rendered_positions()
                 region = self.viewport_consumer.region
                 if region is not None:
                     bounds = (region[2], region[3])
+                for sid in self.viewport_consumer.abroad_soul_ids():
+                    summary = self.viewport_consumer.abroad_summary(sid)
+                    if summary is not None:
+                        abroad[sid] = summary
+            seen: set[str] = set()
             for soul in self.active_souls:
                 sid = soul.biology.soul_id
+                seen.add(sid)
                 state = (
                     self.viewport_consumer.soul_state(sid)
                     if self.viewport_consumer is not None
@@ -520,18 +542,46 @@ class SoulscapeApp:
                     if self.viewport_consumer is not None
                     else None
                 )
+                summary = abroad.get(sid)
                 wpos = positions.get(sid)
-                if wpos is not None:
+                if summary is not None:
+                    # Issue #35: away on expedition -- the away line,
+                    # never a stale position.
+                    location = abroad_label(summary)
+                    tooltip = abroad_tooltip(soul.biology.name, summary)
+                elif wpos is not None:
                     location = whereabouts_label(state, wpos[0], wpos[1], bounds)
+                    tooltip = None
                 else:
                     location = whereabouts_label(state, None, None, bounds)
+                    tooltip = None
                 infos.append(
                     {
                         "soul_id": sid,
                         "name": soul.biology.name,
                         "essence": essence,
                         "location": location,
+                        "tooltip": tooltip,
                         "state": state,
+                        "abroad": summary,
+                    }
+                )
+            # Issue #35: away souls have no sprite but keep a tray line
+            # with the away glyph, from viewport identity state.
+            for sid, summary in abroad.items():
+                if sid in seen:
+                    continue
+                identity = self.viewport_consumer.soul_identity(sid)
+                name = identity.get("name") or sid[:8]
+                infos.append(
+                    {
+                        "soul_id": sid,
+                        "name": name,
+                        "essence": self.viewport_consumer.soul_essence(sid),
+                        "location": abroad_label(summary),
+                        "tooltip": abroad_tooltip(name, summary),
+                        "state": None,
+                        "abroad": summary,
                     }
                 )
             return infos
@@ -962,6 +1012,57 @@ class SoulscapeApp:
             soul.reflex_t = overlay.reflex_t
             soul.typing_dip = overlay.typing_dip
 
+    def _update_abroad_fades(
+        self,
+        dt: float,
+        abroad_now: set[str],
+        existing: dict[str, Any],
+        screen_w: float,
+        screen_h: float,
+    ) -> None:
+        """Expedition walk-off/walk-in transitions (issue #35).
+
+        Walk-off: a soul newly on the abroad channel keeps its sprite
+        for ABROAD_FADE_SECONDS, fading out while drifting toward the
+        nearest screen edge, then leaves the scene. Walk-in: a soul
+        back from abroad fades up from transparent.
+        """
+        for sid in abroad_now - self._away_souls:
+            soul = existing.get(sid)
+            if soul is None or sid in self._walkoff_fades:
+                continue
+            dx, dy = walkoff_direction(soul.x, soul.y, screen_w, screen_h)
+            self._walkoff_fades[sid] = {"progress": 0.0, "dx": dx, "dy": dy}
+        for sid in list(self._walkoff_fades):
+            fade = self._walkoff_fades[sid]
+            soul = existing.get(sid)
+            if soul is None:
+                del self._walkoff_fades[sid]
+                continue
+            fade["progress"] += dt / self.ABROAD_FADE_SECONDS
+            progress = min(1.0, fade["progress"])
+            soul.fade_alpha = max(0.0, 1.0 - progress)
+            soul.x += fade["dx"] * self.ABROAD_WALKOFF_PX_S * dt
+            soul.y += fade["dy"] * self.ABROAD_WALKOFF_PX_S * dt
+            soul.draw_y = soul.y
+            if progress >= 1.0:
+                soul.cleanup()
+                if soul in self.active_souls:
+                    self.active_souls.remove(soul)
+                del self._walkoff_fades[sid]
+                self.dirty_tracker.mark_dirty()
+        for sid in list(self._walkin_fades):
+            soul = existing.get(sid)
+            if soul is None:
+                self._walkin_fades.discard(sid)
+                continue
+            alpha = getattr(soul, "fade_alpha", 1.0) + dt / self.ABROAD_FADE_SECONDS
+            if alpha >= 1.0:
+                soul.fade_alpha = 1.0
+                self._walkin_fades.discard(sid)
+            else:
+                soul.fade_alpha = alpha
+
     def _update_viewport_souls(self, dt: float) -> None:
         """Positions Hub-driven souls from the viewport interpolator.
 
@@ -983,6 +1084,14 @@ class SoulscapeApp:
         known = set(positions)
         existing = {soul.biology.soul_id: soul for soul in self.active_souls}
 
+        # Issue #35: expedition transitions. Souls newly on the abroad
+        # channel walk off the screen edge (fade + drift); souls back
+        # from abroad walk in (fade from transparent).
+        abroad_now = set(consumer.abroad_soul_ids())
+        self._update_abroad_fades(
+            dt, abroad_now, existing, display.width, display.height
+        )
+
         for sid in known - set(existing):
             wx, wy = positions[sid]
             soul = Soul.from_dict(
@@ -1002,14 +1111,23 @@ class SoulscapeApp:
                 local_instance_id=self.instance_id,
                 task_scheduler=self._run_coro,
             )
+            if sid in self._away_souls:
+                # Walk-in: arriving from abroad, fade up from transparent.
+                soul.fade_alpha = 0.0
+                self._walkin_fades.add(sid)
             self.active_souls.append(soul)
             self.dirty_tracker.mark_dirty()
 
         for sid in set(existing) - known:
+            # Souls mid walk-off fade are removed when the fade ends.
+            if sid in self._walkoff_fades:
+                continue
             soul = existing[sid]
             soul.cleanup()
             self.active_souls.remove(soul)
             self.dirty_tracker.mark_dirty()
+
+        self._away_souls = abroad_now
 
         souls_by_id = {soul.biology.soul_id: soul for soul in self.active_souls}
         states = consumer.soul_states()

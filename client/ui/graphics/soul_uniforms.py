@@ -113,7 +113,8 @@ def state_to_uniforms(state: Mapping[str, Any]) -> dict[str, Any]:
             (0..1 fractions), ``statue_kind`` (None or one of the
             STATUE_* constants), ``typing_dip`` (0..1), ``reflex``
             (None or one of the REFLEX_* constants), ``reflex_t``
-            (seconds into the reflex), ``base_color`` ((r, g, b)).
+            (seconds into the reflex), ``base_color`` ((r, g, b)),
+            ``fade_alpha`` (0..1, issue #35: expedition walk-off/walk-in).
 
     Returns:
         Dict with exactly the keys documented in the module docstring.
@@ -123,6 +124,7 @@ def state_to_uniforms(state: Mapping[str, Any]) -> dict[str, Any]:
     hp = _clamp01(state.get("hp", 1.0))
     statue_kind = state.get("statue_kind")
     typing_dip = _clamp01(state.get("typing_dip", 0.0))
+    fade_alpha = _clamp01(state.get("fade_alpha", 1.0))
     reflex = state.get("reflex")
     reflex_t = max(0.0, float(state.get("reflex_t", 0.0)))
     base = state.get("base_color", (1.0, 1.0, 1.0))
@@ -134,7 +136,7 @@ def state_to_uniforms(state: Mapping[str, Any]) -> dict[str, Any]:
     pulse_strength = 0.25 + 0.75 * vitality
     brightness = 0.45 + 0.55 * vitality
     desat_factor = 0.0
-    opacity = 1.0 - TYPING_DIP_DEPTH * typing_dip
+    opacity = (1.0 - TYPING_DIP_DEPTH * typing_dip) * fade_alpha
     bob_amplitude = 0.02
     bob_speed = 1.6
     bob_phase = 0.0

@@ -80,8 +80,16 @@ def _souls():
             "soul_id": "s2",
             "name": "Mira",
             "essence": None,
-            "location": "traveling...",
-            "state": "traveling",
+            # Issue #35: away on expedition -- the away line with the
+            # glyph, built by main.get_tray_souls from the abroad summary.
+            "location": "✈ abroad — plot 7:3, foraging",
+            "state": None,
+            "abroad": {
+                "entity_id": "s2",
+                "state": "abroad",
+                "activity_label": "foraging",
+                "plot": "7:3",
+            },
         },
     ]
 
@@ -154,7 +162,9 @@ class TestTrayDashboard(unittest.TestCase):
         where = _find(ctrl._create_menu(), "Whereabouts")
         texts = _menu_texts(where.action)
         self.assertIn("Zed — Commons (plot 8:4)", texts)
-        self.assertIn("Mira — traveling...", texts)
+        # Issue #35: away souls show the glyph + abroad line, never a
+        # stale position.
+        self.assertIn("Mira — ✈ abroad — plot 7:3, foraging", texts)
 
     def test_wallet_shows_essence(self):
         ctrl = self._controller()

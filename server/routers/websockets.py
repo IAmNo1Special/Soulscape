@@ -8,6 +8,7 @@ import hmac
 import json
 import logging
 import secrets as pysecrets
+import time
 
 from fastapi import (
     APIRouter,
@@ -312,6 +313,19 @@ async def _viewport_pump(
             dormant = viewport.read_dormancy()
             biology = viewport.read_biology()
             raw_identities = viewport.read_identities()
+            # Issue #35: souls on the abroad channel stream 1 Hz
+            # summaries; their fine position, state, dormancy, biology,
+            # and identity are withheld from the normal stream.
+            abroad = viewport.read_abroad()
+            away = set(abroad)
+            if away:
+                positions = {s: p for s, p in positions.items() if s not in away}
+                states = {s: v for s, v in states.items() if s not in away}
+                dormant = {s: v for s, v in dormant.items() if s not in away}
+                biology = {s: v for s, v in biology.items() if s not in away}
+                raw_identities = {
+                    s: v for s, v in raw_identities.items() if s not in away
+                }
             identities = {
                 sid: (
                     str(vals.get("name", sid[:8])),
@@ -336,6 +350,10 @@ async def _viewport_pump(
                 session.enqueue(op, domain)
             for op, domain in viewport.diff_identities(
                 identities, session.committed_identities
+            ):
+                session.enqueue(op, domain)
+            for op, domain in viewport.diff_abroad(
+                abroad, session, time.time()
             ):
                 session.enqueue(op, domain)
             result = await viewport.flush(

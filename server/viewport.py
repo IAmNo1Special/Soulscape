@@ -155,6 +155,68 @@ def _bubble_op(
     return op
 
 
+def _abroad_op(summary: dict) -> dict:
+    """Wire op for the abroad channel (issue #35): the op discriminator
+    plus exactly the 4-key allowlist summary -- no position, no
+    viewport, no biology."""
+    return {
+        "op": "abroad",
+        "soul_id": summary["entity_id"],
+        "entity_id": summary["entity_id"],
+        "state": summary["state"],
+        "activity_label": summary["activity_label"],
+        "plot": summary["plot"],
+    }
+
+
+def _abroad_end_op(soul_id: str) -> dict:
+    """Channel-exit op: the soul is back on the normal stream; the
+    client drops its away state (the snap move op in the same frame
+    re-creates the track)."""
+    return {"op": "abroad_end", "soul_id": soul_id, "entity_id": soul_id}
+
+
+def read_abroad() -> dict[str, dict]:
+    """Abroad-channel summaries (issue #35) keyed by soul_id.
+
+    Only souls in the abroad/returning expedition phases stream here;
+    their fine position, lifecycle state, dormancy, biology, and
+    identity deltas are withheld from the normal stream instead.
+    """
+    from . import expeditions
+
+    return expeditions.abroad_summaries()
+
+
+def diff_abroad(
+    current: dict[str, dict],
+    session: ViewportSession,
+    now: float,
+) -> list[tuple[dict, str]]:
+    """Diff abroad summaries into 1 Hz ops (issue #35).
+
+    A summary is emitted when it changes or every ABROAD_CADENCE_S as a
+    heartbeat. Souls that left the abroad channel are pruned from the
+    committed set; their return rides the normal position stream.
+    """
+    from . import expeditions
+
+    ops: list[tuple[dict, str]] = []
+    for soul_id, summary in current.items():
+        committed = session.committed_abroad.get(soul_id)
+        last = session.abroad_last_sent.get(soul_id, 0.0)
+        if committed != summary or now - last >= expeditions.ABROAD_CADENCE_S:
+            ops.append((_abroad_op(summary), _DOMAIN_PRIORITY))
+            session.committed_abroad[soul_id] = dict(summary)
+            session.abroad_last_sent[soul_id] = now
+    for soul_id in list(session.committed_abroad):
+        if soul_id not in current:
+            ops.append((_abroad_end_op(soul_id), _DOMAIN_PRIORITY))
+            del session.committed_abroad[soul_id]
+            session.abroad_last_sent.pop(soul_id, None)
+    return ops
+
+
 def read_positions() -> dict[str, tuple[float, float]]:
     """Position map with the read-through view: the tick's unflushed dirty
     set overlaid on the DB, so the viewport never lags a flush."""
@@ -338,6 +400,8 @@ class ViewportSession:
         self.committed_dormancy: dict[str, bool] = {}
         self.committed_biology: dict[str, tuple[float, float, float, float]] = {}
         self.committed_identities: dict[str, tuple[str, str, int, str]] = {}
+        self.committed_abroad: dict[str, dict] = {}
+        self.abroad_last_sent: dict[str, float] = {}
         self.pending_moves: dict[str, dict] = {}
         self.pending_priority: list[dict] = []
         self.flush_interval = PUMP_INTERVAL_SECONDS
@@ -386,6 +450,10 @@ def build_snapshot(
     dormant = read_dormancy()
     biology = read_biology()
     identities = read_identities()
+    # Issue #35: souls on the abroad channel stream summaries, not
+    # positions; their fine state is withheld from the snapshot.
+    abroad = read_abroad()
+    away = set(abroad)
     souls = [
         {
             "soul_id": soul_id,
@@ -411,6 +479,7 @@ def build_snapshot(
             "activity": identities.get(soul_id, {}).get("activity", "idle"),
         }
         for soul_id, (x, y) in positions.items()
+        if soul_id not in away
     ]
     protocol.Snapshot(
         reason=reason,
@@ -427,9 +496,13 @@ def build_snapshot(
         region=read_region(),
         plots=[],
         wallets=read_wallets(),
+        abroad=[abroad[sid] for sid in sorted(abroad)],
     )
     session.next_seq += 1
-    session.committed = dict(positions)
+    session.committed = {sid: p for sid, p in positions.items() if sid not in away}
+    session.committed_abroad = {sid: dict(s) for sid, s in abroad.items()}
+    for sid in abroad:
+        session.abroad_last_sent[sid] = time.time()
     session.committed_states = dict(states)
     session.committed_dormancy = dict(dormant)
     session.committed_biology = {

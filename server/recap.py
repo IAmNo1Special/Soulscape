@@ -185,6 +185,14 @@ def _render_line(event_type: str, payload: dict) -> str:
         return "Went dormant"
     if event_type == "recap_generated":
         return f"Overnight recap ({payload.get('n_lines', 0)} highlights)"
+    if event_type == "expedition_started":
+        return f"Set off exploring plot {payload.get('dest_plot', '?')}"
+    if event_type == "expedition_arrived":
+        return f"Arrived at plot {payload.get('dest_plot', '?')}"
+    if event_type == "expedition_returned":
+        return f"Back home from plot {payload.get('dest_plot', '?')}"
+    if event_type == "expedition_cancelled":
+        return f"Expedition cancelled ({payload.get('reason', '?')})"
     return f"{event_type}: {_short(json.dumps(payload), 90)}"
 
 

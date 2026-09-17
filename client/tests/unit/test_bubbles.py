@@ -47,6 +47,7 @@ class TestBubbleKinds(unittest.TestCase):
                 "greeting",
                 "mailbag",
                 "morning_note",
+                "expedition",
             },
         )
 

@@ -223,7 +223,25 @@ class ViewportConsumer:
         # Transient bubble ops (issue #30): queued here, drained by the
         # app into the BubbleManager. Never part of the entity state.
         self._bubble_queue: collections.deque[dict] = collections.deque()
+        # Abroad summaries (issue #35): souls on expedition stream the
+        # 4-key summary instead of position/state/dormancy/biology.
+        # Away souls have no track, so rendered_positions() (and the
+        # scene) excludes them; the tray shows them via the away glyph.
+        self._abroad: dict[str, dict] = {}
         self._region: tuple[float, float, float, float] | None = None
+
+    def abroad_summary(self, soul_id: str) -> dict | None:
+        """The abroad summary for an away soul, or None."""
+        summary = self._abroad.get(soul_id)
+        return dict(summary) if summary is not None else None
+
+    def is_abroad(self, soul_id: str) -> bool:
+        """True while the soul streams on the abroad channel."""
+        return soul_id in self._abroad
+
+    def abroad_soul_ids(self) -> list[str]:
+        """Soul ids currently away on expedition."""
+        return list(self._abroad)
 
     @property
     def region(self) -> tuple[float, float, float, float] | None:
@@ -346,6 +364,29 @@ class ViewportConsumer:
             self._bio.pop(sid, None)
             self._wallets.pop(sid, None)
             self._identities.pop(sid, None)
+        # Issue #35: abroad souls ride the snapshot's "abroad" list, not
+        # "souls". They keep their tray identity but lose their track
+        # (no scene rendering while away).
+        abroad_ids: set[str] = set()
+        for summary in frame.get("abroad") or []:
+            if not isinstance(summary, dict):
+                continue
+            eid = summary.get("entity_id")
+            if not eid:
+                continue
+            abroad_ids.add(eid)
+            self._abroad[eid] = {
+                "entity_id": eid,
+                "state": summary.get("state"),
+                "activity_label": summary.get("activity_label"),
+                "plot": summary.get("plot"),
+            }
+            self._tracks.pop(eid, None)
+            self._states.pop(eid, None)
+            self._dormant.pop(eid, None)
+            self._bio.pop(eid, None)
+        for eid in [key for key in self._abroad if key not in abroad_ids]:
+            del self._abroad[eid]
         for wallet in frame.get("wallets") or []:
             wid = wallet.get("soul_id")
             if wid:
@@ -375,6 +416,26 @@ class ViewportConsumer:
                 self._bio.pop(sid, None)
                 self._wallets.pop(sid, None)
                 self._identities.pop(sid, None)
+                continue
+            # Issue #35: abroad ops move a soul onto the away channel.
+            # The track/state/biology are dropped (no scene rendering
+            # while abroad); identity is kept for the tray tooltip.
+            # abroad_end clears the away state on return.
+            if kind == "abroad_end":
+                self._abroad.pop(sid, None)
+                continue
+            if kind == "abroad":
+                eid = op.get("entity_id") or sid
+                self._abroad[eid] = {
+                    "entity_id": eid,
+                    "state": op.get("state"),
+                    "activity_label": op.get("activity_label"),
+                    "plot": op.get("plot"),
+                }
+                self._tracks.pop(eid, None)
+                self._states.pop(eid, None)
+                self._dormant.pop(eid, None)
+                self._bio.pop(eid, None)
                 continue
             # Transient bubble ops (issue #30): queue for the app, never
             # touch the entity state model.
