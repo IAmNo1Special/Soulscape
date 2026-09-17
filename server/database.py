@@ -768,6 +768,17 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_llm_usage_soul
                 ON llm_usage(soul_id)
             """)
+            # Quip budget (issue #30): personalized quips are capped at
+            # QUIPS_PER_SOUL_PER_DAY per UTC day. One row per soul per day;
+            # the day boundary resets the budget automatically.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS quip_budgets (
+                    soul_id TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (soul_id, day)
+                )
+            """)
             # Metering stage-1 (issue #27): idempotent usage events per
             # #25 llm_usage row, decision traces joining deliberation ->
             # usage event -> intents -> outcomes, and the runtime pricing

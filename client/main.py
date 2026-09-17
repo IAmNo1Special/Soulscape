@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import os
 import random
 import sys
 import threading
@@ -17,6 +18,7 @@ from multiprocessing import Process, Queue, queues
 from pathlib import Path
 from typing import Any, Coroutine
 
+import httpx
 import pyglet
 from dotenv import load_dotenv
 from pyglet.window import key
@@ -26,6 +28,7 @@ from .core import MessageBoard, Soul
 from .core.soul import physics as soul_physics
 from .core.commands import ViewportFrameCommand
 from .system.input_router import InputRouter
+from .system.location import whereabouts_label
 from .system.logger import log, setup_logging
 from .system.network.viewport_client import (
     ViewportConsumer,
@@ -34,6 +37,8 @@ from .system.network.viewport_client import (
     viewport_mode_enabled,
 )
 from .system.network_service import NetworkService
+from .system.noise import NoisePolicy
+from .system.bubble_config import load_bubble_config, save_bubble_config
 from .system.persistence import (
     get_client_mode,
     load_settings,
@@ -48,6 +53,7 @@ from .system.dpi import declare_per_monitor_v2_dpi_awareness
 from .system.fullscreen import foreground_is_exclusive_fullscreen
 from .ui.graphics.scene_renderer import SceneRenderer
 from .ui.graphics.visual_reflexes import VisualReflexController
+from .ui.bubbles import BUBBLE_KINDS, BubbleManager
 from .ui.gui.gui_service import GuiCommand, run_gui_service
 
 # Explicitly load dotenv
@@ -76,6 +82,20 @@ class SoulscapeApp:
         # Issue #29: water-cooler reflexes (unlock greeting, long-idle
         # nap, input-burst reaction + typing-dip). Local-only.
         self.reflex_controller: VisualReflexController | None = None
+
+        # Issue #30: speech bubbles + noise policy. Config survives
+        # restarts via soulscape_bubbles.toml; the policy object is the
+        # live gate every show_bubble call passes through.
+        self.bubble_config = load_bubble_config()
+        self.noise_policy = NoisePolicy(self.bubble_config.noise)
+        self.bubble_manager = BubbleManager(
+            policy=self.noise_policy,
+            durations=self.bubble_config.display.durations,
+            max_visible_per_soul=self.bubble_config.display.max_visible_per_soul,
+            queue_depth=self.bubble_config.display.queue_depth,
+        )
+        # Pause toggle (tray): freezes local sim + reflex visuals.
+        self.sim_paused: bool = False
 
         # Load settings
         self.saved_settings: dict[str, Any] = load_settings()
@@ -207,6 +227,16 @@ class SoulscapeApp:
         def on_draw() -> None:
             self.overlay_window.clear()
             self.scene_renderer.render(self.active_souls, self.overlay_window.height)
+            positions = {
+                soul.biology.soul_id: (
+                    soul.x + soul.width / 2,
+                    self.overlay_window.height - soul.draw_y,
+                )
+                for soul in self.active_souls
+            }
+            jobs = self.bubble_manager.layout(positions)
+            if jobs:
+                self.scene_renderer.render_bubbles(jobs)
 
         @self.overlay_window.event
         def on_key_press(symbol, modifiers) -> None:
@@ -357,15 +387,135 @@ class SoulscapeApp:
         def on_tray_exit() -> None:
             pyglet.clock.schedule_once(lambda dt: self.quit_app(), 0)
 
+        def get_tray_souls() -> list[dict]:
+            infos: list[dict] = []
+            positions: dict[str, tuple[float, float]] = {}
+            bounds: tuple[float, float] | None = None
+            if self.viewport_consumer is not None:
+                positions = self.viewport_consumer.rendered_positions()
+                region = self.viewport_consumer.region
+                if region is not None:
+                    bounds = (region[2], region[3])
+            for soul in self.active_souls:
+                sid = soul.biology.soul_id
+                state = (
+                    self.viewport_consumer.soul_state(sid)
+                    if self.viewport_consumer is not None
+                    else None
+                )
+                essence = (
+                    self.viewport_consumer.soul_essence(sid)
+                    if self.viewport_consumer is not None
+                    else None
+                )
+                wpos = positions.get(sid)
+                if wpos is not None:
+                    location = whereabouts_label(state, wpos[0], wpos[1], bounds)
+                else:
+                    location = whereabouts_label(state, None, None, bounds)
+                infos.append(
+                    {
+                        "soul_id": sid,
+                        "name": soul.biology.name,
+                        "essence": essence,
+                        "location": location,
+                        "state": state,
+                    }
+                )
+            return infos
+
+        def on_pause_toggle() -> None:
+            self.sim_paused = not self.sim_paused
+            log.info(f"Simulation paused: {self.sim_paused}")
+
+        def on_work_mode_toggle() -> None:
+            self.bubble_config.noise.work_mode = not self.bubble_config.noise.work_mode
+            self.noise_policy.update_settings(self.bubble_config.noise)
+            save_bubble_config(self.bubble_config)
+            log.info(f"Work mode: {self.bubble_config.noise.work_mode}")
+
+        def notify_bubble(soul_id: str, text: str, kind: str) -> None:
+            if kind not in BUBBLE_KINDS:
+                kind = "system"
+            pyglet.clock.schedule_once(
+                lambda dt: self.bubble_manager.show_bubble(
+                    soul_id, text, kind=kind, solicited=True
+                ),
+                0,
+            )
+
         self.tray_controller = TrayController(
             on_add_soul=on_tray_spawn,
             on_toggle_auras=on_tray_toggle_auras,
             on_settings=on_tray_settings,
             on_message_board=on_tray_message_board,
             on_exit=on_tray_exit,
+            get_souls=get_tray_souls,
+            get_hub_status=lambda: "online" if self.viewport_mode else "local",
+            get_mailbag_count=lambda: 0,
+            is_paused=lambda: self.sim_paused,
+            on_pause_toggle=on_pause_toggle,
+            is_work_mode=lambda: self.bubble_config.noise.work_mode,
+            on_work_mode_toggle=on_work_mode_toggle,
+            on_open_market=None,
+            on_request_quip=self._request_quip,
+            notify_bubble=notify_bubble,
         )
         # Start the tray controller (it handles its own thread)
         self.tray_controller.start()
+
+    def _request_quip(self, soul_id: str) -> dict:
+        """Hit the Hub quip endpoint for a soul (issue #30 tray Quips menu).
+
+        Returns the response dict; the tray surfaces rejections (budget /
+        essence) as a notification + system bubble. Success needs no local
+        action -- the quip arrives as a solicited bubble viewport op.
+        """
+        hub_url = ""
+        try:
+            hub_url = (resolve_hub_url() or "").rstrip("/")
+        except Exception:
+            hub_url = ""
+        if not hub_url:
+            return {
+                "status": "error",
+                "reason": "no_hub",
+                "message": "No Hub URL configured; quips need online mode.",
+            }
+        secret = os.getenv("HUB_SECRET_KEY", "")
+        headers = {"X-Hub-Secret": secret} if secret else {}
+        try:
+            resp = httpx.post(
+                f"{hub_url}/souls/{soul_id}/quip",
+                json={},
+                headers=headers,
+                timeout=30.0,
+            )
+        except Exception as exc:
+            return {
+                "status": "error",
+                "reason": "hub_unreachable",
+                "message": f"Hub unreachable: {exc}",
+            }
+        if resp.status_code == 200:
+            return {"status": "success", **resp.json()}
+        try:
+            detail = resp.json().get("detail", {})
+        except Exception:
+            detail = {}
+        if isinstance(detail, dict):
+            return {
+                "status": "rejected",
+                "reason": detail.get("reason", f"http_{resp.status_code}"),
+                "message": detail.get(
+                    "message", f"Quip rejected ({resp.status_code})."
+                ),
+            }
+        return {
+            "status": "rejected",
+            "reason": f"http_{resp.status_code}",
+            "message": str(detail),
+        }
 
     def show_add_soul_dialog(self) -> None:
         """Shows dialog to add a new soul."""
@@ -454,6 +604,21 @@ class SoulscapeApp:
                 log.error(
                     f"Error executing network command {type(command).__name__}: {e}"
                 )
+                continue
+
+            # Issue #30: server-driven bubble ops ride the viewport;
+            # drain them into the BubbleManager (noise-gated like local).
+            if isinstance(command, ViewportFrameCommand) and command.consumer is not None:
+                for bop in command.consumer.drain_bubbles():
+                    kind = bop.get("kind") or "speech"
+                    if kind not in BUBBLE_KINDS:
+                        kind = "speech"
+                    self.bubble_manager.show_bubble(
+                        bop["soul_id"],
+                        bop.get("text", ""),
+                        kind=kind,
+                        solicited=bop.get("solicited", False),
+                    )
 
     def _on_connect_sync(self, online_owners: list[str]) -> None:
         """Reconciles local state with Hub truth."""
@@ -521,15 +686,17 @@ class SoulscapeApp:
 
         if self.viewport_mode:
             self._update_viewport_souls(dt)
-            self._update_visual_reflexes()
+            if not self.sim_paused:
+                self._update_visual_reflexes()
             self._poll_topmost()
             return
 
         # 2. Update Simulation
-        soul_physics.begin_separation_frame()
-        for soul in self.active_souls:
-            soul.update(dt)
-        self._update_visual_reflexes()
+        if not self.sim_paused:
+            soul_physics.begin_separation_frame()
+            for soul in self.active_souls:
+                soul.update(dt)
+            self._update_visual_reflexes()
 
         # ... (periodic save/topmost unchanged) ...
         if time.time() - self.last_save_time > 30:
@@ -641,7 +808,20 @@ class SoulscapeApp:
             # Issue #29: stale Hub presence renders the "offline" statue
             # variant (desaturated, frozen).
             soul.offline_stale = consumer.is_stale(sid)
-            if not soul.statue and not soul.dormant_statue:
+            # Issue #30 (step 0 of #29): authoritative biology from the
+            # Hub stream drives the shader uniforms online instead of
+            # healthy local defaults.
+            bio = consumer.soul_biology(sid)
+            soul.biology.satiety = bio["satiety"]
+            soul.biology.hydration = bio["hydration"]
+            soul.biology.stats.max_hp = max(1, int(round(bio["max_hp"])))
+            soul.biology.current_health = max(
+                0,
+                min(soul.biology.stats.max_hp, int(round(bio["hp"]))),
+            )
+            # Issue #30: work mode dims visuals.
+            soul.work_dim = self.bubble_config.noise.work_mode
+            if not soul.statue and not soul.dormant_statue and not self.sim_paused:
                 soul.visual_tick(dt)
 
         snapshot = [

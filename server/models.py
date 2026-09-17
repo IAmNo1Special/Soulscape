@@ -91,6 +91,10 @@ class FeedSoulRequest(BaseModel):
     recipient_soul_id: str
 
 
+class QuipRequest(BaseModel):
+    prompt: Optional[str] = None
+
+
 class SoulUpdate(BaseModel):
     owner_id: Optional[str] = None
     custodian_id: Optional[str] = None

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+import pyglet
 from pyglet import math as pmath
 from pyglet.gl import (
     GL_BACK,
@@ -59,6 +60,9 @@ def _statue_kind(soul: Soul) -> str | None:
 
 
 def _soul_state(soul: Soul, base_color: tuple[float, float, float]) -> dict:
+    # Issue #30: work mode dims visuals (tray toggle).
+    if getattr(soul, "work_dim", False):
+        base_color = tuple(c * 0.55 for c in base_color)
     biology = soul.biology
     return {
         "satiety": max(0.0, min(1.0, biology.satiety / 100.0)),
@@ -257,3 +261,25 @@ class SceneRenderer:
 
         # Restore Depth Mask for next frame (or other renderers)
         glDepthMask(True)
+
+    def render_bubbles(self, jobs: list[tuple[float, float, str]]) -> None:
+        """Draw transient speech bubbles (issue #30).
+
+        Args:
+            jobs: (x, y, text) draw jobs from BubbleManager.layout(),
+                in window coordinates (origin bottom-left).
+        """
+        glDisable(GL_DEPTH_TEST)
+        for x, y, text in jobs:
+            label = pyglet.text.Label(
+                text,
+                x=x,
+                y=y,
+                anchor_x="center",
+                anchor_y="bottom",
+                font_size=12,
+                bold=True,
+                color=(235, 245, 255, 230),
+            )
+            label.draw()
+        glEnable(GL_DEPTH_TEST)

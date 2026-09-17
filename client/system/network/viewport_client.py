@@ -37,6 +37,17 @@ STALE_THRESHOLD_SECONDS = 2.0
 #: Dim factor applied to the desaturated statue color.
 _STATUE_DIM = 0.72
 
+_BIO_DEFAULTS = {"satiety": 100.0, "hydration": 100.0, "hp": 100.0, "max_hp": 100.0}
+
+
+def _bio_from_entry(entry: dict) -> dict[str, float]:
+    return {
+        "satiety": float(entry.get("satiety", 100.0)),
+        "hydration": float(entry.get("hydration", 100.0)),
+        "hp": float(entry.get("hp", 100.0)),
+        "max_hp": float(entry.get("max_hp", 100.0)),
+    }
+
 #: Warm tint for dormant statues (issue #22): amber-shifted stone so a
 #: frozen (unfunded) soul is distinguishable from a collapsed one.
 #: Cheap distinction -- same desaturation, different hue.
@@ -198,6 +209,16 @@ class ViewportConsumer:
         # Dormancy (issue #22): wallet-derived freeze, orthogonal to the
         # lifecycle state. Streams on its own delta domain + snapshot.
         self._dormant: dict[str, bool] = {}
+        # Biology (issue #30, step 0 of #29): authoritative satiety /
+        # hydration / hp so online shader uniforms stop assuming healthy
+        # local defaults. Streams on its own delta domain + snapshot.
+        self._bio: dict[str, dict[str, float]] = {}
+        # Wallets (issue #30): per-soul essence for the tray dashboard.
+        # Streams on the economy delta domain + the snapshot's wallets.
+        self._wallets: dict[str, float] = {}
+        # Transient bubble ops (issue #30): queued here, drained by the
+        # app into the BubbleManager. Never part of the entity state.
+        self._bubble_queue: collections.deque[dict] = collections.deque()
         self._region: tuple[float, float, float, float] | None = None
 
     @property
@@ -237,6 +258,35 @@ class ViewportConsumer:
         """Snapshot of per-soul dormancy for the render path."""
         return dict(self._dormant)
 
+    def soul_biology(self, soul_id: str) -> dict[str, float]:
+        """Authoritative biology for a soul (issue #30, step 0 of #29).
+
+        Healthy defaults when the Hub has not streamed values yet --
+        the same values the client used to assume locally.
+        """
+        return dict(self._bio.get(soul_id, _BIO_DEFAULTS))
+
+    def soul_essence(self, soul_id: str) -> float | None:
+        """Latest streamed essence for a soul (issue #30 tray wallet).
+
+        None when no economy op / snapshot wallet has arrived yet.
+        """
+        return self._wallets.get(soul_id)
+
+    def wallets(self) -> dict[str, float]:
+        """Snapshot of per-soul essence for the tray dashboard."""
+        return dict(self._wallets)
+
+    def drain_bubbles(self) -> list[dict]:
+        """Take queued transient bubble ops (issue #30).
+
+        The app feeds these into the BubbleManager; the consumer never
+        replays them (no resume, no snapshot).
+        """
+        out = list(self._bubble_queue)
+        self._bubble_queue.clear()
+        return out
+
     def apply_frame(self, frame: dict) -> None:
         """Apply a Hub SNAPSHOT or DELTA frame using the consumer clock."""
         msg_type = frame.get("type")
@@ -260,10 +310,19 @@ class ViewportConsumer:
             # Dormancy rides the snapshot (issue #22) so a fresh client
             # renders frozen statues without waiting for a delta.
             self._dormant[sid] = bool(entry.get("dormant", False))
+            # Biology rides the snapshot (issue #30) so a fresh client
+            # renders uniforms from authoritative values immediately.
+            self._bio[sid] = _bio_from_entry(entry)
         for sid in [key for key in self._tracks if key not in seen]:
             del self._tracks[sid]
             self._states.pop(sid, None)
             self._dormant.pop(sid, None)
+            self._bio.pop(sid, None)
+            self._wallets.pop(sid, None)
+        for wallet in frame.get("wallets") or []:
+            wid = wallet.get("soul_id")
+            if wid:
+                self._wallets[wid] = float(wallet.get("essence", 0.0))
         region = frame.get("region")
         if isinstance(region, dict):
             w = float(region.get("w", 0.0))
@@ -286,6 +345,20 @@ class ViewportConsumer:
                 self._tracks.pop(sid, None)
                 self._states.pop(sid, None)
                 self._dormant.pop(sid, None)
+                self._bio.pop(sid, None)
+                self._wallets.pop(sid, None)
+                continue
+            # Transient bubble ops (issue #30): queue for the app, never
+            # touch the entity state model.
+            if kind == "bubble":
+                self._bubble_queue.append(
+                    {
+                        "soul_id": sid,
+                        "text": str(op.get("text", ""))[:280],
+                        "kind": str(op.get("kind", "speech")),
+                        "solicited": bool(op.get("solicited", False)),
+                    }
+                )
                 continue
             if kind != protocol.EntityOpKind.UPSERT.value:
                 continue
@@ -298,6 +371,13 @@ class ViewportConsumer:
             # to the lifecycle state.
             if op.get("domain") == "dormancy":
                 self._dormant[sid] = bool(state.get("dormant", False))
+            # Biology ops (issue #30): authoritative vitals for the
+            # shader uniforms, orthogonal to position/state.
+            if op.get("domain") == "biology":
+                self._bio[sid] = _bio_from_entry(state)
+            # Economy ops carry the per-soul essence for the tray wallet.
+            if op.get("domain") == "economy" and "essence" in state:
+                self._wallets[sid] = float(state["essence"])
             if "x" not in state or "y" not in state:
                 continue
             track = self._track(sid)

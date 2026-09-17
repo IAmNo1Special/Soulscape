@@ -379,3 +379,24 @@ def test_economy_op_flows_through_marketplace_buy(
     assert op["soul_id"] == "buyer1"
     assert op["state"]["essence"] == row["essence"]
     vp.viewport.drop(session.conn_id)
+
+
+@pytest.mark.anyio
+async def test_bubble_op_sent_but_never_replayed():
+    manager, session, _ = _make_stream(ring_size=4)
+    assert manager.notify_bubble("owner1", "s1", "a quip!", kind="quip",
+                                 solicited=True) == 1
+    rec = _Recorder()
+    assert await vp.flush(session, {}, 1, rec) == "ok"
+    # The bubble goes out on the wire...
+    sent_ops = rec.frames[0]["ops"]
+    assert [op["op"] for op in sent_ops] == ["bubble"]
+    assert sent_ops[0]["kind"] == "quip"
+    assert sent_ops[0]["solicited"] is True
+    # ...but the ring copy is stripped so resume never replays it.
+    assert session.ring[-1]["ops"] == []
+    new = manager.create("owner1")
+    replay = _Recorder()
+    outcome = await manager.resume(new, session.conn_id, 0, 9, replay)
+    assert outcome == "replayed"
+    assert replay.frames[0]["ops"] == []

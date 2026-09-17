@@ -90,6 +90,43 @@ def _dormancy_op(soul_id: str, dormant: bool) -> dict:
     }
 
 
+def _biology_op(
+    soul_id: str, satiety: float, hydration: float, hp: float, max_hp: float
+) -> dict:
+    """Biology stream (issue #30, step 0 of #29): satiety/hydration/hp
+    ride the viewport as priority ops on their own domain so online
+    clients render shader uniforms from authoritative values instead of
+    healthy local defaults."""
+    return {
+        "op": protocol.EntityOpKind.UPSERT.value,
+        "soul_id": soul_id,
+        "domain": "biology",
+        "state": {
+            "soul_id": soul_id,
+            "satiety": satiety,
+            "hydration": hydration,
+            "hp": hp,
+            "max_hp": max_hp,
+        },
+    }
+
+
+def _bubble_op(
+    soul_id: str, text: str, kind: str, solicited: bool = False
+) -> dict:
+    """Transient speech-bubble op (issue #30): not part of the entity
+    state model -- the client renders it above the soul's orb and drops
+    it after the kind's auto-dismiss duration. Never diffed, never in
+    snapshots, never replayed on resume."""
+    return {
+        "op": "bubble",
+        "soul_id": soul_id,
+        "text": text,
+        "kind": kind,
+        "solicited": solicited,
+    }
+
+
 def read_positions() -> dict[str, tuple[float, float]]:
     """Position map with the read-through view: the tick's unflushed dirty
     set overlaid on the DB, so the viewport never lags a flush."""
@@ -120,6 +157,28 @@ def read_dormancy() -> dict[str, bool]:
     for row in rows:
         dormant[row["soul_id"]] = dormancy.is_dormant(row["essence"])
     return dormant
+
+
+def read_biology() -> dict[str, tuple[float, float, float, float]]:
+    """Per-soul biology (issue #30, step 0 of #29) for the viewport
+    stream: (satiety, hydration, hp, max_hp). Missing/NULL reads as the
+    healthy defaults the client used to assume locally."""
+    bio: dict[str, tuple[float, float, float, float]] = {}
+    with database.get_db() as conn:
+        rows = conn.execute(
+            "SELECT soul_id, COALESCE(satiety, 100.0) AS satiety, "
+            "COALESCE(hydration, 100.0) AS hydration, "
+            "COALESCE(hp, 100.0) AS hp, COALESCE(max_hp, 100.0) AS max_hp "
+            "FROM souls"
+        ).fetchall()
+    for row in rows:
+        bio[row["soul_id"]] = (
+            float(row["satiety"]),
+            float(row["hydration"]),
+            float(row["hp"]),
+            float(row["max_hp"]),
+        )
+    return bio
 
 
 def read_wallets() -> list[dict]:
@@ -185,6 +244,24 @@ def diff_dormancy(
     return ops
 
 
+def diff_biology(
+    current: dict[str, tuple[float, float, float, float]],
+    committed: dict[str, tuple[float, float, float, float]],
+) -> list[tuple[dict, str]]:
+    """Diff per-soul biology (issue #30); changed values become priority
+    ops on the biology domain so online shader uniforms track the Hub.
+    Values round to 0.1 to avoid chattering on float noise."""
+    ops: list[tuple[dict, str]] = []
+    for soul_id, vals in current.items():
+        rounded = tuple(round(v, 1) for v in vals)
+        if committed.get(soul_id) != rounded:
+            sat, hyd, hp, max_hp = rounded
+            ops.append(
+                (_biology_op(soul_id, sat, hyd, hp, max_hp), _DOMAIN_PRIORITY)
+            )
+    return ops
+
+
 class ViewportSession:
     def __init__(self, owner_id: str, ring_size: int = RING_BUFFER_SIZE) -> None:
         self.conn_id = uuid.uuid4().hex
@@ -194,6 +271,7 @@ class ViewportSession:
         self.committed: dict[str, tuple[float, float]] = {}
         self.committed_states: dict[str, str] = {}
         self.committed_dormancy: dict[str, bool] = {}
+        self.committed_biology: dict[str, tuple[float, float, float, float]] = {}
         self.pending_moves: dict[str, dict] = {}
         self.pending_priority: list[dict] = []
         self.flush_interval = PUMP_INTERVAL_SECONDS
@@ -240,6 +318,7 @@ def build_snapshot(
     positions = read_positions()
     states = read_soul_states()
     dormant = read_dormancy()
+    biology = read_biology()
     souls = [
         {
             "soul_id": soul_id,
@@ -250,6 +329,13 @@ def build_snapshot(
             # renders frozen statues immediately, without waiting for a
             # delta. SoulWireState allows extra fields.
             "dormant": dormant.get(soul_id, False),
+            # Biology (issue #30, step 0 of #29) rides the snapshot so a
+            # fresh client renders uniforms from authoritative values
+            # immediately.
+            "satiety": biology.get(soul_id, (100.0, 100.0, 100.0, 100.0))[0],
+            "hydration": biology.get(soul_id, (100.0, 100.0, 100.0, 100.0))[1],
+            "hp": biology.get(soul_id, (100.0, 100.0, 100.0, 100.0))[2],
+            "max_hp": biology.get(soul_id, (100.0, 100.0, 100.0, 100.0))[3],
         }
         for soul_id, (x, y) in positions.items()
     ]
@@ -273,6 +359,9 @@ def build_snapshot(
     session.committed = dict(positions)
     session.committed_states = dict(states)
     session.committed_dormancy = dict(dormant)
+    session.committed_biology = {
+        sid: tuple(round(v, 1) for v in vals) for sid, vals in biology.items()
+    }
     session.touch()
     return frame
 
@@ -284,6 +373,7 @@ async def flush(
     send: SendFn,
     states: dict[str, str] | None = None,
     dormant: dict[str, bool] | None = None,
+    biology: dict[str, tuple[float, float, float, float]] | None = None,
 ) -> str:
     async with session._lock:
         if session.pending_count() == 0:
@@ -307,12 +397,16 @@ async def flush(
             ops=ops,
         )
         await send(frame)
+        # Bubble ops are fire-and-forget: they go out on the wire but
+        # are stripped from the ring copy so resume never replays a
+        # stale bubble (see _bubble_op / notify_bubble).
+        ring_ops = [op for op in ops if op.get("op") != "bubble"]
         session.ring.append(
             {
                 "seq": frame["seq"],
                 "base_seq": frame["base_seq"],
                 "tick_id": tick_id,
-                "ops": ops,
+                "ops": ring_ops,
             }
         )
         session.next_seq += 1
@@ -321,6 +415,11 @@ async def flush(
             session.committed_states = dict(states)
         if dormant is not None:
             session.committed_dormancy = dict(dormant)
+        if biology is not None:
+            session.committed_biology = {
+                sid: tuple(round(v, 1) for v in vals)
+                for sid, vals in biology.items()
+            }
         session.slow_flushes = 0
         session.flush_interval = PUMP_INTERVAL_SECONDS
         session.touch()
@@ -378,6 +477,25 @@ class ViewportManager:
             return 0
         return self.notify_economy(row["owner_id"], soul_id, float(row["essence"]))
 
+    def notify_bubble(
+        self,
+        owner_id: str,
+        soul_id: str,
+        text: str,
+        kind: str = "speech",
+        solicited: bool = False,
+    ) -> int:
+        """Fan a transient speech-bubble op (issue #30) to an owner's
+        sessions. Bubbles are fire-and-forget: never diffed, never in
+        snapshots, never replayed on resume."""
+        count = 0
+        for session in self.sessions_for_owner(owner_id):
+            session.enqueue(
+                _bubble_op(soul_id, text, kind, solicited), _DOMAIN_PRIORITY
+            )
+            count += 1
+        return count
+
     async def resume(
         self,
         session: ViewportSession,
@@ -418,6 +536,7 @@ class ViewportManager:
             session.committed = dict(old.committed)
             session.committed_states = dict(old.committed_states)
             session.committed_dormancy = dict(old.committed_dormancy)
+            session.committed_biology = dict(old.committed_biology)
             session.touch()
         if old is not session:
             self.drop(old.conn_id)

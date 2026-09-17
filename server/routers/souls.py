@@ -7,6 +7,7 @@ import logging
 import math
 import secrets
 import time
+from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -16,7 +17,9 @@ from .. import dormancy
 from .. import intents
 from .. import persistence
 from .. import plots
-from ..models import FeedSoulRequest, SoulResponse, SoulUpdate
+from .. import quips
+from .. import viewport
+from ..models import FeedSoulRequest, QuipRequest, SoulResponse, SoulUpdate
 from ..rate_limit import market_write_limit, read_limit
 from ..world_tick import WorldTick
 from ..security import (
@@ -660,3 +663,152 @@ def feed_soul(
         status_code=_FEED_REJECTION_STATUS.get(reason, 400),
         detail=(record["result"] or {}).get("detail", reason),
     )
+
+
+@router.post("/{soul_id}/quip", dependencies=[Depends(market_write_limit)])
+def request_quip(
+    soul_id: str,
+    body: QuipRequest,
+    identity: UserIdentity = Depends(get_api_key),
+):
+    """Request a personalized quip from a soul (issue #30).
+
+    Budget: at most 3 personalized quips per soul per UTC day; the 4th
+    is rejected with 429 and a machine-readable reason the client must
+    surface. Price: a fixed QUIP_PRICE_ESSENCE debit, charged immediately
+    through the ledger before generation; insufficient essence is a 402.
+    Generation rides the #25 flash tier (tamer vault keys); with no keys
+    a labeled template fallback answers. The quip also goes out as a
+    solicited ``bubble`` viewport op so the client renders it.
+    """
+    with database.get_db() as conn:
+        row = conn.execute(
+            "SELECT soul_id, owner_id, custodian_id, name, species, "
+            "COALESCE(essence, 0.0) AS essence FROM souls WHERE soul_id = ?",
+            (soul_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Soul {soul_id} not found")
+    if identity.role == "user":
+        if soul_id != identity.id:
+            raise HTTPException(
+                status_code=403, detail="Soul-users may only quip as themselves"
+            )
+    else:
+        assert_custody(identity, row["custodian_id"] or row["owner_id"])
+
+    soul = dict(row)
+    day = quips.quip_day()
+    # Phase 1: atomically reserve a budget slot and verify funds under
+    # one BEGIN IMMEDIATE, so concurrent requests cannot overspend the
+    # daily budget. The reservation is released if generation or
+    # charging fails below.
+    with database.get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if quips.quips_remaining(conn, soul_id) <= 0:
+                conn.rollback()
+                resets_at = datetime.combine(
+                    datetime.now(timezone.utc).date() + timedelta(days=1),
+                    dtime.min,
+                    tzinfo=timezone.utc,
+                ).isoformat()
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "reason": "budget_exhausted",
+                        "message": "Quip budget exhausted: 3 personalized "
+                        "quips per soul per day.",
+                        "quips_remaining_today": 0,
+                        "resets_at": resets_at,
+                    },
+                )
+            balance = conn.execute(
+                "SELECT COALESCE(essence, 0.0) FROM souls WHERE soul_id = ?",
+                (soul_id,),
+            ).fetchone()[0]
+            if float(balance) < quips.QUIP_PRICE_ESSENCE:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "reason": "insufficient_essence",
+                        "message": "Not enough essence for a quip.",
+                        "price": quips.QUIP_PRICE_ESSENCE,
+                        "essence": float(balance),
+                    },
+                )
+            quips.record_quip(conn, soul_id, day)
+            used = quips.get_quip_count(conn, soul_id, day)
+            conn.commit()
+        except HTTPException:
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+    # Phase 2: generate outside the write lock (LLM calls take seconds).
+    try:
+        gen = quips.generate_quip(soul, body.prompt)
+    except Exception as exc:
+        with database.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                quips.release_quip(conn, soul_id, day)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "reason": "generation_failed",
+                "message": "Quip generation failed; budget slot released.",
+            },
+        ) from exc
+
+    # Phase 3: charge the fixed price and write the ledger/usage rows.
+    try:
+        with database.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                essence_left = quips.charge_for_quip(conn, soul_id)
+                quips.write_usage_row(conn, soul_id, gen)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+    except HTTPException as exc:
+        if "Insufficient essence" in str(exc.detail):
+            # Balance raced between reservation and charge: release the
+            # slot and report 402.
+            with database.get_db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    quips.release_quip(conn, soul_id, day)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "reason": "insufficient_essence",
+                    "message": "Not enough essence for a quip.",
+                    "price": quips.QUIP_PRICE_ESSENCE,
+                },
+            ) from exc
+        raise
+
+    owner_id = soul["owner_id"] or soul["custodian_id"] or ""
+    viewport.viewport.notify_bubble(
+        owner_id, soul_id, gen["text"], kind="quip", solicited=True
+    )
+    return {
+        "status": "success",
+        "soul_id": soul_id,
+        "quip": gen["text"],
+        "essence_debited": quips.QUIP_PRICE_ESSENCE,
+        "essence_remaining": essence_left,
+        "quips_used_today": used,
+        "quips_remaining_today": quips.QUIPS_PER_SOUL_PER_DAY - used,
+        "fallback_used": gen["fallback_used"],
+    }
