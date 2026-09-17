@@ -22,6 +22,7 @@ from fastapi import (
 from shared import protocol
 
 from .. import database
+from .. import intents
 from .. import viewport
 from ..managers import manager
 from ..models import WsTicketResponse
@@ -63,6 +64,102 @@ def _verify_hmac(hmac_key: str, payload: str, signature: str) -> bool:
     """Verify HMAC-SHA256 signature."""
     expected = hmac.new(hmac_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+def _intent_authn(message: dict, owner_id: str) -> tuple[dict | None, str | None]:
+    received_sig = message.get("signature")
+    session_id = message.get("session_id")
+    nonce = message.get("nonce")
+    if not received_sig or not session_id or not nonce:
+        return None, "Missing signature/session/nonce"
+    session = database.get_ws_session(session_id)
+    if not session or session["owner_id"] != owner_id:
+        return None, "Invalid session"
+    if not _verify_hmac(
+        session["hmac_key"], intents.canonical_intent(message), received_sig
+    ):
+        return None, "Invalid signature"
+    return session, None
+
+
+def _intent_custodian(identity: UserIdentity) -> str | None:
+    if identity.is_operator:
+        return None
+    return identity.custodian_id or identity.owner_id
+
+
+def _intent_ack(record: dict) -> dict:
+    ack_status = {"pending": "accepted"}.get(record["status"], record["status"])
+    return protocol.envelope(
+        protocol.MessageType.INTENT_ACK,
+        nonce=record["nonce"],
+        intent_id=record["intent_id"],
+        status=ack_status,
+    )
+
+
+async def _handle_intent(
+    websocket: WebSocket,
+    message: dict,
+    identity: UserIdentity,
+    owner_id: str,
+) -> None:
+    session, reason = _intent_authn(message, owner_id)
+    if session is None:
+        logger.warning(f"Intent auth failed from {owner_id}: {reason}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=reason)
+        return
+    session_id = session["session_id"]
+    nonce = message["nonce"]
+    if not database.validate_and_store_nonce(session_id, nonce):
+        existing = intents.get_intent_by_nonce(session_id, nonce)
+        if existing is not None:
+            await websocket.send_json(_intent_ack(existing))
+            return
+    kind = message.get("kind")
+    payload, error = intents.validate_payload(kind, message)
+    if error is not None:
+        await websocket.send_json(
+            protocol.envelope(
+                protocol.MessageType.ERROR,
+                code=error,
+                message=f"Intent rejected: {error}",
+                nonce=nonce,
+            )
+        )
+        return
+    soul_id = message.get("soul_id")
+    custodian = _intent_custodian(identity)
+    with database.get_db() as conn:
+        row = conn.execute(
+            "SELECT custodian_id, owner_id FROM souls WHERE soul_id = ?",
+            (soul_id,),
+        ).fetchone()
+    if row is None:
+        await websocket.send_json(
+            protocol.envelope(
+                protocol.MessageType.ERROR,
+                code="SOUL_NOT_FOUND",
+                message="Intent rejected: SOUL_NOT_FOUND",
+                nonce=nonce,
+            )
+        )
+        return
+    if custodian is not None and (row["custodian_id"] or row["owner_id"]) != custodian:
+        logger.warning(f"Spoofing attempt: {owner_id} intent for soul_id={soul_id}")
+        await websocket.send_json(
+            protocol.envelope(
+                protocol.MessageType.ERROR,
+                code="CUSTODY_DENIED",
+                message="Intent rejected: CUSTODY_DENIED",
+                nonce=nonce,
+            )
+        )
+        return
+    record = intents.enqueue_intent(
+        session_id, nonce, custodian, soul_id, kind, payload
+    )
+    await websocket.send_json(_intent_ack(record))
 
 
 def _current_tick_id(websocket: WebSocket) -> int:
@@ -162,6 +259,7 @@ async def websocket_presence(
                 protocol.MessageType.CONNECTED,
                 session_id=session_id,
                 conn_id=vp_session.conn_id,
+                hmac_key=hmac_key,
                 online_owners=[oid for oid in online if oid != owner_id],
             )
         )
@@ -220,129 +318,22 @@ async def websocket_presence(
                     continue
 
                 if msg_type == "soul_update":
-                    # Verify HMAC signature
-                    received_sig = message.get("signature")
-                    session_id_recv = message.get("session_id")
-                    nonce = message.get("nonce")
-                    if not received_sig or not session_id_recv or not nonce:
-                        logger.warning(
-                            f"Missing HMAC signature/session_id/nonce from {owner_id}"
-                        )
-                        await websocket.close(
-                            code=status.WS_1008_POLICY_VIOLATION,
-                            reason="Missing signature/session/nonce",
-                        )
-                        return
-
-                    session = database.get_ws_session(session_id_recv)
-                    if not session or session["owner_id"] != owner_id:
-                        logger.warning(
-                            f"Invalid session from {owner_id}: {session_id_recv}"
-                        )
-                        await websocket.close(
-                            code=status.WS_1008_POLICY_VIOLATION,
-                            reason="Invalid session",
-                        )
-                        return
-
-                    # Verify nonce (replay protection)
-                    if not database.validate_and_store_nonce(session_id_recv, nonce):
-                        logger.warning(
-                            f"Replay attack detected from {owner_id}: nonce={nonce}"
-                        )
-                        await websocket.close(
-                            code=status.WS_1008_POLICY_VIOLATION,
-                            reason="Replay detected",
-                        )
-                        return
-
-                    # Verify HMAC over the souls payload
-                    souls_payload = json.dumps(
-                        message.get("souls", []), separators=(",", ":")
-                    )
-                    if not _verify_hmac(
-                        session["hmac_key"], souls_payload, received_sig
-                    ):
-                        logger.warning(f"HMAC verification failed from {owner_id}")
-                        await websocket.close(
-                            code=status.WS_1008_POLICY_VIOLATION,
-                            reason="Invalid signature",
-                        )
-                        return
-
-                    souls = message.get("souls", [])
-                    if identity.is_user:
-                        for soul in souls:
-                            sid = soul.get("soul_id")
-                            if sid and sid not in owned_soul_ids:
-                                logger.warning(
-                                    f"Spoofing attempt: {owner_id} sent soul_id={sid} not owned"
-                                )
-                                await websocket.close(
-                                    code=status.WS_1008_POLICY_VIOLATION,
-                                    reason="Invalid soul_id",
-                                )
-                                return
-
-                    # Server-side movement validation
-                    validated_souls = []
-                    for soul in souls:
-                        sid = soul.get("soul_id")
-                        new_x = soul.get("x")
-                        new_y = soul.get("y")
-                        if sid and new_x is not None and new_y is not None:
-                            # Fetch previous position and stats from DB
-                            with database.get_db() as conn:
-                                cursor = conn.cursor()
-                                cursor.execute(
-                                    "SELECT position, stat_spe_base FROM souls WHERE soul_id = ?",
-                                    (sid,),
-                                )
-                                row = cursor.fetchone()
-                                if row:
-                                    import json as _json
-
-                                    prev_pos = (
-                                        _json.loads(row["position"])
-                                        if row["position"]
-                                        else [0, 0]
-                                    )
-                                    spe_stat = row["stat_spe_base"] or 0
-                                    prev_x, prev_y = (
-                                        float(prev_pos[0]),
-                                        float(prev_pos[1]),
-                                    )
-                                    # Use a reasonable dt estimate (client sends ~30Hz)
-                                    dt = 1.0 / 30.0
-                                    try:
-                                        clamped_x, clamped_y = (
-                                            database.validate_soul_movement(
-                                                sid,
-                                                prev_x,
-                                                prev_y,
-                                                float(new_x),
-                                                float(new_y),
-                                                dt,
-                                                spe_stat,
-                                            )
-                                        )
-                                        soul["x"] = clamped_x
-                                        soul["y"] = clamped_y
-                                    except ValueError as e:
-                                        logger.warning(
-                                            f"Movement validation failed for {sid}: {e}"
-                                        )
-                                        continue
-                        validated_souls.append(soul)
-
-                    await manager.broadcast(
+                    logger.warning(f"Removed channel used by {owner_id}: soul_update")
+                    await websocket.send_json(
                         protocol.envelope(
-                            protocol.MessageType.SOUL_UPDATED,
-                            owner_id=owner_id,
-                            souls=validated_souls,
-                        ),
-                        exclude=owner_id,
+                            protocol.MessageType.ERROR,
+                            code="CHANNEL_REMOVED",
+                            message=(
+                                "soul_update removed: express intent with "
+                                "'intent' frames"
+                            ),
+                        )
                     )
+                    continue
+
+                if msg_type == "intent":
+                    await _handle_intent(websocket, message, identity, owner_id)
+                    continue
             except json.JSONDecodeError:
                 pass
             except Exception as e:

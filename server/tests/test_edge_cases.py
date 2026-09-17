@@ -117,23 +117,31 @@ def test_operator_delete_reply(client: TestClient, register_soul):
 
 
 @pytest.mark.anyio
-async def test_websocket_soul_update(client: TestClient):
-    # Test lines 705-721: soul_update message in WS
-    with client.websocket_connect("/ws/user1") as ws1:
-        ws1.receive_json()  # connection msg
-
-        with client.websocket_connect("/ws/user2") as ws2:
-            ws2.receive_json()  # connection msg
-            ws1.receive_json()  # user2 online msg
-
-            # Send soul_update from user2
-            ws2.send_json({"type": "soul_update", "souls": [{"soul_id": "1"}]})
-
-            # ws1 should receive soul_updated
-            data = ws1.receive_json()
-            assert data["type"] == "soul_updated"
-            assert data["owner_id"] == "user2"
-            assert data["souls"] == [{"soul_id": "1"}]
+async def test_websocket_soul_update_removed(client: TestClient):
+    # The legacy upstream state-push channel was deleted (issue #14):
+    # soul_update now yields an explicit CHANNEL_REMOVED rejection, never
+    # a state change, and the connection stays alive.
+    with client.websocket_connect("/ws/user1") as ws:
+        ws.receive_json()
+        assert ws.receive_json()["type"] == "snapshot"
+        ws.send_json(
+            {
+                "v": 1,
+                "type": "soul_update",
+                "souls": [{"soul_id": "1", "x": 999.0, "y": 999.0}],
+            }
+        )
+        err = None
+        for _ in range(5):
+            frame = ws.receive_json()
+            if frame.get("type") == "error":
+                err = frame
+                break
+        assert err is not None
+        assert err["code"] == "CHANNEL_REMOVED"
+        # Connection stays alive (ping/pong to verify)
+        ws.send_text("ping")
+        assert ws.receive_text() == "pong"
 
 
 @pytest.mark.anyio

@@ -81,7 +81,6 @@ class SoulscapeApp:
         self.last_save_time: float = time.time()
         self.last_topmost_time: float = time.time()
         self._is_saving_souls: bool = False  # Lock for background saves
-        self._force_broadcast: bool = False  # Force sync when peers join
 
         # Dirty-driven render loop: scene only redraws when flagged dirty.
         self.dirty_tracker = DirtyTracker()
@@ -146,10 +145,6 @@ class SoulscapeApp:
         self.scene_renderer = SceneRenderer()
         self.input_router = InputRouter()
 
-        # Real-time sync tracking
-        self.last_broadcast_time = time.time()
-        self.soul_last_broadcast_pos = {}  # type: dict[str, tuple[float, float]]
-
         # Apply initial aura visibility
         self.scene_renderer.aura_visible = self.global_aura_visible
 
@@ -213,17 +208,21 @@ class SoulscapeApp:
             )
 
             if target_soul:
-                # Only allow interaction if we own this soul
-                if target_soul.owner_id != self.instance_id:
-                    return None
+                if self.viewport_mode:
+                    if button == pyglet.window.mouse.LEFT:
+                        self.input_router.dragged_soul = target_soul
+                else:
+                    # Only allow interaction if we own this soul
+                    if target_soul.owner_id != self.instance_id:
+                        return None
 
-                # Dispatch to target
-                target_soul.on_mouse_press(
-                    x, y, button, modifiers, self.overlay_window.height
-                )
-                # Store as dragged soul if left click
-                if button == pyglet.window.mouse.LEFT:
-                    self.input_router.dragged_soul = target_soul
+                    # Dispatch to target
+                    target_soul.on_mouse_press(
+                        x, y, button, modifiers, self.overlay_window.height
+                    )
+                    # Store as dragged soul if left click
+                    if button == pyglet.window.mouse.LEFT:
+                        self.input_router.dragged_soul = target_soul
             else:
                 # Clicked on empty space
                 # If we have an "on_click_empty" handler in router, use it
@@ -235,6 +234,8 @@ class SoulscapeApp:
             x: int, y: int, dx: int, dy: int, buttons: int, modifiers: int
         ) -> None:
             """Pyglet event handler for mouse drag events."""
+            if self.viewport_mode:
+                return
             if self.input_router.dragged_soul:
                 self.input_router.dragged_soul.on_mouse_drag(
                     x, y, dx, dy, buttons, modifiers, self.overlay_window.height
@@ -243,11 +244,17 @@ class SoulscapeApp:
         @self.overlay_window.event
         def on_mouse_release(x: int, y: int, button: int, modifiers: int) -> None:
             """Pyglet event handler for mouse release events."""
-            if self.input_router.dragged_soul:
-                self.input_router.dragged_soul.on_mouse_release(
+            dragged = self.input_router.dragged_soul
+            if dragged is None:
+                return
+            if self.viewport_mode:
+                if button == pyglet.window.mouse.LEFT:
+                    self.send_move_intent(dragged, x, y)
+            else:
+                dragged.on_mouse_release(
                     x, y, button, modifiers, self.overlay_window.height
                 )
-                self.input_router.dragged_soul = None
+            self.input_router.dragged_soul = None
 
     def _gate_draw_on_dirty(self) -> None:
         """Wrap the Pyglet window draw so GL work only happens when dirty.
@@ -364,13 +371,6 @@ class SoulscapeApp:
                 soul.to_dict(include_secret=True) for soul in owned_souls
             ]
 
-            # 2. Network Broadcast Data (Excludes Secrets - Public)
-            network_data = [soul.to_dict(include_secret=False) for soul in owned_souls]
-
-            # Broadcast update via NetworkService Upstream Queue
-            if network_data:
-                self.network_service.enqueue_update({"souls": network_data})
-
             await async_save_souls(persistence_data, owner_id=self.instance_id)
 
             # Also save global settings
@@ -482,7 +482,7 @@ class SoulscapeApp:
                 soul = Soul.from_dict(
                     data=soul_data,
                     on_right_click=self.handle_soul_right_click,
-                    on_move_end=self.persist_souls_state,
+                    on_move_end=self._on_soul_move_end,
                     on_state_change=self.persist_souls_state,
                     on_async_state_change=self.async_persist_souls_state,
                     soul_registry=self.active_souls,
@@ -508,37 +508,6 @@ class SoulscapeApp:
         # 2. Update Simulation
         for soul in self.active_souls:
             soul.update(dt)
-
-        # 3. Real-time Broadcast (Upstream)
-        now = time.time()
-        if self._force_broadcast or (now - self.last_broadcast_time > 0.2):
-            if self._force_broadcast:
-                self.soul_last_broadcast_pos.clear()
-                self._force_broadcast = False
-
-            local_souls = [
-                s for s in self.active_souls if s.owner_id == self.instance_id
-            ]
-            updates = []
-            for soul in local_souls:
-                last_pos = self.soul_last_broadcast_pos.get(
-                    soul.biology.soul_id, (None, None)
-                )
-                if (
-                    last_pos[0] is None
-                    or abs(soul.x - (last_pos[0] or 0)) > 1.0
-                    or abs(soul.y - (last_pos[1] or 0)) > 1.0
-                ):
-                    updates.append(soul.to_dict(include_secret=False))
-                    self.soul_last_broadcast_pos[soul.biology.soul_id] = (
-                        soul.x,
-                        soul.y,
-                    )
-
-            if updates:
-                self.network_service.enqueue_update({"souls": updates})
-
-            self.last_broadcast_time = now
 
         # ... (periodic save/topmost unchanged) ...
         if time.time() - self.last_save_time > 30:
@@ -595,7 +564,7 @@ class SoulscapeApp:
                     "owner_id": "hub",
                 },
                 on_right_click=self.handle_soul_right_click,
-                on_move_end=self.persist_souls_state,
+                on_move_end=self._on_soul_move_end,
                 on_state_change=self.persist_souls_state,
                 on_async_state_change=self.async_persist_souls_state,
                 soul_registry=self.active_souls,
@@ -672,7 +641,7 @@ class SoulscapeApp:
             orb_color_rgb=orb_color,
             aura_color_rgb=aura_color,
             on_right_click=self.handle_soul_right_click,
-            on_move_end=self.persist_souls_state,
+            on_move_end=self._on_soul_move_end,
             on_state_change=self.persist_souls_state,
             on_async_state_change=self.async_persist_souls_state,
             initial_position=position,
@@ -688,6 +657,23 @@ class SoulscapeApp:
         self.dirty_tracker.mark_dirty()
         self.persist_souls_state()
         return soul
+
+    def send_move_intent(self, soul: Soul, screen_x: float, screen_y: float) -> None:
+        if not self.viewport_mode or self.viewport_mapper is None:
+            return
+        display = pyglet.display.get_display().get_default_screen()
+        wx, wy = self.viewport_mapper.screen_to_world(
+            float(screen_x), float(screen_y), display.width, display.height
+        )
+        soul_id = soul.biology.soul_id
+        log.debug(f"Sending move_to intent for {soul_id} to ({wx:.1f}, {wy:.1f})")
+        self.network_service.send_intent("move_to", soul_id, x=wx, y=wy)
+
+    def _on_soul_move_end(self, soul: Soul, x: float, y: float) -> None:
+        if self.viewport_mode:
+            self.send_move_intent(soul, x, y)
+        else:
+            self.persist_souls_state()
 
     def handle_soul_right_click(self, soul: Soul, screen_x: int, screen_y: int) -> None:
         """Callback for soul right-click events."""
@@ -813,7 +799,7 @@ class SoulscapeApp:
                 soul = Soul.from_dict(
                     data=soul_data,
                     on_right_click=self.handle_soul_right_click,
-                    on_move_end=self.persist_souls_state,
+                    on_move_end=self._on_soul_move_end,
                     on_state_change=self.persist_souls_state,
                     on_async_state_change=self.async_persist_souls_state,
                     soul_registry=self.active_souls,

@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import re
 import threading
 from typing import Any, Dict, List, Optional
@@ -26,9 +27,7 @@ class NetworkService:
         self.owner_id = owner_id
         self.viewport_consumer = viewport_consumer
 
-        # Upstream: Client -> Hub
         # Downstream: Hub -> Client (Commands)
-        self._upstream_queue: asyncio.Queue = asyncio.Queue()
         self.command_queue: CommandQueue = CommandQueue()
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -88,14 +87,16 @@ class NetworkService:
             if self._loop:
                 self._loop.stop()
 
-    def enqueue_update(self, data: Dict[str, Any]) -> None:
-        """Non-blocking push of data to the upstream queue (called from Main Thread)."""
-        if self._loop and self._running:
-            # We use run_coroutine_threadsafe to interact with the async queue from main thread
-            asyncio.run_coroutine_threadsafe(
-                self._upstream_queue.put(data), self._loop
-            )
-
+    def send_intent(
+        self, kind: str, soul_id: str, **fields: Any
+    ) -> concurrent.futures.Future | None:
+        if not self._running or not self._loop:
+            log.warning("send_intent dropped: network service not running")
+            return None
+        return asyncio.run_coroutine_threadsafe(
+            self.presence_manager.send_intent(kind, soul_id, **fields),
+            self._loop,
+        )
 
     # --- Async Callbacks (Run in Background Loop) ---
     # These push events to the thread-safe queue for the Main Thread to consume
@@ -103,20 +104,14 @@ class NetworkService:
     async def _on_connect(self, online_owners: List[str]) -> None:
         # Reconcile all remote souls at once instead of individual online events
         valid_owners = [o for o in online_owners if self._is_valid_owner(o)]
-        self.command_queue.put(
-            PresenceReconcileCommand(online_owners=valid_owners)
-        )
+        self.command_queue.put(PresenceReconcileCommand(online_owners=valid_owners))
 
     async def _on_owner_online(self, owner_id: str) -> None:
         if not self._is_valid_owner(owner_id):
-            log.warning(
-                f"Invalid owner_id received in online event: {owner_id}"
-            )
+            log.warning(f"Invalid owner_id received in online event: {owner_id}")
             return
 
-        self.command_queue.put(
-            OwnerPresenceCommand(owner_id=owner_id, action="online")
-        )
+        self.command_queue.put(OwnerPresenceCommand(owner_id=owner_id, action="online"))
 
         try:
             # Fetch remote souls directly here
@@ -138,9 +133,7 @@ class NetworkService:
     async def _on_soul_updated(self, souls: List[Dict], owner_id: str) -> None:
         if not self._is_valid_owner(owner_id):
             return
-        self.command_queue.put(
-            StateUpdateCommand(souls_data=souls, owner_id=owner_id)
-        )
+        self.command_queue.put(StateUpdateCommand(souls_data=souls, owner_id=owner_id))
 
     async def _on_viewport_frame(self, frame: Dict[str, Any]) -> None:
         if self.viewport_consumer is not None:
@@ -158,35 +151,9 @@ class NetworkService:
         # Start the Presence Manager
         self._loop.create_task(self.presence_manager.connect())
 
-        # Start the Upstream Processor
-        self._loop.create_task(self._process_upstream())
-
         try:
             self._loop.run_forever()
         except Exception as e:
             log.error(f"NetworkService loop crashed: {e}")
         finally:
             self._loop.close()
-
-    async def _process_upstream(self) -> None:
-        """Consumes updates from the upstream queue and sends them to the Hub."""
-        log.info("NetworkService: Upstream worker started.")
-        while self._running:
-            try:
-                # Get data from async queue
-                data = await self._upstream_queue.get()
-
-                # Check message type or just assume soul update?
-                # For now we assume typical soul update structure or handle generic types
-                # Using PresenceManager.send_update for souls
-
-                if "souls" in data:
-                    await self.presence_manager.send_update(data["souls"])
-
-                self._upstream_queue.task_done()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log.error(f"NetworkService: Upstream error: {e}")
-                await asyncio.sleep(1.0)  # Backoff
-                break

@@ -352,5 +352,24 @@ class TestViewportFrameCommand(unittest.IsolatedAsyncioTestCase):
         command.execute(object())
 
 
+class TestScreenToWorld(unittest.TestCase):
+    def test_round_trip(self):
+        mapper = ViewportMapper()
+        mapper.set_region(0.0, 0.0, 1920.0, 1080.0)
+        for wx, wy in [(100.0, 200.0), (0.0, 0.0), (1920.0, 1080.0)]:
+            sx, sy = mapper.world_to_screen(wx, wy, 1920.0, 1080.0)
+            rx, ry = mapper.screen_to_world(sx, sy, 1920.0, 1080.0)
+            self.assertAlmostEqual(rx, wx, places=6)
+            self.assertAlmostEqual(ry, wy, places=6)
+
+    def test_inverse_with_slack_axis(self):
+        mapper = ViewportMapper()
+        mapper.set_region(0.0, 0.0, 1920.0, 1080.0)
+        sx, sy = mapper.world_to_screen(960.0, 540.0, 2560.0, 1080.0)
+        wx, wy = mapper.screen_to_world(sx, sy, 2560.0, 1080.0)
+        self.assertAlmostEqual(wx, 960.0, places=6)
+        self.assertAlmostEqual(wy, 540.0, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

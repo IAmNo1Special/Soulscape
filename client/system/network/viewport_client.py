@@ -269,3 +269,13 @@ class ViewportMapper:
             (wx - vx) / vw * monitor_w,
             (wy - vy) / vh * monitor_h,
         )
+
+    def screen_to_world(
+        self, sx: float, sy: float, monitor_w: float, monitor_h: float
+    ) -> tuple[float, float]:
+        """Inverse of world_to_screen: monitor pixels to Hub world coords."""
+        vx, vy, vw, vh = self.visible_world(monitor_w, monitor_h)
+        return (
+            vx + sx / monitor_w * vw,
+            vy + sy / monitor_h * vh,
+        )

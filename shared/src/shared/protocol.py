@@ -15,6 +15,7 @@ class MessageType(str, Enum):
     SNAPSHOT = "snapshot"
     DELTA = "delta"
     INTENT = "intent"
+    INTENT_ACK = "intent_ack"
     PING = "ping"
     PONG = "pong"
     ERROR = "error"

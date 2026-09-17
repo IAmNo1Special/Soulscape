@@ -714,6 +714,25 @@ def init_db():
                     expires_at REAL NOT NULL
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS intents (
+                    intent_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    nonce TEXT NOT NULL,
+                    custodian_id TEXT,
+                    soul_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at REAL NOT NULL,
+                    result TEXT,
+                    UNIQUE (session_id, nonce)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_intents_status
+                ON intents(status, created_at)
+            """)
             _migrate_souls(cursor)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
@@ -737,6 +756,7 @@ def _migrate_souls(cursor) -> None:
     _add_column_if_missing(cursor, "souls", "updated_at REAL")
     _add_column_if_missing(cursor, "souls", "velocity TEXT")
     _add_column_if_missing(cursor, "souls", "custodian_id TEXT")
+    _add_column_if_missing(cursor, "souls", "move_target TEXT")
     cursor.execute(
         "UPDATE souls SET custodian_id = owner_id "
         "WHERE custodian_id IS NULL AND owner_id IS NOT NULL"

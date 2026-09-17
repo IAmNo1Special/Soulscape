@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -54,6 +55,9 @@ async def lifespan(app: FastAPI):
 
     app.state.world_tick = WorldTick()
     if hub_authoritative_enabled():
+        recovered = await asyncio.to_thread(app.state.world_tick.pump_intents)
+        if recovered:
+            logger.info("boot recovery: adjudicated %d pending intents", recovered)
         logger.info("hub_authoritative=1: starting world tick at %d Hz", TICK_HZ)
         await app.state.world_tick.start()
     else:
