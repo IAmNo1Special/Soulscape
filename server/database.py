@@ -768,6 +768,63 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_llm_usage_soul
                 ON llm_usage(soul_id)
             """)
+            # Memory tiers (issue #26): episodic log, weekly digests,
+            # SQLite-backed semantic store. vocab_version stamps every
+            # row so memories stay interpretable across vocabulary
+            # bumps. "Per-soul collections" = logical partitioning by
+            # soul_id (see server/agents/memory.py for the rationale).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS episodes (
+                    episode_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    ts REAL NOT NULL,
+                    kind TEXT NOT NULL,
+                    salience REAL NOT NULL DEFAULT 0.5,
+                    content TEXT NOT NULL DEFAULT '',
+                    vocab_version INTEGER NOT NULL DEFAULT 1,
+                    summarized INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_episodes_soul
+                ON episodes(soul_id, summarized, ts)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS weekly_digests (
+                    digest_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    week_start REAL NOT NULL,
+                    digest_text TEXT NOT NULL DEFAULT '',
+                    episode_count INTEGER NOT NULL DEFAULT 0,
+                    kept_count INTEGER NOT NULL DEFAULT 0,
+                    vocab_version INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    UNIQUE (soul_id, week_start)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_digests_soul
+                ON weekly_digests(soul_id, week_start)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS semantic_memories (
+                    memory_id TEXT PRIMARY KEY,
+                    soul_id TEXT NOT NULL,
+                    episode_id INTEGER,
+                    text TEXT NOT NULL DEFAULT '',
+                    embedding BLOB NOT NULL,
+                    dim INTEGER NOT NULL DEFAULT 256,
+                    salience REAL NOT NULL DEFAULT 0.5,
+                    kind TEXT NOT NULL DEFAULT '',
+                    tags TEXT NOT NULL DEFAULT '[]',
+                    created_at REAL NOT NULL,
+                    vocab_version INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_semmem_soul
+                ON semantic_memories(soul_id, created_at)
+            """)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS intents (
                     intent_id TEXT PRIMARY KEY,

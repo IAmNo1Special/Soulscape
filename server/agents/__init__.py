@@ -28,6 +28,11 @@ pool:       bounded async pool; execution-time revalidation just before
 deliberation: #25 LLM tier: escalation triggers promote thinks,
             flash/pro routing, token-capped prompts, structured JSON
             outputs, provider fallback chain, llm_usage metering.
+memory:     #26 memory tiers: volatile working memory (observation/
+            intent/rationale deques + the #24 sensation ring),
+            durable episodic log with nightly summarizer -> weekly
+            digests, SQLite-backed semantic store with metadata-first
+            retrieval, restart-wake context. Every row vocab-stamped.
 
 Design decisions
 ---------------
@@ -46,12 +51,23 @@ Design decisions
   sensation "no food in sight" and emits nothing.
 """
 
-from . import consume, deliberation, drives, pool, reflex, scheduler, sensations, vocab
+from . import (
+    consume,
+    deliberation,
+    drives,
+    memory,
+    pool,
+    reflex,
+    scheduler,
+    sensations,
+    vocab,
+)
 
 __all__ = [
     "consume",
     "deliberation",
     "drives",
+    "memory",
     "pool",
     "reflex",
     "scheduler",

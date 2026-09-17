@@ -34,7 +34,7 @@ import secrets
 import time
 
 from .. import biology, database, dormancy, intents, persistence
-from . import drives, reflex, scheduler, sensations, vocab
+from . import drives, memory, reflex, scheduler, sensations, vocab
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -47,6 +47,31 @@ MAX_CONCURRENT_THINKS = 8
 #: Essence price the revalidation gate checks for paid vocab actions
 #: the pool can emit in v0. claim_plot's ring-priced fee is #25 scope.
 _PAID_ACTIONS = {"post": 20.0, "reply": 8.0}
+
+
+def _observation_line(row: dict, drive_vec: dict, observations: list) -> str:
+    """One-line working-memory rendering of a think's observation."""
+    nearest = ""
+    if observations:
+        first = sorted(observations, key=lambda o: float(o.get("distance", 1e9)))[0]
+        nearest = (
+            f"; nearest {first.get('kind', '?')} "
+            f"{float(first.get('distance', 0.0)):.0f}wu"
+        )
+    drives_txt = ",".join(f"{k}={v:.2f}" for k, v in sorted(drive_vec.items()))
+    return (
+        f"satiety {row.get('satiety')} hydration {row.get('hydration')} "
+        f"hp {row.get('hp')} essence {row.get('essence')}{nearest}; "
+        f"drives {drives_txt}"
+    )[:280]
+
+
+def _reflex_summary(result: dict) -> str:
+    actions = [str(e.get("action")) for e in result.get("intents", [])]
+    if actions:
+        return "reflex fired: " + ", ".join(actions)
+    texts = [str(s.get("text", "")) for s in result.get("sensations", [])][:2]
+    return "reflex noted: " + "; ".join(texts) if texts else "reflex think"
 
 
 def _as_pair(raw) -> tuple[float, float] | None:
@@ -303,17 +328,52 @@ class AgentPool:
         observation["sensations"] = sensations.recent(soul_id)
         observation["emote"] = result["emote"] or reflex.emote_of(soul_id)
         self._observations[soul_id] = observation
+        # #26: the observation joins volatile working memory.
+        memory.remember_working(
+            soul_id,
+            {
+                "kind": "observation",
+                "text": _observation_line(row, drive_vec, observations),
+                "at": now,
+            },
+        )
         enqueued: list[str] = []
+        enqueued_actions: list[tuple[str, str]] = []
         for emitted in result["intents"]:
+            action = str(emitted.get("action"))
             intent_id = self.validate_and_enqueue(
                 soul_id,
-                str(emitted.get("action")),
+                action,
                 emitted.get("payload") or {},
                 provider,
                 tick_id,
             )
             if intent_id is not None:
                 enqueued.append(intent_id)
+                enqueued_actions.append((action, intent_id))
+                memory.remember_working(
+                    soul_id,
+                    {
+                        "kind": "intent",
+                        "text": f"enqueued {action} ({intent_id[:8]})",
+                        "at": now,
+                    },
+                )
+        # #26: notable reflex firings become episodic rows. Salience-
+        # gated: a quiet think (nothing emitted, no sensations) writes
+        # nothing -- not every tick becomes a memory.
+        if result["intents"] or result["sensations"]:
+            memory.log_episode(
+                soul_id,
+                "reflex",
+                {
+                    "summary": _reflex_summary(result),
+                    "actions": [a for a, _ in enqueued_actions],
+                    "sensations": [s["text"] for s in result["sensations"]][:4],
+                    "enqueued": enqueued,
+                },
+                salience=0.6 if result["intents"] else 0.45,
+            )
         self.think_scheduler.schedule_next(soul_id, now)
         return {
             "soul_id": soul_id,
@@ -370,6 +430,26 @@ class AgentPool:
             summary["deliberation"] = "heuristic_fallback"
             summary["degraded_reason"] = result.get("degraded_reason")
             return summary
+        # #26: the deliberation itself is episodic memory (rationale
+        # included); the rationale also joins working memory.
+        rationale = str(result.get("rationale") or "")
+        memory.log_episode(
+            soul_id,
+            "deliberation",
+            {
+                "summary": rationale[:200],
+                "rationale": rationale[:1000],
+                "intents": [a for a, _ in result.get("intents", [])],
+                "tier": result.get("tier"),
+                "escalation": escalation,
+            },
+            salience=0.8,
+        )
+        if rationale:
+            memory.remember_working(
+                soul_id,
+                {"kind": "rationale", "text": rationale[:280], "at": now},
+            )
         enqueued: list[str] = []
         for action, payload in result.get("intents", []):
             intent_id = self.validate_and_enqueue(

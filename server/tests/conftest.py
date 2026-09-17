@@ -77,16 +77,23 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM plots")
     cursor.execute("DELETE FROM llm_keys")
     cursor.execute("DELETE FROM llm_usage")
+    cursor.execute("DELETE FROM episodes")
+    cursor.execute("DELETE FROM weekly_digests")
+    cursor.execute("DELETE FROM semantic_memories")
     # The journal is append-only in production, so recovery treats its seq
     # column as gapless. Reset the AUTOINCREMENT sequences too, or a test that
     # leaves journal/snapshot rows behind would hand the next test a journal
     # that starts mid-sequence and looks corrupt.
-    cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('journal', 'snapshots')")
+    cursor.execute(
+        "DELETE FROM sqlite_sequence WHERE name IN "
+        "('journal', 'snapshots', 'episodes', 'weekly_digests')"
+    )
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'essence_fund'")
     cursor.execute("UPDATE globals SET value = 0.0 WHERE key = 'plot_claim_seq'")
     cursor.execute(
         "DELETE FROM globals WHERE key = 'ledger_fund_baseline' "
-        "OR key LIKE 'ledger_base:%'"
+        "OR key LIKE 'ledger_base:%' "
+        "OR key = 'memory_last_summarize_at'"
     )
     db_conn.commit()
     from .. import plots
@@ -96,6 +103,15 @@ def clear_db(db_conn):
     from .. import persistence
 
     persistence.dirty.clear()
+    from ..agents import memory as _memory
+
+    _memory.reset_volatile()
+    from ..agents import sensations as _sensations
+
+    _sensations.clear()
+    from ..agents import deliberation as _deliberation
+
+    _deliberation.clear_identity_cache()
     from ..routers.marketplace import _marketplace_cache
 
     _marketplace_cache["timestamp"] = 0.0

@@ -218,6 +218,19 @@ class WorldTick:
         except Exception:
             conn.rollback()
             raise
+        # #26: rejections are notable intent outcomes (salience-gated:
+        # adjudications are too frequent to log; rejections are rare).
+        agents.memory.log_episode(
+            intent["soul_id"],
+            "intent_outcome",
+            {
+                "summary": f"intent {intent['kind']} rejected: {reason}",
+                "intent_id": intent["intent_id"],
+                "kind": intent["kind"],
+                "reason": reason,
+            },
+            salience=0.6,
+        )
 
     def _adjudicate_move_to(self, intent: dict) -> None:
         intent_id = intent["intent_id"]
@@ -340,6 +353,9 @@ class WorldTick:
 
     def step(self) -> int:
         with self._step_lock:
+            # #26: cheap nightly-summarizer check (in-memory guard;
+            # hits the DB at most once per hour).
+            agents.memory.tick_maintenance()
             self.pump_intents()
             if (self.tick_id + 1) % biology.BIOLOGY_EVERY_TICKS == 0:
                 # 0.1 Hz server-side biology: needs decay, starvation-only

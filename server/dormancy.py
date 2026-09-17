@@ -209,6 +209,25 @@ def note_essence_change(
             essence_before,
             essence_after,
         )
+    # #26: dormancy transitions are high-salience episodic rows, in
+    # the caller's transaction. Lazy import: server.agents.pool
+    # imports dormancy, so this must stay deferred.
+    from .agents import memory as _memory
+
+    _memory.log_episode(
+        soul_id,
+        "dormancy",
+        {
+            "summary": f"{'froze into' if now_dormant else 'woke from'} "
+            f"dormancy (essence {essence_before:.0f} -> "
+            f"{essence_after:.0f})",
+            "transition": "dormant" if now_dormant else "woke",
+            "essence_before": essence_before,
+            "essence_after": essence_after,
+        },
+        salience=0.7,
+        conn=conn,
+    )
     return now_dormant, True
 
 

@@ -74,6 +74,13 @@ async def lifespan(app: FastAPI):
         recovered = await asyncio.to_thread(tick.pump_intents)
         if recovered:
             logger.info("boot recovery: adjudicated %d pending intents", recovered)
+        # #26: boot catch-up for the nightly memory summarizer (runs
+        # only when >24h since the last run).
+        from .agents import memory as _memory
+
+        maint = await asyncio.to_thread(_memory.tick_maintenance)
+        if maint.get("ran"):
+            logger.info("boot: memory summarizer ran: %s", maint.get("report"))
         logger.info("hub_authoritative=1: starting world tick at %d Hz", TICK_HZ)
         await app.state.world_tick.start()
     else:

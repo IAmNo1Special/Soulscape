@@ -36,9 +36,12 @@ Tier routing (documented rule):
 
 Token-capped prompt assembly (<=800 tokens):
   identity (cached per soul, never truncated) + optional tamer order
-  + working memory (recent sensations, newest first) + observation
-  (drives, wallet, nearest detail entities) + priced action menu.
-  Semantic memory is a documented stub (#26 plugs retrieval in).
+  + long-term memory (#26: restart-wake block once per boot, then
+  per-query semantic memories + working notes) + working memory
+  (recent sensations, newest first) + observation (drives, wallet,
+  nearest detail entities) + priced action menu. Semantic retrieval
+  is agents/memory.py's metadata-first store (the old documented
+  stub now delegates to it).
   Token counting is estimate_tokens(): ceil(chars/4). The estimator
   is conservative for English prose (~4.7 chars/token on cl100k-like
   tokenizers) and assembly targets a 760-token soft budget, leaving a
@@ -85,7 +88,7 @@ import time
 import urllib.request
 
 from .. import database, key_vault, persistence, plots
-from . import drives, reflex, scheduler, sensations, vocab
+from . import drives, memory, reflex, scheduler, sensations, vocab
 from . import pool as agent_pool
 
 logger = logging.getLogger("soulscape_hub")
@@ -247,12 +250,14 @@ def clear_identity_cache(soul_id: str | None = None) -> None:
 
 
 def retrieve_semantic(soul_id: str, query: str = "") -> list[str]:
-    """Semantic memory retrieval. STUB for #26.
+    """Semantic memory retrieval (#26).
 
-    Returns [] until memory tiers land; the assembly slot is reserved
-    here so #26 plugs retrieval in without touching the assembler.
+    Was a documented stub; now delegates to the SQLite-backed
+    semantic store in agents/memory.py: metadata pre-filter
+    (soul, 30d recency, salience >= 0.3), then combined
+    cosine/salience/recency/kind ranking. Returns top-k texts.
     """
-    return []
+    return memory.retrieve_semantic(soul_id, query)
 
 
 def action_menu() -> list[tuple[str, str]]:
@@ -303,14 +308,18 @@ def assemble_prompt(
     observations: list[dict] | None = None,
     drive_vec: dict[str, float] | None = None,
     tamer_order: str | None = None,
+    memory_block: str | None = None,
 ) -> tuple[str, dict]:
     """Assemble the one-shot prompt, measured, within the token cap.
 
     Returns (prompt, report). report carries prompt_tokens, the
-    per-section token counts, and what got truncated. Truncation
+    per-section token counts, and what got truncated. memory_block is
+    the pre-composed LONG-TERM MEMORY section (#26: restart-wake
+    block + semantic memories + working notes), or None. Truncation
     order: observations (farthest first), then working memory (oldest
-    first); identity, order, and the action menu are never truncated.
-    The measured total is asserted <= PROMPT_TOKEN_CAP.
+    first), then the long-term memory block; identity, order, and the
+    action menu are never truncated. The measured total is asserted
+    <= PROMPT_TOKEN_CAP.
     """
     sensations_list = sensations_list or []
     observations = observations or []
@@ -322,7 +331,7 @@ def assemble_prompt(
     menu_lines = [f"- {action} ({price})" for action, price in action_menu()]
     menu_block = "ACTION MENU (essence cost):\n" + "\n".join(menu_lines)
 
-    def _body(n_sens: int, n_obs: int) -> str:
+    def _body(n_sens: int, n_obs: int, keep_memory: bool) -> str:
         drives_txt = ", ".join(f"{k}={v:.2f}" for k, v in sorted(drive_vec.items()))
         obs_block = (
             "OBSERVATION:\n"
@@ -333,13 +342,15 @@ def assemble_prompt(
             f"drives: {drives_txt}\n"
             f"entities seen:\n{_format_observations(observations, n_obs)}"
         )
-        mem_block = "WORKING MEMORY (recent sensations):\n" + _format_memory(
+        working_block = "WORKING MEMORY (recent sensations):\n" + _format_memory(
             sensations_list, n_sens
         )
         sections = [identity]
         if order_block:
             sections.append(order_block)
-        sections += [mem_block, obs_block, menu_block]
+        if keep_memory and memory_block:
+            sections.append("LONG-TERM MEMORY:\n" + memory_block[:1600])
+        sections += [working_block, obs_block, menu_block]
         contract = (
             "Respond with JSON ONLY, no prose: "
             '{"intents": [{"action": "<menu action>", '
@@ -350,16 +361,22 @@ def assemble_prompt(
         return "\n\n".join(sections) + "\n\n" + contract
 
     n_sens, n_obs = 6, 12
-    prompt = _body(n_sens, n_obs)
-    truncated = {"sensations": 0, "observations": 0}
-    while estimate_tokens(prompt) > PROMPT_SOFT_BUDGET and (n_obs > 0 or n_sens > 0):
+    keep_memory = True
+    prompt = _body(n_sens, n_obs, keep_memory)
+    truncated = {"sensations": 0, "observations": 0, "memory": 0}
+    while estimate_tokens(prompt) > PROMPT_SOFT_BUDGET and (
+        n_obs > 0 or n_sens > 0 or keep_memory
+    ):
         if n_obs > 0:
             n_obs = max(0, n_obs - 4)
             truncated["observations"] += 1
         elif n_sens > 0:
             n_sens = max(0, n_sens - 2)
             truncated["sensations"] += 1
-        prompt = _body(n_sens, n_obs)
+        elif keep_memory:
+            keep_memory = False
+            truncated["memory"] += 1
+        prompt = _body(n_sens, n_obs, keep_memory)
     measured = estimate_tokens(prompt)
     assert measured <= PROMPT_TOKEN_CAP, (
         f"prompt over cap: {measured} > {PROMPT_TOKEN_CAP}"
@@ -370,6 +387,8 @@ def assemble_prompt(
         "menu_tokens": estimate_tokens(menu_block),
         "n_sensations": n_sens,
         "n_observations": n_obs,
+        "memory_block": bool(memory_block),
+        "memory_dropped": bool(memory_block) and not keep_memory,
         "truncated": truncated,
     }
     return prompt, report
@@ -774,13 +793,27 @@ class Deliberator:
             row.get("max_hp"),
             observations,
         )
+        # #26: per-query semantic retrieval + once-per-boot restart
+        # wake, composed into the LONG-TERM MEMORY prompt section.
+        order = self.tracker.pop_order(soul_id)
+        sens_list = sensations.recent(soul_id)
+        query = " ".join(
+            part
+            for part in (
+                order or "",
+                " ".join(s.get("text", "") for s in sens_list[-3:]),
+            )
+            if part
+        ).strip()
+        mem_block = memory.memory_block_for_prompt(soul_id, query)
         prompt, report = assemble_prompt(
             soul_id,
             row,
-            sensations_list=sensations.recent(soul_id),
+            sensations_list=sens_list,
             observations=observations,
             drive_vec=drive_vec,
-            tamer_order=self.tracker.pop_order(soul_id),
+            tamer_order=order,
+            memory_block=mem_block or None,
         )
         prompt_tokens = report["prompt_tokens"]
         chain = self._chain(tamer_id)

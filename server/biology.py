@@ -783,3 +783,30 @@ def adjudicate_feed_soul(tick, intent: dict) -> None:
             raise
     viewport.viewport.notify_economy_soul(feeder_soul_id)
     viewport.viewport.notify_economy_soul(recipient_soul_id)
+    # #26: feeding is episodic memory for both souls. The recipient
+    # was collapsed and got 10e -- high salience, immediately
+    # retrievable.
+    from .agents import memory as _memory
+
+    _memory.log_episode(
+        feeder_soul_id,
+        "feed",
+        {
+            "summary": f"fed {recipient_soul_id} (+{FEED_SOUL_COST:.0f}e)",
+            "role": "feeder",
+            "other": recipient_soul_id,
+            "gift": FEED_SOUL_COST,
+        },
+        salience=0.6,
+    )
+    _memory.log_episode(
+        recipient_soul_id,
+        "feed",
+        {
+            "summary": f"was fed by {feeder_soul_id} (+{FEED_SOUL_COST:.0f}e)",
+            "role": "recipient",
+            "other": feeder_soul_id,
+            "gift": FEED_SOUL_COST,
+        },
+        salience=0.7,
+    )
