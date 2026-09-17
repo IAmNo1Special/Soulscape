@@ -131,7 +131,7 @@ class SceneRenderer:
                 program["time"] = soul.time
                 program["bulge_position"] = soul.bulge_position
                 program["bulge_strength"] = ORB_BULGE_STRENGTH
-                program["base_color_uniform"] = soul.orb_color_rgb
+                program["base_color_uniform"] = soul.display_orb_color()
 
                 # 3. Draw
                 vlist.draw(GL_TRIANGLES)
@@ -192,7 +192,7 @@ class SceneRenderer:
                 program["bulge_position"] = soul.bulge_position
                 program["bulge_strength"] = AURA_BULGE_STRENGTH
                 program["base_brightness"] = AURA_BASE_BRIGHTNESS
-                program["base_color_uniform"] = soul.aura_color_rgb
+                program["base_color_uniform"] = soul.display_aura_color()
 
                 # 3. Draw
                 vlist.draw(GL_TRIANGLES)

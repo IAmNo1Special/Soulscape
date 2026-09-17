@@ -86,6 +86,11 @@ class MessageDelete(BaseModel):
     author_id: str
 
 
+class FeedSoulRequest(BaseModel):
+    feeder_soul_id: str
+    recipient_soul_id: str
+
+
 class SoulUpdate(BaseModel):
     owner_id: Optional[str] = None
     custodian_id: Optional[str] = None
@@ -108,6 +113,8 @@ class SoulResponse(BaseModel):
     satiety: Optional[float] = 100.0
     hydration: Optional[float] = 100.0
     essence: Optional[float] = 0.0
+    state: Optional[str] = "normal"
+    fed_flag: Optional[int] = 0
     position: Optional[List[float]] = [0.0, 0.0]
     velocity: Optional[List[float]] = [0.0, 0.0]
     hometown: Optional[Any] = None

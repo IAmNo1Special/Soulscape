@@ -57,6 +57,9 @@ EVENT_INTENT_ADJUDICATED = "intent_adjudicated"
 EVENT_INTENT_REJECTED = "intent_rejected"
 EVENT_TELEPORT = "teleport"
 EVENT_MODE_CHANGE = "mode_change"
+EVENT_SOUL_COLLAPSED = "soul_collapsed"
+EVENT_SOUL_RECOVERED = "soul_recovered"
+EVENT_SOUL_FED = "soul_fed"
 
 _UNSET: object = object()
 
@@ -102,8 +105,9 @@ def analytic_advance(
 
     Constant-velocity straight-line motion makes this exact except for
     per-tick bound clamping, which is equivalent when applied once at the
-    end of a straight segment. Arrival snaps to move_target; needs/stats
-    decay is a no-op hook (the tick simulates no needs yet).
+    end of a straight segment. Arrival snaps to move_target. Needs decay
+    is handled separately by biology.apply_biology_decay() (issue #21),
+    which runs in the same recovery transaction.
     """
     if seconds <= 0:
         return
@@ -504,6 +508,16 @@ def apply_event(state: dict[str, dict], event: dict) -> None:
         entry["mode"] = payload.get("mode")
     elif event_type == EVENT_INTENT_REJECTED:
         pass
+    elif event_type in (
+        EVENT_SOUL_COLLAPSED,
+        EVENT_SOUL_RECOVERED,
+        EVENT_SOUL_FED,
+    ):
+        # Biology transitions carry no motion state; the replay state dict
+        # is position/velocity/move_target only, so these are no-ops here.
+        # They exist for the audit trail and for absolute-assignment
+        # idempotency of the journal.
+        pass
 
 
 def replay_tail(
@@ -754,6 +768,13 @@ def recover_world(tick, now: float | None = None) -> dict:
                     "move_target = ? WHERE soul_id = ?",
                     rows,
                 )
+            # Biology catch-up (issue #21): closed-form needs decay over the
+            # same downtime gap, capped at 24 h, in this transaction. Uses
+            # the identical _decay_soul core as the live 0.1 Hz tick, so
+            # downtime decay matches live decay rates exactly.
+            from . import biology as _biology
+
+            _biology.apply_biology_decay(conn, sim_seconds, now, end_tick)
             conn.execute(
                 "INSERT OR REPLACE INTO globals (key, value) VALUES "
                 "('last_tick_at', ?), ('last_tick_id', ?)",

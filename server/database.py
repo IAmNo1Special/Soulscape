@@ -597,7 +597,11 @@ def init_db():
                     secret_prefix TEXT,
                     updated_at REAL,
                     token_expiry REAL,
-                    is_revoked INTEGER DEFAULT 0
+                    is_revoked INTEGER DEFAULT 0,
+                    state TEXT DEFAULT 'normal'
+                        CHECK (state IN ('normal','traveling','collapsed')),
+                    fed_flag INTEGER DEFAULT 0,
+                    rest_started_at REAL
                 )
             """)
             # Inventory Table
@@ -863,6 +867,33 @@ def _migrate_souls(cursor) -> None:
     _add_column_if_missing(cursor, "souls", "velocity TEXT")
     _add_column_if_missing(cursor, "souls", "custodian_id TEXT")
     _add_column_if_missing(cursor, "souls", "move_target TEXT")
+    # Issue #21: collapsed state machine + feed_soul.
+    _add_column_if_missing(
+        cursor,
+        "souls",
+        "state TEXT DEFAULT 'normal' "
+        "CHECK (state IN ('normal','traveling','collapsed'))",
+    )
+    _add_column_if_missing(cursor, "souls", "fed_flag INTEGER DEFAULT 0")
+    _add_column_if_missing(cursor, "souls", "rest_started_at REAL")
+    cursor.execute(
+        "UPDATE souls SET state = 'normal' WHERE state IS NULL"
+    )
+    cursor.execute(
+        "UPDATE souls SET fed_flag = 0 WHERE fed_flag IS NULL"
+    )
+    # Legacy rows may carry NULL biology fields; the server default for a
+    # new soul is full (100), matching the REST layer's defaults. Add the
+    # columns first for ultra-legacy tables that predate them entirely.
+    _add_column_if_missing(cursor, "souls", "satiety REAL")
+    _add_column_if_missing(cursor, "souls", "hydration REAL")
+    _add_column_if_missing(cursor, "souls", "hp REAL")
+    _add_column_if_missing(cursor, "souls", "max_hp REAL")
+    cursor.execute("UPDATE souls SET satiety = 100.0 WHERE satiety IS NULL")
+    cursor.execute("UPDATE souls SET hydration = 100.0 WHERE hydration IS NULL")
+    cursor.execute(
+        "UPDATE souls SET hp = COALESCE(max_hp, 100.0) WHERE hp IS NULL"
+    )
     cursor.execute(
         "UPDATE souls SET custodian_id = owner_id "
         "WHERE custodian_id IS NULL AND owner_id IS NOT NULL"

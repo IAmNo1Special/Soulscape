@@ -30,6 +30,7 @@ from .system.logger import log, setup_logging
 from .system.network.viewport_client import (
     ViewportConsumer,
     ViewportMapper,
+    is_statue,
     viewport_mode_enabled,
 )
 from .system.network_service import NetworkService
@@ -597,6 +598,7 @@ class SoulscapeApp:
             self.dirty_tracker.mark_dirty()
 
         souls_by_id = {soul.biology.soul_id: soul for soul in self.active_souls}
+        states = consumer.soul_states()
         for sid, (wx, wy) in positions.items():
             soul = souls_by_id.get(sid)
             if soul is None:
@@ -604,7 +606,11 @@ class SoulscapeApp:
             sx, sy = mapper.world_to_screen(wx, wy, display.width, display.height)
             soul.x, soul.y = sx, sy
             soul.draw_y = sy
-            soul.visual_tick(dt)
+            # Issue #21: collapsed souls render as statues -- desaturated
+            # stone colors and a frozen plasma pulse.
+            soul.statue = is_statue(states.get(sid))
+            if not soul.statue:
+                soul.visual_tick(dt)
 
         snapshot = [
             (soul.biology.soul_id, round(soul.x, 3), round(soul.y, 3))

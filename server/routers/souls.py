@@ -5,16 +5,19 @@ API endpoints for managing Soul states, inventory, and lifecycle.
 import json
 import logging
 import math
+import secrets
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from .. import database
+from .. import intents
 from .. import persistence
 from .. import plots
-from ..models import SoulResponse, SoulUpdate
-from ..rate_limit import read_limit
+from ..models import FeedSoulRequest, SoulResponse, SoulUpdate
+from ..rate_limit import market_write_limit, read_limit
+from ..world_tick import WorldTick
 from ..security import (
     UserIdentity,
     assert_custody,
@@ -232,7 +235,8 @@ def get_souls(
                     "stat_vis_base, stat_hp_iv, stat_atk_iv, stat_def_iv, "
                     "stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv, "
                     "stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, "
-                    "stat_spd_ev, stat_spe_ev, stat_vis_ev, nature "
+                    "stat_spd_ev, stat_spe_ev, stat_vis_ev, nature, "
+                    "state, fed_flag "
                     "FROM souls WHERE COALESCE(custodian_id, owner_id) = ?",
                     (effective,),
                 )
@@ -254,7 +258,8 @@ def get_souls(
                     "stat_vis_base, stat_hp_iv, stat_atk_iv, stat_def_iv, "
                     "stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv, "
                     "stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, "
-                    "stat_spd_ev, stat_spe_ev, stat_vis_ev, nature FROM souls"
+                    "stat_spd_ev, stat_spe_ev, stat_vis_ev, nature, "
+                    "state, fed_flag FROM souls"
                 )
             souls = []
             for row in cursor.fetchall():
@@ -532,3 +537,102 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_s
         logger.error(f"Error in update_souls: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     return {"status": "success", "count": saved, "skipped": skipped}
+
+
+_FEED_REFUSAL_STATUS = {
+    "feeder_not_found": 404,
+    "recipient_not_found": 404,
+    "insufficient_funds": 400,
+    "feeder_collapsed": 400,
+    "custody": 403,
+}
+
+_FEED_REJECTION_STATUS = {
+    "feeder_not_found": 404,
+    "recipient_not_found": 404,
+    "custody": 403,
+    "not_collapsed": 400,
+    "already_fed": 409,
+    "escrow_short": 500,
+}
+
+
+def _settle_feed_intent(request: Request, record: dict) -> dict:
+    """Pump the tick's intent queue once and return the fresh intent row."""
+    tick = getattr(request.app.state, "world_tick", None)
+    if tick is None:
+        tick = WorldTick()
+    tick.pump_intents()
+    fresh = intents.get_intent_by_nonce(record["session_id"], record["nonce"])
+    assert fresh is not None
+    return fresh
+
+
+@router.post("/feed", dependencies=[Depends(market_write_limit)])
+def feed_soul(
+    feed: FeedSoulRequest,
+    request: Request,
+    identity: UserIdentity = Depends(get_api_key),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    """Feed a collapsed stranger (issue #21).
+
+    Any soul may feed any collapsed soul -- no custody requirement on the
+    recipient. The 10-essence gift is escrowed at enqueue (commit-before-ack)
+    and settles synchronously via one in-request intent pump, mirroring the
+    #17 market pattern. Idempotency-Key makes retries return the original
+    outcome instead of double-feeding.
+    """
+    from .. import biology
+
+    feeder_id = feed.feeder_soul_id
+    if identity.role == "user":
+        # IDOR mitigation: plain soul-owners feed as themselves. Tamers keep
+        # their chosen soul but must pass the custody check below (their
+        # identity.id is a tamer ID, not a soul ID).
+        feeder_id = identity.id
+    soul_id = feeder_id
+    custodian_id = None if identity.is_operator else (
+        identity.custodian_id or identity.owner_id
+    )
+    payload = {
+        "feeder_soul_id": feeder_id,
+        "recipient_soul_id": feed.recipient_soul_id,
+    }
+    validated, error = intents.validate_payload(biology.KIND_FEED_SOUL, payload)
+    if error is not None:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {error}")
+    session_id = f"rest:{identity.id}"
+    nonce = (
+        idempotency_key.strip()
+        if idempotency_key and idempotency_key.strip()
+        else "rest_" + secrets.token_urlsafe(16)
+    )
+    try:
+        record, _created = biology.enqueue_feed_soul(
+            session_id, nonce, custodian_id, soul_id, biology.KIND_FEED_SOUL,
+            validated,
+        )
+    except biology.BiologyRefusal as refusal:
+        raise HTTPException(
+            status_code=_FEED_REFUSAL_STATUS.get(refusal.reason, 400),
+            detail=refusal.detail,
+        )
+    try:
+        record = _settle_feed_intent(request, record)
+    except Exception as e:
+        logger.error(f"Error settling feed_soul intent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    if record["status"] == "adjudicated":
+        return {
+            "status": "success",
+            "recipient_soul_id": record["result"]["recipient_soul_id"],
+            "gift": record["result"]["gift"],
+        }
+    if record["status"] == "pending":
+        return {"status": "pending", "intent_id": record["intent_id"]}
+    reason = (record["result"] or {}).get("reason", "internal")
+    raise HTTPException(
+        status_code=_FEED_REJECTION_STATUS.get(reason, 400),
+        detail=(record["result"] or {}).get("detail", reason),
+    )

@@ -44,6 +44,7 @@ from . import persistence
 from . import plots
 from . import social
 from . import world
+from . import biology
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -169,6 +170,8 @@ class WorldTick:
                     social.adjudicate_social_intent(self, intent)
                 elif intent["kind"] in plots.PLOT_KINDS:
                     plots.adjudicate_plot_intent(self, intent)
+                elif intent["kind"] in biology.BIOLOGY_KINDS:
+                    biology.adjudicate_feed_soul(self, intent)
                 else:
                     with database.get_db() as conn:
                         self._reject(conn, intent, "unknown_kind")
@@ -217,12 +220,17 @@ class WorldTick:
         with database.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT position, custodian_id, owner_id FROM souls WHERE soul_id = ?",
+                "SELECT position, custodian_id, owner_id, satiety, state "
+                "FROM souls WHERE soul_id = ?",
                 (soul_id,),
             )
             row = cursor.fetchone()
             if row is None:
                 self._reject(conn, intent, "soul_not_found")
+                return
+            if (row["state"] or biology.STATE_NORMAL) == biology.STATE_COLLAPSED:
+                # Statues don't walk: a collapsed soul cannot move.
+                self._reject(conn, intent, "collapsed")
                 return
             custodian = row["custodian_id"] or row["owner_id"]
             if intent["custodian_id"] is not None and (
@@ -230,6 +238,10 @@ class WorldTick:
             ):
                 self._reject(conn, intent, "custody")
                 return
+            # Hungry souls (satiety <= 50) move at 75% speed (issue #21).
+            speed = INTENT_MOVE_SPEED * biology.speed_multiplier(
+                biology.full_or_100(row["satiety"])
+            )
             x, y = _parse_pair(row["position"])
             unflushed = persistence.dirty_get(soul_id)
             if unflushed is not None and unflushed.get("position") is not None:
@@ -254,7 +266,7 @@ class WorldTick:
             dx, dy = tx - x, ty - y
             dist = math.hypot(dx, dy)
             clamped = False
-            max_reach = INTENT_MOVE_SPEED * INTENT_HORIZON_SECONDS
+            max_reach = speed * INTENT_HORIZON_SECONDS
             if dist > max_reach:
                 ratio = max_reach / dist
                 tx, ty = x + dx * ratio, y + dy * ratio
@@ -266,7 +278,7 @@ class WorldTick:
                 "x": tx,
                 "y": ty,
                 "clamped": clamped,
-                "speed": INTENT_MOVE_SPEED,
+                "speed": speed,
             }
             if math.hypot(tx - x, ty - y) <= INTENT_ARRIVAL_EPS:
                 velocity = [0.0, 0.0]
@@ -274,8 +286,8 @@ class WorldTick:
             else:
                 dist = math.hypot(tx - x, ty - y)
                 velocity = [
-                    (tx - x) / dist * INTENT_MOVE_SPEED,
-                    (ty - y) / dist * INTENT_MOVE_SPEED,
+                    (tx - x) / dist * speed,
+                    (ty - y) / dist * speed,
                 ]
                 move_target = [tx, ty]
             conn.execute("BEGIN IMMEDIATE")
@@ -316,6 +328,14 @@ class WorldTick:
     def step(self) -> int:
         with self._step_lock:
             self.pump_intents()
+            if (self.tick_id + 1) % biology.BIOLOGY_EVERY_TICKS == 0:
+                # 0.1 Hz server-side biology: needs decay, starvation-only
+                # collapse, fed+rested recovery (issue #21). Fires after
+                # every 50th step -- never on the very first step.
+                with database.get_db() as conn:
+                    biology.apply_biology_tick(
+                        conn, self.tick_id, time.time(), self.tick_dt
+                    )
             moved = 0
             bounds = database.SCREEN_BOUNDS
             with database.get_db() as conn:

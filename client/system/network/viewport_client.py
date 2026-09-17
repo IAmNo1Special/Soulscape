@@ -25,6 +25,32 @@ MAX_EXTRAPOLATE_SECONDS = 0.4
 MAX_BUFFER_SAMPLES = 32
 _MAX_TURN_RATE = 2.0 * math.pi
 
+#: Hub soul state that renders as a statue (issue #21).
+STATUE_STATE = "collapsed"
+_NORMAL_STATE = "normal"
+
+#: Dim factor applied to the desaturated statue color.
+_STATUE_DIM = 0.72
+
+
+def is_statue(state: str | None) -> bool:
+    """Whether a Hub soul state renders as a statue."""
+    return (state or _NORMAL_STATE) == STATUE_STATE
+
+
+def statue_orb_color(
+    orb_color: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Desaturated, dimmed stone color for a collapsed soul.
+
+    The arch's visual language maps state -> shader uniforms; the statue
+    reuses the existing base_color_uniform with saturation removed.
+    """
+    r, g, b = orb_color
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    dimmed = lum * _STATUE_DIM
+    return (dimmed, dimmed, dimmed)
+
 
 def viewport_mode_enabled() -> bool:
     """Viewport mode is the explicit online client mode from settings."""
@@ -138,6 +164,7 @@ class ViewportConsumer:
     def __init__(self, clock: Callable[[], float] | None = None) -> None:
         self._clock = clock or time.monotonic
         self._tracks: dict[str, SoulTrack] = {}
+        self._states: dict[str, str] = {}
         self._region: tuple[float, float, float, float] | None = None
 
     @property
@@ -148,6 +175,14 @@ class ViewportConsumer:
     def soul_ids(self) -> list[str]:
         """Soul ids currently tracked by the consumer."""
         return list(self._tracks)
+
+    def soul_state(self, soul_id: str) -> str:
+        """Latest Hub lifecycle state for a soul ('normal' when unknown)."""
+        return self._states.get(soul_id, _NORMAL_STATE)
+
+    def soul_states(self) -> dict[str, str]:
+        """Snapshot of per-soul lifecycle states for the render path."""
+        return dict(self._states)
 
     def apply_frame(self, frame: dict) -> None:
         """Apply a Hub SNAPSHOT or DELTA frame using the consumer clock."""
@@ -168,8 +203,10 @@ class ViewportConsumer:
             self._track(sid).snap(
                 float(entry.get("x", 0.0)), float(entry.get("y", 0.0)), now
             )
+            self._states[sid] = entry.get("state") or _NORMAL_STATE
         for sid in [key for key in self._tracks if key not in seen]:
             del self._tracks[sid]
+            self._states.pop(sid, None)
         region = frame.get("region")
         if isinstance(region, dict):
             w = float(region.get("w", 0.0))
@@ -190,10 +227,15 @@ class ViewportConsumer:
                 continue
             if kind == protocol.EntityOpKind.REMOVE.value:
                 self._tracks.pop(sid, None)
+                self._states.pop(sid, None)
                 continue
             if kind != protocol.EntityOpKind.UPSERT.value:
                 continue
             state = op.get("state") or {}
+            # State-only ops (e.g. the issue-#21 statue stream) carry no
+            # position; record the lifecycle state either way.
+            if "state" in state:
+                self._states[sid] = state["state"] or _NORMAL_STATE
             if "x" not in state or "y" not in state:
                 continue
             track = self._track(sid)

@@ -185,8 +185,27 @@ def _validate_plot_claim(
     }, None
 
 
+def _validate_feed_soul(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    feeder_soul_id = message.get("feeder_soul_id")
+    recipient_soul_id = message.get("recipient_soul_id")
+    if (
+        not isinstance(feeder_soul_id, str)
+        or not feeder_soul_id
+        or not isinstance(recipient_soul_id, str)
+        or not recipient_soul_id
+    ):
+        return None, "BAD_PAYLOAD"
+    return {
+        "feeder_soul_id": feeder_soul_id,
+        "recipient_soul_id": recipient_soul_id,
+    }, None
+
+
 _KIND_VALIDATORS = {
     "move_to": _validate_move_to,
+    "feed_soul": _validate_feed_soul,
     "market_list": _validate_market_list,
     "market_buy": _validate_market_buy,
     "market_cancel": _validate_market_cancel,

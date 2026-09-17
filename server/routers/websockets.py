@@ -26,6 +26,7 @@ from .. import intents
 from .. import market
 from .. import plots
 from .. import viewport
+from .. import biology
 from ..managers import manager
 from ..models import WsTicketResponse
 from ..security import (
@@ -195,6 +196,23 @@ async def _handle_intent(
             return
         await websocket.send_json(_intent_ack(record))
         return
+    if kind in biology.BIOLOGY_KINDS:
+        try:
+            record, _created = biology.enqueue_feed_soul(
+                session_id, nonce, custodian, soul_id, kind, payload
+            )
+        except biology.BiologyRefusal as refusal:
+            await websocket.send_json(
+                protocol.envelope(
+                    protocol.MessageType.ERROR,
+                    code=refusal.ws_code,
+                    message=f"Intent rejected: {refusal.ws_code}",
+                    nonce=nonce,
+                )
+            )
+            return
+        await websocket.send_json(_intent_ack(record))
+        return
     record = intents.enqueue_intent(
         session_id, nonce, custodian, soul_id, kind, payload
     )
@@ -213,11 +231,14 @@ async def _viewport_pump(
         while True:
             await asyncio.sleep(session.flush_interval)
             positions = viewport.read_positions()
+            states = viewport.read_soul_states()
             tick_id = _current_tick_id(websocket)
             for op, domain in viewport.diff_positions(positions, session.committed):
                 session.enqueue(op, domain)
+            for op, domain in viewport.diff_states(states, session.committed_states):
+                session.enqueue(op, domain)
             result = await viewport.flush(
-                session, positions, tick_id, websocket.send_json
+                session, positions, tick_id, websocket.send_json, states=states
             )
             if result == "closed":
                 await websocket.close(

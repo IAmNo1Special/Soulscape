@@ -15,6 +15,7 @@ from typing import Any
 from ...constants import SOUL_HEIGHT, SOUL_WIDTH
 from ...system.command_queue import CommandQueue
 from ...system.logger import log
+from ...system.network.viewport_client import statue_orb_color
 from ..biology import Gender, SoulBiology, SoulStats, Species
 from ..interactions import Inventory
 from .goap_brain import GoapBrain
@@ -210,6 +211,10 @@ class Soul:
         self.bulge_position: list[float] = [0.0, 0.0, 0.0]
         self.aura_visible: bool = True
         self.camera_distance: float = 1.0
+        # Issue #21: statue render state streamed from the Hub. When True,
+        # the renderer desaturates the orb/aura (stone treatment) and the
+        # plasma pulse freezes (visual_tick is skipped in viewport mode).
+        self.statue: bool = False
 
         # Updates
         self.last_update_time: float = time.time()
@@ -409,6 +414,21 @@ class Soul:
             math.sin(angle * 0.7) * 0.35,
             math.sin(angle) * 0.5,
         ]
+
+    def display_orb_color(self) -> tuple[float, float, float]:
+        """Orb color for the shader's base_color_uniform.
+
+        Collapsed souls render as statues: desaturated stone gray.
+        """
+        if self.statue:
+            return statue_orb_color(self.orb_color_rgb)
+        return self.orb_color_rgb
+
+    def display_aura_color(self) -> tuple[float, float, float]:
+        """Aura color for the shader's base_color_uniform (statue: stone)."""
+        if self.statue:
+            return statue_orb_color(self.aura_color_rgb)
+        return self.aura_color_rgb
 
     def update(self, dt: float) -> None:
         """Drives the soul's simulation and AI logic for a single frame.
