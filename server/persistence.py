@@ -568,7 +568,7 @@ def replay_tail(
 
 
 def reconcile_escrows(conn: sqlite3.Connection) -> int:
-    """Boot sweep for open market escrows (issue #17).
+    """Boot sweep for open escrows (issues #17, #18).
 
     Escrows are held between intent ack and tick-boundary adjudication.
     A crash in that window leaves (intent=pending, escrow=held): the

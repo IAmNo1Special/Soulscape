@@ -1,286 +1,331 @@
-"""
-API endpoints for social interactions, including posts, replies, and moderation.
+"""Social REST endpoints (issue #18).
+
+post/reply/edit/delete are durable intents adjudicated at tick
+boundaries. REST stays synchronous: each write enqueues the intent
+(commit-before-ack, escrow hold for soul-authored posts/replies in the
+same transaction), pumps the tick's intent queue once in-request, and
+returns the settled outcome mapped onto the pre-#18 response shapes --
+so RemoteStore and existing clients need no changes.
+
+Idempotency: pass Idempotency-Key to make a retry return the original
+intent's outcome instead of double-applying. Without the header each
+call gets a fresh nonce.
 """
 
 import logging
-import re
-import time
-import uuid
+import secrets
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import database
-from ..models import MessageDelete, SocialEdit, SocialPost, SocialPostResponse
+from .. import intents
+from .. import social as social_lib
+from ..models import SocialMessageNode
 from ..rate_limit import read_limit, social_write_limit
 from ..security import UserIdentity, get_api_key
+from ..world_tick import WorldTick
 
 logger = logging.getLogger("soulscape_hub")
-
-# OPERATOR_ID is imported from security
-POST_COST = 20.00
-REPLY_COST = 8.00
-
-
-def _sanitize(text: str) -> str:
-    if not text:
-        return ""
-    clean = re.sub(r"<[^>]*>", "", text)
-    clean = clean.replace("[", "&#91;").replace("]", "&#93;")
-    clean = clean.replace("{", "&#123;").replace("}", "&#125;")
-    return clean[:2000].strip()
-
 
 router = APIRouter(
     prefix="/social", tags=["Social"], dependencies=[Depends(get_api_key)]
 )
 
+_REFUSAL_STATUS = {
+    "author_not_found": 404,
+    "parent_not_found": 404,
+    "message_not_found": 404,
+    "insufficient_funds": 400,
+    "title_required": 400,
+    "bad_payload": 400,
+    "depth_exceeded": 400,
+    "parent_deleted": 400,
+    "custody": 403,
+}
+
+
+def _refusal_http(refusal: social_lib.SocialRefusal) -> HTTPException:
+    return HTTPException(
+        status_code=_REFUSAL_STATUS.get(refusal.reason, 400),
+        detail=refusal.detail,
+    )
+
+
+def _rest_actor(
+    identity: UserIdentity,
+    author_type: str | None = None,
+    author_id: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Return (author_type, author_id, custodian_id) for a REST call.
+
+    Soul identities always author as themselves. Tamer identities
+    author as themselves, or as a soul they hold custody of (custody
+    is verified at enqueue/adjudication). Operators name the author
+    (defaulting to a soul author); the operator identity itself has
+    no essence wallet, so the named authoring soul always pays.
+    """
+    if identity.is_operator:
+        if not author_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Operator must specify author_id",
+            )
+        if author_type not in (None, "soul", "tamer"):
+            raise HTTPException(status_code=400, detail="Bad author_type")
+        return author_type or "soul", author_id, None
+    if identity.is_tamer:
+        if author_type == "soul" and author_id:
+            return "soul", author_id, identity.custodian_id
+        return "tamer", identity.id, identity.custodian_id
+    return "soul", identity.id, identity.custodian_id or identity.owner_id
+
+
+def _settle_intent(request: Request, record: dict) -> dict:
+    """Run the tick's intent pump once and return the fresh intent row."""
+    tick = getattr(request.app.state, "world_tick", None)
+    if tick is None:
+        tick = WorldTick()
+    tick.pump_intents()
+    fresh = intents.get_intent_by_nonce(record["session_id"], record["nonce"])
+    assert fresh is not None
+    return fresh
+
+
+def _enqueue_and_settle(
+    request: Request,
+    identity: UserIdentity,
+    kind: str,
+    author_type: str,
+    author_id: str,
+    custodian_id: str | None,
+    payload: dict,
+    idempotency_key: str | None,
+) -> dict:
+    """Enqueue a social intent and settle it within this request."""
+    validated, error = intents.validate_payload(kind, payload)
+    if error is not None:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {error}")
+    session_id = f"rest:{identity.id}"
+    nonce = (
+        idempotency_key.strip()
+        if idempotency_key and idempotency_key.strip()
+        else "rest_" + secrets.token_urlsafe(16)
+    )
+    # The intent's soul is the acting identity, except that an operator
+    # creating as a soul names that soul (the wallet charged, per the
+    # #17 precedent). Custody of a soul-as-author by a tamer is checked
+    # against custodian_id at enqueue and adjudication.
+    if identity.is_operator and kind in (
+        social_lib.KIND_SOCIAL_POST,
+        social_lib.KIND_SOCIAL_REPLY,
+    ):
+        intent_soul_id = author_id
+    else:
+        intent_soul_id = identity.id
+    try:
+        record, _created = social_lib.enqueue_social_intent(
+            session_id,
+            nonce,
+            custodian_id,
+            intent_soul_id,
+            kind,
+            validated,
+        )
+    except social_lib.SocialRefusal as refusal:
+        raise _refusal_http(refusal)
+    return _settle_intent(request, record)
+
+
+def _map_rejection(kind: str, result: dict) -> HTTPException:
+    reason = result.get("reason", "internal")
+    detail = result.get("detail", reason)
+    if kind in (social_lib.KIND_SOCIAL_EDIT, social_lib.KIND_SOCIAL_DELETE):
+        # Pre-#18 contract: unauthorized or missing edits/deletes are 404.
+        return HTTPException(
+            status_code=404, detail="Message not found or unauthorized"
+        )
+    if kind == social_lib.KIND_SOCIAL_REPLY and reason == "parent_not_found":
+        return HTTPException(status_code=404, detail=detail)
+    if reason == "custody":
+        return HTTPException(status_code=403, detail=detail)
+    if reason in ("author_not_found", "parent_not_found"):
+        return HTTPException(status_code=404, detail=detail)
+    return HTTPException(status_code=400, detail=detail)
+
 
 @router.get(
-    "", response_model=List[SocialPostResponse], dependencies=[Depends(read_limit)]
+    "", response_model=List[SocialMessageNode], dependencies=[Depends(read_limit)]
 )
 def get_social():
     try:
         with database.get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM social_posts ORDER BY timestamp DESC")
-            posts = {dict(row)["message_id"]: dict(row) for row in cursor.fetchall()}
-
-            for post in posts.values():
-                post["replies"] = []
-
-            if not posts:
-                return []
-
-            post_ids = list(posts.keys())
-            placeholders = ",".join("?" for _ in post_ids)
-            cursor.execute(
-                f"SELECT *, reply_id AS message_id FROM social_replies WHERE parent_id IN ({placeholders}) ORDER BY timestamp ASC",
-                post_ids,
-            )
-
-            for row in cursor.fetchall():
-                reply = dict(row)
-                parent_id = reply.get("parent_id")
-                if parent_id in posts:
-                    posts[parent_id]["replies"].append(reply)
-
-            return list(posts.values())
+            return social_lib.build_tree(conn)
     except Exception as e:
         logger.error(f"Error in get_social: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/post", dependencies=[Depends(social_write_limit)])
-def create_post(post: SocialPost, identity: UserIdentity = Depends(get_api_key)):
-    post_id = post.message_id or str(uuid.uuid4())[:12]
-    post_data = post.model_dump()
-
-    # IDOR Mitigation: Strictly derive author_id from identity
-    author_id = identity.id
-    if identity.is_operator and post.author_id:
-        # Operator can override author_id
-        author_id = post.author_id
-
-    logger.info(f"Creating post {post_id} from {post_data['author_name']}")
+def create_post(
+    post: Dict[str, Any],
+    request: Request,
+    identity: UserIdentity = Depends(get_api_key),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    author_type, author_id, custodian_id = _rest_actor(
+        identity, post.get("author_type"), post.get("author_id")
+    )
+    payload = {
+        "title": post.get("title", ""),
+        "body": post.get("content", ""),
+        "author_type": author_type,
+        "author_id": author_id,
+        "author_name": post.get("author_name", ""),
+    }
     try:
-        with database.get_db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.cursor()
-            # Exempt Operator from charges
-            if not identity.is_operator:
-                database.charge_soul(cursor, author_id, POST_COST, "create post")
-
-            cursor.execute(
-                """
-                INSERT INTO social_posts (message_id, author_id, author_name, title, content, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    post_id,
-                    author_id,
-                    post_data["author_name"],
-                    post_data["title"],
-                    _sanitize(post_data["content"]),
-                    post_data["timestamp"],
-                ),
-            )
-            conn.commit()
+        record = _enqueue_and_settle(
+            request,
+            identity,
+            social_lib.KIND_SOCIAL_POST,
+            author_type,
+            author_id,
+            custodian_id,
+            payload,
+            idempotency_key,
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in create_post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    return {
-        "status": "success",
-        "message_id": post_id,
-        "cost": POST_COST if not identity.is_operator else 0.0,
-    }
+
+    if record["status"] == "adjudicated":
+        return {
+            "status": "success",
+            "message_id": record["result"]["message_id"],
+            "cost": record["result"]["cost"],
+        }
+    if record["status"] == "pending":
+        return {"status": "pending", "intent_id": record["intent_id"]}
+    raise _map_rejection(social_lib.KIND_SOCIAL_POST, record["result"] or {})
 
 
 @router.post("/reply", dependencies=[Depends(social_write_limit)])
 def reply_to_post(
-    reply_data: Dict[str, Any], identity: UserIdentity = Depends(get_api_key)
+    reply_data: Dict[str, Any],
+    request: Request,
+    identity: UserIdentity = Depends(get_api_key),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    message_id = reply_data.get("message_id")
-    reply_id = reply_data.get("reply_id") or str(uuid.uuid4())[:12]
-
-    # IDOR Mitigation: Strictly derive author_id from identity
-    author_id = identity.id
-    if identity.is_operator and reply_data.get("author_id"):
-        # Operator can override author_id
-        author_id = reply_data.get("author_id")
-
+    parent_id = reply_data.get("message_id")
+    author_type, author_id, custodian_id = _rest_actor(
+        identity, reply_data.get("author_type"), reply_data.get("author_id")
+    )
+    payload = {
+        "parent_id": parent_id,
+        "body": reply_data.get("content", ""),
+        "author_type": author_type,
+        "author_id": author_id,
+        "author_name": reply_data.get("author_name", ""),
+    }
     try:
-        with database.get_db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.cursor()
-            # Exempt Operator from charges
-            if not identity.is_operator:
-                database.charge_soul(cursor, author_id, REPLY_COST, "post reply")
-
-            # Check if parent exists
-            cursor.execute(
-                "SELECT 1 FROM social_posts WHERE message_id = ?", (message_id,)
-            )
-            parent_exists = cursor.fetchone() is not None
-
-            if not parent_exists:
-                cursor.execute(
-                    "SELECT 1 FROM social_replies WHERE reply_id = ?",
-                    (message_id,),
-                )
-                parent_exists = cursor.fetchone() is not None
-
-            if not parent_exists:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Target message {message_id} not found",
-                )
-
-            cursor.execute(
-                """
-                INSERT INTO social_replies (reply_id, parent_id, author_id, author_name, content, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    reply_id,
-                    message_id,
-                    author_id,
-                    reply_data["author_name"],
-                    _sanitize(reply_data["content"]),
-                    time.time(),
-                ),
-            )
-            conn.commit()
+        record = _enqueue_and_settle(
+            request,
+            identity,
+            social_lib.KIND_SOCIAL_REPLY,
+            author_type,
+            author_id,
+            custodian_id,
+            payload,
+            idempotency_key,
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in reply_to_post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    return {
-        "status": "success",
-        "reply_id": reply_id,
-        "cost": REPLY_COST if not identity.is_operator else 0.0,
-    }
+
+    if record["status"] == "adjudicated":
+        return {
+            "status": "success",
+            "reply_id": record["result"]["message_id"],
+            "cost": record["result"]["cost"],
+        }
+    if record["status"] == "pending":
+        return {"status": "pending", "intent_id": record["intent_id"]}
+    raise _map_rejection(social_lib.KIND_SOCIAL_REPLY, record["result"] or {})
 
 
 @router.post("/edit/{message_id}", dependencies=[Depends(social_write_limit)])
 def edit_message(
     message_id: str,
-    edit: SocialEdit,
+    edit: Dict[str, Any],
+    request: Request,
     identity: UserIdentity = Depends(get_api_key),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    # IDOR Mitigation: Strictly derive author_id from identity
-    author_id = identity.id
-    # Note: Operators usually edit as system, if they need to edit others'
-    # we would handle that separately, but for now strict ownership.
-
+    if identity.is_operator:
+        author_type, author_id, custodian_id = "soul", identity.id, None
+    else:
+        author_type, author_id, custodian_id = _rest_actor(identity)
+    payload = {"message_id": message_id, "body": edit.get("content", "")}
     try:
-        with database.get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE social_posts SET content = ? WHERE message_id = ? AND author_id = ?",
-                (edit.content, message_id, author_id),
-            )
-            rows_affected = cursor.rowcount
-            if rows_affected == 0:
-                cursor.execute(
-                    "UPDATE social_replies SET content = ? WHERE reply_id = ? AND author_id = ?",
-                    (edit.content, message_id, author_id),
-                )
-                rows_affected = cursor.rowcount
-
-            if rows_affected == 0:
-                raise HTTPException(
-                    status_code=404, detail="Message not found or unauthorized"
-                )
-            conn.commit()
-        return {"status": "success"}
+        record = _enqueue_and_settle(
+            request,
+            identity,
+            social_lib.KIND_SOCIAL_EDIT,
+            author_type,
+            author_id,
+            custodian_id,
+            payload,
+            idempotency_key,
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in edit_message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+    if record["status"] == "adjudicated":
+        return {"status": "success"}
+    if record["status"] == "pending":
+        return {"status": "pending", "intent_id": record["intent_id"]}
+    raise _map_rejection(social_lib.KIND_SOCIAL_EDIT, record["result"] or {})
+
 
 @router.post("/delete/{message_id}", dependencies=[Depends(social_write_limit)])
 def delete_message(
     message_id: str,
-    payload: MessageDelete,
+    payload_body: Dict[str, Any],
+    request: Request,
     identity: UserIdentity = Depends(get_api_key),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    # IDOR Mitigation: Strictly derive author_id from identity
-    author_id = identity.id
-
-    rows_affected = 0
+    if identity.is_operator:
+        author_type, author_id, custodian_id = "soul", identity.id, None
+    else:
+        author_type, author_id, custodian_id = _rest_actor(identity)
+    payload = {"message_id": message_id}
     try:
-        with database.get_db() as conn:
-            cursor = conn.cursor()
-            # Attempt to delete as author
-            cursor.execute(
-                "DELETE FROM social_posts WHERE message_id = ? AND author_id = ?",
-                (message_id, author_id),
-            )
-            rows_affected += cursor.rowcount
-
-            if rows_affected == 0:
-                cursor.execute(
-                    "DELETE FROM social_replies WHERE reply_id = ? AND author_id = ?",
-                    (message_id, author_id),
-                )
-                rows_affected += cursor.rowcount
-
-            # If not deleted, try as operator (system admin)
-            if rows_affected == 0 and identity.is_operator:
-                database.log_audit(
-                    cursor,
-                    identity.id,
-                    "social_delete_as_operator",
-                    target_type="message",
-                    target_id=message_id,
-                )
-                cursor.execute(
-                    "DELETE FROM social_posts WHERE message_id = ?",
-                    (message_id,),
-                )
-                rows_affected += cursor.rowcount
-                if rows_affected == 0:
-                    cursor.execute(
-                        "DELETE FROM social_replies WHERE reply_id = ?",
-                        (message_id,),
-                    )
-                    rows_affected += cursor.rowcount
-
-            if rows_affected == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Message not found or unauthorized",
-                )
-            conn.commit()
-        return {"status": "success"}
+        record = _enqueue_and_settle(
+            request,
+            identity,
+            social_lib.KIND_SOCIAL_DELETE,
+            author_type,
+            author_id,
+            custodian_id,
+            payload,
+            idempotency_key,
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in delete_message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    if record["status"] == "adjudicated":
+        return {"status": "success"}
+    if record["status"] == "pending":
+        return {"status": "pending", "intent_id": record["intent_id"]}
+    raise _map_rejection(social_lib.KIND_SOCIAL_DELETE, record["result"] or {})

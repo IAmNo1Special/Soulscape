@@ -37,6 +37,7 @@ from . import database
 from . import intents
 from . import market
 from . import persistence
+from . import social
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -157,6 +158,8 @@ class WorldTick:
                     self._adjudicate_move_to(intent)
                 elif intent["kind"] in market.MARKET_KINDS:
                     market.adjudicate_market_intent(self, intent)
+                elif intent["kind"] in social.SOCIAL_KINDS:
+                    social.adjudicate_social_intent(self, intent)
                 else:
                     with database.get_db() as conn:
                         self._reject(conn, intent, "unknown_kind")

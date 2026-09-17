@@ -77,18 +77,15 @@ def test_update_souls_missing_owner(client: TestClient):
 
 
 def test_operator_delete_reply(client: TestClient, register_soul):
-    # Test lines 489-492: Operator deleting a reply
-    # Create souls first
+    # Operator deleting a reply
     register_soul("1", essence=100.0, name="A")
     register_soul("2", essence=100.0, name="B")
-    register_soul(
-        "999", essence=100.0, name="Operator"
-    )  # Operator needs to exist? No, usually hardcoded check, but maybe essence check?
 
     # Create post and reply first
     p_res = client.post(
         "/social/post",
-        json={"author_id": "1", "author_name": "A", "content": "P"},
+        json={"author_id": "1", "author_name": "A", "title": "P",
+              "content": "P"},
     )
     p_id = p_res.json()["message_id"]
 
@@ -110,10 +107,13 @@ def test_operator_delete_reply(client: TestClient, register_soul):
     )
     assert res.status_code == 200
 
-    # Verify deleted
+    # Soft delete: the reply stays as a tombstone under the post.
     get_res = client.get("/social")
     posts = get_res.json()
-    assert len(posts[0]["replies"]) == 0
+    assert len(posts[0]["replies"]) == 1
+    assert posts[0]["replies"][0]["message_id"] == r_id
+    assert posts[0]["replies"][0]["deleted"] is True
+    assert posts[0]["replies"][0]["body"] == "[deleted]"
 
 
 @pytest.mark.anyio

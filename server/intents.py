@@ -92,11 +92,93 @@ def _validate_market_cancel(
     return {"listing_id": listing_id}, None
 
 
+def _validate_social_author(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    author_type = message.get("author_type")
+    author_id = message.get("author_id")
+    if author_type not in ("soul", "tamer"):
+        return None, "BAD_PAYLOAD"
+    if not isinstance(author_id, str) or not author_id:
+        return None, "BAD_PAYLOAD"
+    author_name = message.get("author_name", "")
+    if not isinstance(author_name, str):
+        return None, "BAD_PAYLOAD"
+    return {"author_type": author_type, "author_id": author_id,
+            "author_name": author_name}, None
+
+
+def _validate_social_post(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    title = message.get("title")
+    body = message.get("body")
+    if (
+        not isinstance(title, str)
+        or not title.strip()
+        or not isinstance(body, str)
+        or not body.strip()
+    ):
+        return None, "BAD_PAYLOAD"
+    author, error = _validate_social_author(message)
+    if error is not None:
+        return None, error
+    assert author is not None
+    author["title"] = title
+    author["body"] = body
+    return author, None
+
+
+def _validate_social_reply(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    parent_id = message.get("parent_id")
+    body = message.get("body")
+    if not isinstance(parent_id, str) or not parent_id:
+        return None, "BAD_PAYLOAD"
+    if not isinstance(body, str) or not body.strip():
+        return None, "BAD_PAYLOAD"
+    if message.get("title"):
+        return None, "BAD_PAYLOAD"
+    author, error = _validate_social_author(message)
+    if error is not None:
+        return None, error
+    assert author is not None
+    author["parent_id"] = parent_id
+    author["body"] = body
+    return author, None
+
+
+def _validate_social_edit(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    message_id = message.get("message_id")
+    body = message.get("body")
+    if not isinstance(message_id, str) or not message_id:
+        return None, "BAD_PAYLOAD"
+    if not isinstance(body, str) or not body.strip():
+        return None, "BAD_PAYLOAD"
+    return {"message_id": message_id, "body": body}, None
+
+
+def _validate_social_delete(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    message_id = message.get("message_id")
+    if not isinstance(message_id, str) or not message_id:
+        return None, "BAD_PAYLOAD"
+    return {"message_id": message_id}, None
+
+
 _KIND_VALIDATORS = {
     "move_to": _validate_move_to,
     "market_list": _validate_market_list,
     "market_buy": _validate_market_buy,
     "market_cancel": _validate_market_cancel,
+    "social_post": _validate_social_post,
+    "social_reply": _validate_social_reply,
+    "social_edit": _validate_social_edit,
+    "social_delete": _validate_social_delete,
 }
 
 

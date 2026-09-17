@@ -162,6 +162,7 @@ def test_social_write_rate_limit_boundary(rl_tamer):
             json={
                 "author_name": "RL",
                 "author_id": rl_tamer["tamer_id"],
+                "title": f"post {i}",
                 "content": f"post {i}",
             },
         )
@@ -171,6 +172,7 @@ def test_social_write_rate_limit_boundary(rl_tamer):
         json={
             "author_id": rl_tamer["tamer_id"],
             "author_name": "RL",
+            "title": "post 7",
             "content": "post 7",
         },
     )

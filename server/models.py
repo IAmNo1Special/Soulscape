@@ -47,6 +47,28 @@ class SocialPostResponse(BaseModel):
     replies: List[SocialReplyResponse] = []
 
 
+class SocialMessageNode(BaseModel):
+    """One node of the unified threaded social tree (issue #18).
+
+    ``content``/``timestamp`` are legacy aliases of ``body``/
+    ``created_at`` kept for the desktop client, which reads those names.
+    """
+
+    message_id: str
+    parent_id: Optional[str] = None
+    author_type: str
+    author_id: str
+    author_name: str = ""
+    title: Optional[str] = None
+    body: str = ""
+    content: str = ""
+    created_at: float = 0.0
+    timestamp: float = 0.0
+    edited_at: Optional[float] = None
+    deleted: bool = False
+    replies: List["SocialMessageNode"] = []
+
+
 class SocialEdit(BaseModel):
     author_id: str
     content: str

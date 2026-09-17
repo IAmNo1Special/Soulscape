@@ -513,28 +513,37 @@ def init_db():
                     timestamp REAL
                 )
             """)
-            # Social Posts Table
+            # Unified social messages (issue #18): self-referencing
+            # parent_id (NULL = top-level post), typed authors.
+            # Legacy social_posts/social_replies are migrated into this
+            # table by _migrate_social() and then dropped.
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS social_posts (
+                CREATE TABLE IF NOT EXISTS messages (
                     message_id TEXT PRIMARY KEY,
-                    author_id TEXT,
-                    author_name TEXT,
+                    parent_id TEXT,
+                    author_type TEXT NOT NULL,
+                    author_id TEXT NOT NULL,
+                    author_name TEXT NOT NULL DEFAULT '',
                     title TEXT,
-                    content TEXT,
-                    timestamp REAL
+                    body TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    edited_at REAL,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (parent_id) REFERENCES messages (message_id),
+                    CONSTRAINT chk_messages_author_type
+                        CHECK (author_type IN ('soul', 'tamer')),
+                    CONSTRAINT chk_messages_title CHECK (
+                        (parent_id IS NULL
+                         AND title IS NOT NULL
+                         AND trim(title) <> '')
+                        OR (parent_id IS NOT NULL AND title IS NULL)
+                    ),
+                    CONSTRAINT chk_messages_deleted CHECK (deleted IN (0, 1))
                 )
             """)
-            # Social Replies Table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS social_replies (
-                    reply_id TEXT PRIMARY KEY,
-                    parent_id TEXT,
-                    author_id TEXT,
-                    author_name TEXT,
-                    content TEXT,
-                    timestamp REAL,
-                    FOREIGN KEY (parent_id) REFERENCES social_posts (message_id) ON DELETE CASCADE
-                )
+                CREATE INDEX IF NOT EXISTS idx_messages_parent_id
+                ON messages(parent_id)
             """)
             # Souls Table
             cursor.execute("""
@@ -652,10 +661,6 @@ def init_db():
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_marketplace_listing_id
                 ON marketplace(listing_id)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_social_posts_message_id
-                ON social_posts(message_id)
             """)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_log (
@@ -797,6 +802,7 @@ def init_db():
                 ON ledger(soul_id)
             """)
             _migrate_souls(cursor)
+        _migrate_social(conn)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
@@ -848,3 +854,96 @@ def _migrate_souls(cursor) -> None:
             f"Migration: hashed {migrated} legacy plaintext secrets, "
             "dropped souls.secret"
         )
+
+
+def _migrate_social(conn: sqlite3.Connection) -> None:
+    """Expand-contract migration from social_posts/social_replies.
+
+    Expand: backfill every legacy row into messages -- posts as
+    title-bearing roots, replies as children of their parent's message
+    id -- preserving ids, authors, and timestamps. Legacy posts with
+    empty titles get the '(untitled)' placeholder so the messages
+    title CHECK holds. Contract: drop the legacy tables once the
+    migrated row count verifies.
+
+    Idempotent: a no-op once the legacy tables are gone. Foreign keys
+    are toggled off for the backfill only (toggling is a no-op inside
+    a transaction, so this runs outside the init_db transaction);
+    orphaned replies keep their original parent_id and are reported
+    by foreign_key_check instead of being dropped or re-parented.
+    """
+    tables = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    if "social_posts" not in tables and "social_replies" not in tables:
+        return
+    if conn.in_transaction:
+        conn.commit()
+    post_count = (
+        conn.execute("SELECT COUNT(*) AS n FROM social_posts").fetchone()["n"]
+        if "social_posts" in tables
+        else 0
+    )
+    reply_count = (
+        conn.execute("SELECT COUNT(*) AS n FROM social_replies").fetchone()["n"]
+        if "social_replies" in tables
+        else 0
+    )
+    before = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if "social_posts" in tables:
+                conn.execute(
+                    "INSERT INTO messages (message_id, parent_id, "
+                    "author_type, author_id, author_name, title, body, "
+                    "created_at, edited_at, deleted) "
+                    "SELECT message_id, NULL, 'soul', author_id, "
+                    "author_name, "
+                    "CASE WHEN title IS NULL OR trim(title) = '' "
+                    "THEN '(untitled)' ELSE title END, "
+                    "content, timestamp, NULL, 0 "
+                    "FROM social_posts"
+                )
+            if "social_replies" in tables:
+                conn.execute(
+                    "INSERT INTO messages (message_id, parent_id, "
+                    "author_type, author_id, author_name, title, body, "
+                    "created_at, edited_at, deleted) "
+                    "SELECT reply_id, parent_id, 'soul', author_id, "
+                    "author_name, NULL, content, timestamp, NULL, 0 "
+                    "FROM social_replies"
+                )
+            after = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()[
+                "n"
+            ]
+            if after - before != post_count + reply_count:
+                raise RuntimeError(
+                    "social migration row-count mismatch: "
+                    f"legacy={post_count + reply_count} "
+                    f"migrated={after - before}"
+                )
+            conn.execute("DROP TABLE IF EXISTS social_replies")
+            conn.execute("DROP TABLE IF EXISTS social_posts")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+    violations = conn.execute("PRAGMA foreign_key_check(messages)").fetchall()
+    if violations:
+        logger.warning(
+            "social migration: %d orphaned message(s) kept with dangling "
+            "parent_id: %s",
+            len(violations),
+            [dict(v) for v in violations],
+        )
+    logger.info(
+        f"Migration: moved {post_count} posts + {reply_count} replies into "
+        "messages; dropped social_posts/social_replies"
+    )

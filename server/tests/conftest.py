@@ -6,8 +6,17 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from .. import database  # noqa: E402
 from .. import main  # noqa: E402
+from ..rate_limit import limiter  # noqa: E402
 
 load_dotenv()
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    """Isolate tests from the process-global sliding-window limiter."""
+    limiter._hits.clear()
+    yield
+    limiter._hits.clear()
 
 
 @pytest.fixture
@@ -51,8 +60,7 @@ def clear_db(db_conn):
     """Clears all tables before each test to ensure isolation."""
     cursor = db_conn.cursor()
     cursor.execute("DELETE FROM marketplace")
-    cursor.execute("DELETE FROM social_posts")
-    cursor.execute("DELETE FROM social_replies")
+    cursor.execute("DELETE FROM messages")
     cursor.execute("DELETE FROM souls")
     cursor.execute("DELETE FROM soul_inventory")
     cursor.execute("DELETE FROM ws_sessions")

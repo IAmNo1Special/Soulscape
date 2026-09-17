@@ -28,8 +28,7 @@ def setup_data():
         cursor = conn.cursor()
         cursor.execute("DELETE FROM souls")
         cursor.execute("DELETE FROM soul_inventory")
-        cursor.execute("DELETE FROM social_posts")
-        cursor.execute("DELETE FROM social_replies")
+        cursor.execute("DELETE FROM messages")
         cursor.execute("DELETE FROM marketplace")
 
         # Add some test data (using hashed secrets)
@@ -100,7 +99,7 @@ def test_idor_social_post():
     # Note: identity.id for soul secret is the soul_id
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT author_id FROM social_posts WHERE title = 'Hack'")
+        cursor.execute("SELECT author_id FROM messages WHERE title = 'Hack'")
         row = cursor.fetchone()
         assert (
             row["author_id"] == "soul_1"
@@ -130,12 +129,13 @@ def test_operator_override():
     hub_secret = os.getenv("HUB_SECRET_KEY", "test_secret")
     os.environ["HUB_SECRET_KEY"] = hub_secret
 
-    # Operator can specify any author_id
+    # Operator can specify any author_id; the authoring soul pays (#17
+    # precedent: the operator charge exemption is gone).
     response = client.post(
         "/social/post",
         headers={"X-Hub-Secret": hub_secret},
         json={
-            "author_id": "target_user",
+            "author_id": "soul_2",
             "author_name": "Admin",
             "title": "Admin Post",
             "content": "Admin content",
@@ -143,11 +143,18 @@ def test_operator_override():
         },
     )
     assert response.status_code == 200
+    assert response.json()["cost"] == 20.0
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT author_id FROM social_posts WHERE title = 'Admin Post'")
-        assert cursor.fetchone()["author_id"] == "target_user"
+        cursor.execute(
+            "SELECT author_id, author_type FROM messages WHERE title = 'Admin Post'"
+        )
+        row = cursor.fetchone()
+        assert row["author_id"] == "soul_2"
+        assert row["author_type"] == "soul"
+        cursor.execute("SELECT essence FROM souls WHERE soul_id = 'soul_2'")
+        assert cursor.fetchone()["essence"] == 80.0
 
 
 def test_operator_reply_cost():
@@ -157,23 +164,31 @@ def test_operator_reply_cost():
     # Pre-requisite: post exists
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO social_posts (message_id, author_id, author_name, title, content, timestamp) VALUES ('msg_1', 'u1', 'n1', 't1', 'c1', 1.0)"
+            "INSERT INTO messages (message_id, parent_id, author_type, "
+            "author_id, author_name, title, body, created_at) "
+            "VALUES ('msg_1', NULL, 'soul', 'soul_1', 'n1', 't1', 'c1', 1.0)"
         )
         conn.commit()
 
-    # Operator reply should have 0.0 cost
+    # Operator replying as a soul charges that soul (#17 precedent: no
+    # operator exemption).
     response = client.post(
         "/social/reply",
         headers={"X-Hub-Secret": hub_secret},
         json={
             "message_id": "msg_1",
-            "author_id": "999",  # HUB_OPERATOR_ID defaults to 999
+            "author_id": "soul_1",
             "author_name": "Admin",
             "content": "Admin reply",
         },
     )
     assert response.status_code == 200
-    assert response.json()["cost"] == 0.0
+    assert response.json()["cost"] == 8.0
+    with get_db() as conn:
+        essence = conn.execute(
+            "SELECT essence FROM souls WHERE soul_id = 'soul_1'"
+        ).fetchone()["essence"]
+        assert essence == 92.0
 
 
 def test_souls_inventory_optimization():
@@ -253,7 +268,10 @@ def test_idor_social_delete():
     # Pre-requisite: user_2 post exists
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO social_posts (message_id, author_id, author_name, content, timestamp) VALUES ('msg_u2', 'soul_2', 'User 2', 'U2 Post', 1.0)"
+            "INSERT INTO messages (message_id, parent_id, author_type, "
+            "author_id, author_name, title, body, created_at) "
+            "VALUES ('msg_u2', NULL, 'soul', 'soul_2', 'User 2', 't', "
+            "'U2 Post', 1.0)"
         )
         conn.commit()
 
