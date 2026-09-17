@@ -7,6 +7,8 @@ import random
 import time
 from typing import TYPE_CHECKING, Callable
 
+from shared.spatial import SpatialHashGrid
+
 from ...constants import (
     HOVER_AMPLITUDE,
     HOVER_FREQUENCY,
@@ -20,6 +22,46 @@ from ...system.logger import log
 
 if TYPE_CHECKING:
     from .soul import Soul
+
+
+SEPARATION_CELL_SIZE = 32.0
+
+_separation_frame = 0
+_separation_grids: dict[int, tuple[int, SpatialHashGrid]] = {}
+
+
+def begin_separation_frame() -> None:
+    """Advances the separation frame so the next lookup rebuilds the grid.
+
+    Call once per simulation frame before updating souls. The neighbor
+    grid is then built lazily on the first separation query of the frame
+    and reused by every soul, keeping the whole frame O(n).
+    """
+    global _separation_frame
+    _separation_frame += 1
+
+
+def _separation_key(other: Soul) -> str:
+    biology = getattr(other, "biology", None)
+    soul_id = getattr(biology, "soul_id", None)
+    return soul_id if soul_id else str(id(other))
+
+
+def _separation_grid(registry: list[Soul]) -> SpatialHashGrid:
+    key = id(registry)
+    cached = _separation_grids.get(key)
+    if cached is not None and cached[0] == _separation_frame:
+        return cached[1]
+    grid = SpatialHashGrid(cell_size=SEPARATION_CELL_SIZE)
+    for other in registry:
+        grid.insert(
+            _separation_key(other),
+            other.x + other.width / 2,
+            other.y + other.height / 2,
+            other,
+        )
+    _separation_grids[key] = (_separation_frame, grid)
+    return grid
 
 
 # --- Window Physics and Interaction ---
@@ -334,18 +376,13 @@ class SoulPhysics:
 
         # Access registry from soul if available
         if hasattr(self.soul, "soul_registry") and self.soul.soul_registry:
-            for other in self.soul.soul_registry:
+            grid = _separation_grid(self.soul.soul_registry)
+            neighbors = grid.query_radius(
+                my_center_x, my_center_y, separation_radius
+            )
+            for _, other_center_x, other_center_y, other in neighbors:
                 if other is self.soul:
                     continue
-
-                # Check rough bounds first
-                if abs(other.x - self.x) > separation_radius:
-                    continue
-                if abs(other.y - self.y) > separation_radius:
-                    continue
-
-                other_center_x = other.x + other.width / 2
-                other_center_y = other.y + other.height / 2
 
                 dx = my_center_x - other_center_x
                 dy = my_center_y - other_center_y

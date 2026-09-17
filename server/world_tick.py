@@ -23,6 +23,10 @@ integrates positions into an in-memory dirty set and flushes it to SQLite
 every 5 s or 1000 dirty entries (RPO <= 5 s + WAL fsync). Adjudicated
 intent outcomes are journaled in the same commit as the intent status
 update (RPO = 0). See persistence.py for the full RPO statement.
+
+Spatial index and vision rings (issue #20) live in server/world.py: the
+tick rebuilds the world's SpatialHashGrid from the read-through position
+view every tick and diffs coarse-vision enter/exit events every 5th tick.
 """
 
 import asyncio
@@ -39,6 +43,7 @@ from . import market
 from . import persistence
 from . import plots
 from . import social
+from . import world
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -82,6 +87,7 @@ class WorldTick:
         self._step_lock = threading.RLock()
         self._last_flush_at = time.monotonic()
         self._last_snapshot_tick = 0
+        self.vision = world.WorldVision()
 
     async def start(self) -> None:
         if self.running:
@@ -355,6 +361,9 @@ class WorldTick:
                         move_target=new_target,
                     )
                     moved += 1
+            self.vision.rebuild()
+            if self.tick_id % world.COARSE_DIFF_EVERY_TICKS == 0:
+                self.vision.diff_coarse()
             self.tick_id += 1
             self.souls_moved_last_tick = moved
             self._maybe_flush()
@@ -405,6 +414,7 @@ class WorldTick:
             "skipped_ticks": self.skipped_ticks,
             "soul_count": len(positions),
             "positions": positions,
+            "vision_entities": len(self.vision.grid),
             "dirty_entries": len(persistence.dirty),
             "journal_head_seq": journal_seq,
             "last_snapshot": snaps[0] if snaps else None,

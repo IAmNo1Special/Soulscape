@@ -23,6 +23,7 @@ from pyglet.window import key
 
 from .constants import SOUL_HEIGHT, SOUL_WIDTH
 from .core import MessageBoard, Soul
+from .core.soul import physics as soul_physics
 from .core.commands import ViewportFrameCommand
 from .system.input_router import InputRouter
 from .system.logger import log, setup_logging
@@ -518,6 +519,7 @@ class SoulscapeApp:
             return
 
         # 2. Update Simulation
+        soul_physics.begin_separation_frame()
         for soul in self.active_souls:
             soul.update(dt)
 
