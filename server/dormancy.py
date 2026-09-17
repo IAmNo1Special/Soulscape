@@ -128,12 +128,15 @@ def can_be_stolen_from(conn: sqlite3.Connection, soul_id: str) -> bool:
 def reset_think_schedule(soul_id: str) -> None:
     """Fresh think schedule on wake (#24 integration point).
 
-    No-op stub until the agent pool (#24) lands: it will own cognition
-    scheduling and must (a) skip dormant souls via soul_is_dormant()
-    and (b) reset a woken soul's think timer here so the soul thinks
-    promptly after waking instead of on a stale cadence.
+    Resets the woken soul's entry in the agent pool's think scheduler
+    so it thinks promptly after waking instead of on a stale cadence.
+    Lazy import: server.agents.pool imports this module, so the import
+    must stay deferred to call time.
     """
-    logger.debug("dormancy: think-schedule reset hook for %s (no-op until #24)", soul_id)
+    from .agents import scheduler as think_scheduler
+
+    think_scheduler.default().reset(soul_id)
+    logger.debug("dormancy: think-schedule reset for %s", soul_id)
 
 
 def _current_tick_id(conn: sqlite3.Connection) -> int:
@@ -209,9 +212,7 @@ def note_essence_change(
     return now_dormant, True
 
 
-def mint_starter_grant(
-    conn: sqlite3.Connection, tick_id: int, soul_id: str
-) -> float:
+def mint_starter_grant(conn: sqlite3.Connection, tick_id: int, soul_id: str) -> float:
     """Write the newborn `mint` ledger entry for a soul's starter grant.
 
     Called at birth (POST /souls) for truly-new souls only, in the same

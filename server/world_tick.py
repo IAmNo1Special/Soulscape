@@ -46,6 +46,7 @@ from . import social
 from . import world
 from . import biology
 from . import dormancy
+from . import agents
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -90,6 +91,8 @@ class WorldTick:
         self._last_flush_at = time.monotonic()
         self._last_snapshot_tick = 0
         self.vision = world.WorldVision()
+        self.agent_pool = agents.pool.AgentPool()
+        self._agent_soul_count: int | None = None
 
     async def start(self) -> None:
         if self.running:
@@ -173,6 +176,10 @@ class WorldTick:
                     plots.adjudicate_plot_intent(self, intent)
                 elif intent["kind"] in biology.BIOLOGY_KINDS:
                     biology.adjudicate_feed_soul(self, intent)
+                elif intent["kind"] in agents.consume.CONSUME_KINDS:
+                    agents.consume.adjudicate_consume(
+                        self, intent, agents.reflex.NullProvider()
+                    )
                 else:
                     with database.get_db() as conn:
                         self._reject(conn, intent, "unknown_kind")
@@ -188,9 +195,7 @@ class WorldTick:
             done += 1
         return done
 
-    def _reject(
-        self, conn, intent: dict, reason: str
-    ) -> None:
+    def _reject(self, conn, intent: dict, reason: str) -> None:
         result = {"reason": reason}
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -397,13 +402,66 @@ class WorldTick:
                     )
                     moved += 1
             self.vision.rebuild()
+            coarse_events: dict[str, dict] = {}
             if self.tick_id % world.COARSE_DIFF_EVERY_TICKS == 0:
-                self.vision.diff_coarse()
+                coarse_events = self.vision.diff_coarse()
+            self._run_agent_pool(coarse_events)
             self.tick_id += 1
             self.souls_moved_last_tick = moved
             self._maybe_flush()
             self._maybe_snapshot()
             return moved
+
+    def _run_agent_pool(self, coarse_events: dict[str, dict]) -> None:
+        """Agent pool phase (issue #24): bounded reflex thinks.
+
+        Coarse-vision enter events pull think times forward; then up to
+        THINK_MAX_PER_TICK due souls think (budget spreads work across
+        ticks so the 500-soul 14.3ms envelope holds). Dormant and
+        collapsed souls are skipped before scheduling.
+
+        Steady-state cost is ~zero: a COUNT(*) plus the scheduler's
+        earliest_due() lets the phase return before touching the souls
+        table when no soul can be due. A changed soul count refreshes
+        candidates (newborns think promptly) and prunes stale entries.
+        """
+        now = time.time()
+        sched = agents.scheduler.default()
+        for soul_id, events in coarse_events.items():
+            if events.get("entered"):
+                sched.note_vision_enter(soul_id, now)
+        with database.get_db() as conn:
+            count = conn.execute("SELECT COUNT(*) AS c FROM souls").fetchone()["c"]
+        if sched.needs_boot() or count != self._agent_soul_count:
+            candidates = self._agent_candidates()
+            self._agent_soul_count = count
+            if sched.needs_boot():
+                sched.rebuild_on_boot(candidates, now)
+            else:
+                sched.prune(set(candidates))
+        else:
+            earliest = sched.earliest_due()
+            if earliest is not None and earliest > now:
+                return
+            candidates = self._agent_candidates()
+        due = sched.due(now, candidates)
+        if due:
+            self.agent_pool.run_thinks(
+                due, self.vision, agents.reflex.NullProvider(), self.tick_id, now
+            )
+
+    def _agent_candidates(self) -> list[str]:
+        """Soul ids eligible for a think: awake and uncollapsed."""
+        with database.get_db() as conn:
+            rows = conn.execute(
+                "SELECT soul_id, state, COALESCE(essence, 0.0) AS essence FROM souls"
+            ).fetchall()
+        return [
+            row["soul_id"]
+            for row in rows
+            if (row["state"] or biology.STATE_NORMAL) != biology.STATE_COLLAPSED
+            and not dormancy.is_dormant(row["essence"])
+        ]
 
     @staticmethod
     def _parse_target(raw) -> tuple[float, float] | None:

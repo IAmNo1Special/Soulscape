@@ -326,8 +326,7 @@ def append_event(
 ) -> int:
     """Append one typed event to the journal inside the caller's transaction."""
     cursor = conn.execute(
-        "INSERT INTO journal (tick_id, type, payload, created_at) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO journal (tick_id, type, payload, created_at) VALUES (?, ?, ?, ?)",
         (tick_id, event_type, json.dumps(payload), time.time()),
     )
     return int(cursor.lastrowid)
@@ -338,9 +337,7 @@ def journal_head(conn: sqlite3.Connection) -> int:
     return int(row["head"])
 
 
-def journal_continuous(
-    conn: sqlite3.Connection, after_seq: int, head: int
-) -> bool:
+def journal_continuous(conn: sqlite3.Connection, after_seq: int, head: int) -> bool:
     """True when every seq in (after_seq, head] is present exactly once."""
     if head <= after_seq:
         return True
@@ -444,7 +441,9 @@ def take_snapshot(
     return int(cursor.lastrowid)
 
 
-def latest_snapshots(conn: sqlite3.Connection, limit: int = SNAPSHOT_KEEP) -> list[dict]:
+def latest_snapshots(
+    conn: sqlite3.Connection, limit: int = SNAPSHOT_KEEP
+) -> list[dict]:
     rows = conn.execute(
         "SELECT snapshot_id, tick_id, journal_seq, created_at FROM snapshots "
         "ORDER BY snapshot_id DESC LIMIT ?",
@@ -491,7 +490,10 @@ def apply_event(state: dict[str, dict], event: dict) -> None:
             return
         if "velocity" not in payload:
             return
-        entry["velocity"] = [float(payload["velocity"][0]), float(payload["velocity"][1])]
+        entry["velocity"] = [
+            float(payload["velocity"][0]),
+            float(payload["velocity"][1]),
+        ]
         target = payload.get("move_target")
         entry["move_target"] = (
             None if target is None else [float(target[0]), float(target[1])]
@@ -516,11 +518,13 @@ def apply_event(state: dict[str, dict], event: dict) -> None:
         EVENT_SOUL_FED,
         EVENT_SOUL_DORMANT,
         EVENT_SOUL_WOKE,
+        "agent_sensation",
+        "agent_stale_reject",
     ):
-        # Biology transitions carry no motion state; the replay state dict
-        # is position/velocity/move_target only, so these are no-ops here.
-        # They exist for the audit trail and for absolute-assignment
-        # idempotency of the journal.
+        # Biology transitions and agent-pool audit rows carry no motion
+        # state; the replay state dict is position/velocity/move_target
+        # only, so these are no-ops here. They exist for the audit
+        # trail and for absolute-assignment idempotency of the journal.
         pass
 
 
@@ -598,9 +602,7 @@ def reconcile_escrows(conn: sqlite3.Connection) -> int:
     """
     tables = {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
     if "escrows" not in tables:
         logger.info("reconcile_escrows: no escrows table yet")
@@ -641,8 +643,7 @@ def reconcile_escrows(conn: sqlite3.Connection) -> int:
                     (row["escrow_id"],),
                 )
                 logger.warning(
-                    "reconcile_escrows: escrow %s refunded %.2f to %s "
-                    "(intent %s)",
+                    "reconcile_escrows: escrow %s refunded %.2f to %s (intent %s)",
                     row["escrow_id"],
                     float(row["amount"]),
                     row["soul_id"],
@@ -715,8 +716,7 @@ def recover_world(tick, now: float | None = None) -> dict:
                 for soul_id, e in snap_blob["souls"].items()
             }
             db_ids = {
-                row["soul_id"]
-                for row in conn.execute("SELECT soul_id FROM souls")
+                row["soul_id"] for row in conn.execute("SELECT soul_id FROM souls")
             }
             for soul_id in db_ids - set(state):
                 row = conn.execute(
