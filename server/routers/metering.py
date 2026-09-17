@@ -17,13 +17,14 @@ manual settlement are operator-only and audit-logged.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from .. import database
 from ..agents import metering
 from ..models import PricingUpdate
 from ..rate_limit import read_limit
 from ..security import UserIdentity, get_api_key, require_scoped
+from ..sim_gateway import SimCommandError, SimUnreachable, gateway_for
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -43,9 +44,7 @@ def _assert_custody(identity: UserIdentity, soul_id: str) -> None:
     if row is None:
         raise HTTPException(status_code=404, detail="soul not found")
     if not identity.is_operator and identity.custodian_id != row["custodian"]:
-        raise HTTPException(
-            status_code=403, detail="Cross-custody access denied"
-        )
+        raise HTTPException(status_code=403, detail="Cross-custody access denied")
 
 
 def _assert_operator(identity: UserIdentity) -> None:
@@ -53,9 +52,7 @@ def _assert_operator(identity: UserIdentity) -> None:
         raise HTTPException(status_code=403, detail="operator only")
 
 
-@router.get(
-    "/souls/{soul_id}/summary", dependencies=[Depends(read_limit)]
-)
+@router.get("/souls/{soul_id}/summary", dependencies=[Depends(read_limit)])
 def soul_summary(
     soul_id: str,
     identity: UserIdentity = Depends(require_scoped),
@@ -67,9 +64,7 @@ def soul_summary(
         return metering.soul_summary(conn, soul_id)
 
 
-@router.get(
-    "/souls/{soul_id}/line-items", dependencies=[Depends(read_limit)]
-)
+@router.get("/souls/{soul_id}/line-items", dependencies=[Depends(read_limit)])
 def soul_line_items(
     soul_id: str,
     limit: int = Query(default=50, ge=1, le=500),
@@ -95,21 +90,26 @@ def get_pricing(identity: UserIdentity = Depends(get_api_key)):
 @router.post("/pricing")
 def update_pricing(
     body: PricingUpdate,
+    request: Request,
     identity: UserIdentity = Depends(get_api_key),
 ):
     """Operator pricing update. Affects NEW settlements only;
     already-settled events keep their recorded essence_charged."""
     _assert_operator(identity)
     try:
-        with database.get_db() as conn:
-            pricing = metering.set_pricing(
-                conn,
-                essence_per_usd=body.essence_per_usd,
-                model_rates=body.model_rates,
-            )
-            conn.commit()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        pricing = gateway_for(request).command(
+            "metering_set_pricing",
+            {
+                "essence_per_usd": body.essence_per_usd,
+                "model_rates": body.model_rates,
+            },
+        )
+    except SimUnreachable:
+        raise HTTPException(status_code=503, detail="Simulation unavailable")
+    except SimCommandError as exc:
+        if exc.reason == "bad_request":
+            raise HTTPException(status_code=400, detail=exc.detail)
+        raise HTTPException(status_code=500, detail=str(exc))
     database.audit_log(
         identity.id,
         "metering_pricing_update",
@@ -125,11 +125,16 @@ def update_pricing(
 
 
 @router.post("/settle")
-def trigger_settle(identity: UserIdentity = Depends(get_api_key)):
+def trigger_settle(request: Request, identity: UserIdentity = Depends(get_api_key)):
     """Operator manual batch trigger: claim unsettled usage into
     metering_debit intents for the next tick-pump settlement."""
     _assert_operator(identity)
-    report = metering.maybe_run_batch(force=True)
+    try:
+        report = gateway_for(request).command("metering_settle", {})
+    except SimUnreachable:
+        raise HTTPException(status_code=503, detail="Simulation unavailable")
+    except SimCommandError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     database.audit_log(
         identity.id,
         "metering_settle",

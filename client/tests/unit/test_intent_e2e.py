@@ -112,6 +112,7 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
         server_db.init_db()
 
         os.environ["HUB_AUTHORITATIVE"] = "1"
+        os.environ["SOULSCAPE_SIM_MODE"] = "inprocess"
         os.environ["HUB_SECRET_KEY"] = HUB_SECRET
         self.port = _free_port()
         os.environ["HUB_URL"] = f"http://127.0.0.1:{self.port}"
@@ -198,7 +199,16 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
         self.assertTrue(self._server.started, "hub did not start")
 
+        # Issue #37: the API no longer ticks. Run the sim loop in-process
+        # (same dispatcher/messages as a real sim process) so intents
+        # adjudicate and souls move.
+        from server.sim_gateway import get_gateway
+
+        self._sim_tick = get_gateway().backend.host.tick
+        await self._sim_tick.start()
+
     async def _stop_hub(self) -> None:
+        await self._sim_tick.stop()
         self._server.should_exit = True
         await self._server_task
 
@@ -207,7 +217,12 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
         self._pm_task.cancel()
         await self._stop_hub()
         self._tmp.cleanup()
-        for var in ("HUB_AUTHORITATIVE", "HUB_SECRET_KEY", "HUB_URL"):
+        for var in (
+            "HUB_AUTHORITATIVE",
+            "HUB_SECRET_KEY",
+            "HUB_URL",
+            "SOULSCAPE_SIM_MODE",
+        ):
             os.environ.pop(var, None)
 
     async def _raw_connect(self, owner: str = TAMER):

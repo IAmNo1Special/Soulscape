@@ -28,7 +28,7 @@ from ..market import MAX_ITEM_SIZE, MAX_JSON_DEPTH, MarketRefusal
 from ..models import BuyRequest, MarketListing
 from ..rate_limit import market_write_limit, read_limit
 from ..security import UserIdentity, get_api_key
-from ..world_tick import WorldTick
+from ..sim_gateway import SimError, SimRefusal, SimUnreachable, gateway_for
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -97,15 +97,19 @@ def _rest_actor(
     return identity.id, identity.custodian_id or identity.owner_id
 
 
+def _sim_503() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="Simulation unavailable: intent not accepted; retry with "
+        "the same Idempotency-Key",
+    )
+
+
 def _settle_intent(request: Request, record: dict) -> dict:
-    """Run the tick's intent pump once and return the fresh intent row."""
-    tick = getattr(request.app.state, "world_tick", None)
-    if tick is None:
-        tick = WorldTick()
-    tick.pump_intents()
-    fresh = intents.get_intent_by_nonce(record["session_id"], record["nonce"])
-    assert fresh is not None
-    return fresh
+    """Wait for the sim's tick to adjudicate; return the fresh intent row."""
+    return gateway_for(request).await_settled(
+        record["session_id"], record["nonce"]
+    )
 
 
 def _enqueue_and_settle(
@@ -128,11 +132,16 @@ def _enqueue_and_settle(
         else "rest_" + secrets.token_urlsafe(16)
     )
     try:
-        record, _created = market.enqueue_market_intent(
+        record = gateway_for(request).submit_intent(
             session_id, nonce, custodian_id, soul_id, kind, validated
         )
-    except MarketRefusal as refusal:
+    except SimRefusal as refusal:
         raise _refusal_http(refusal)
+    except SimUnreachable:
+        raise _sim_503()
+    except SimError as exc:
+        logger.error(f"Error in _enqueue_and_settle: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
     return _settle_intent(request, record)
 
 

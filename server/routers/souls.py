@@ -7,7 +7,6 @@ import logging
 import math
 import secrets
 import time
-from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -15,14 +14,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from .. import database
 from .. import dormancy
 from .. import intents
-from .. import persistence
 from .. import plots
 from .. import quips
 from .. import recap
 from .. import viewport
 from ..models import FeedSoulRequest, QuipRequest, SoulResponse, SoulUpdate
 from ..rate_limit import market_write_limit, read_limit
-from ..world_tick import WorldTick
 from ..security import (
     UserIdentity,
     assert_custody,
@@ -31,6 +28,13 @@ from ..security import (
     generate_token_expiry,
     require_scoped,
     validate_secret,
+)
+from ..sim_gateway import (
+    SimCommandError,
+    SimError,
+    SimRefusal,
+    SimUnreachable,
+    gateway_for,
 )
 
 logger = logging.getLogger("soulscape_hub")
@@ -210,6 +214,7 @@ def _validate_inventory_items(inventory: Any) -> list[dict]:
 
 @router.get("", response_model=list[SoulResponse], dependencies=[Depends(read_limit)])
 def get_souls(
+    request: Request,
     owner_id: str | None = Query(default=None),
     custodian_id: str | None = Query(default=None),
     identity: UserIdentity = Depends(require_scoped),
@@ -297,6 +302,10 @@ def get_souls(
                     inv_map[sid] = {}
                 inv_map[sid][item["item_name"]] = item["quantity"]
 
+            try:
+                sim_positions = gateway_for(request).positions()
+            except SimUnreachable:
+                sim_positions = {}
             for s in souls:
                 s["inventory"] = inv_map.get(s["soul_id"], {})
                 for key in [
@@ -315,18 +324,16 @@ def get_souls(
                             s[key] = json.loads(s[key])
                         except (json.JSONDecodeError, TypeError, ValueError):
                             pass
-                unflushed = persistence.dirty_get(s["soul_id"])
-                if unflushed is not None:
-                    if unflushed.get("position") is not None:
-                        s["position"] = [
-                            float(unflushed["position"][0]),
-                            float(unflushed["position"][1]),
-                        ]
-                    if unflushed.get("velocity") is not None:
-                        s["velocity"] = [
-                            float(unflushed["velocity"][0]),
-                            float(unflushed["velocity"][1]),
-                        ]
+                live = sim_positions.get(s["soul_id"])
+                if live is not None:
+                    s["position"] = [
+                        float(live["position"][0]),
+                        float(live["position"][1]),
+                    ]
+                    s["velocity"] = [
+                        float(live["velocity"][0]),
+                        float(live["velocity"][1]),
+                    ]
             return souls
     except Exception as e:
         logger.error(f"Error in get_souls: {e}")
@@ -387,7 +394,6 @@ def update_souls(
             saved = 0
             skipped: list[dict] = []
             validated_souls: list[tuple[dict, dict]] = []
-            saved_ids: list[str] = []
             # Newborn souls (no stored row) get the issue-#22 starter
             # grant: cached essence = STARTER_GRANT plus a `mint` ledger
             # row, so the ledger stays the truth behind the cache.
@@ -402,168 +408,111 @@ def update_souls(
                     continue
                 validated_souls.append((s, validated))
 
-            if validated_souls:
-                placeholders = ",".join("?" for _ in validated_souls)
-                valid_ids = [s.get("soul_id") for s, _ in validated_souls]
-                cursor.execute(
-                    f"DELETE FROM soul_inventory WHERE soul_id IN ({placeholders})",
-                    valid_ids,
-                )
-                cursor.execute(
-                    f"DELETE FROM souls WHERE COALESCE(custodian_id, owner_id) = ? "
-                    f"AND soul_id IN ({placeholders})",
-                    [custodian_id, *valid_ids],
-                )
+            valid_ids = [s.get("soul_id") for s, _ in validated_souls]
             seen_ids = {s.get("soul_id") for s, _ in validated_souls}
             seen_ids |= {
                 item["soul_id"] for item in skipped if item["soul_id"] is not None
             }
             stale_ids = [sid for sid in stored_rows if sid not in seen_ids]
-            if stale_ids:
-                placeholders = ",".join("?" for _ in stale_ids)
-                cursor.execute(
-                    f"DELETE FROM soul_inventory WHERE soul_id IN ({placeholders})",
-                    stale_ids,
-                )
-                cursor.execute(
-                    f"DELETE FROM souls WHERE COALESCE(custodian_id, owner_id) = ? "
-                    f"AND soul_id IN ({placeholders})",
-                    [custodian_id, *stale_ids],
-                )
+            # Issue #37: the write section below runs in the sim process
+            # (command "souls_upsert"). Validation, custody, and secret
+            # math stay here -- they are CPU/reads only.
+            entries: list[dict] = []
+            newborn_ids: list[str] = []
             for s, validated in validated_souls:
                 soul_id = s.get("soul_id")
                 stored = stored_rows.get(soul_id)
                 if stored is None:
-                    # Truly new soul: the mint ledger row below explains
-                    # the starter grant (issue #22).
                     newborn_ids.append(soul_id)
                 secret = s.get("secret")
                 existing_hash = stored.get("secret_hash") if stored else None
-                secret_hash = existing_hash
-                secret_prefix = stored.get("secret_prefix") if stored else None
-                token_expiry = stored.get("token_expiry") if stored else None
+                secret_record = None
+                secret_rotated = False
                 if secret:
                     if existing_hash and database.verify_secret_hash(
                         secret, existing_hash
                     ):
-                        pass
+                        secret_record = {
+                            "hash": existing_hash,
+                            "prefix": stored.get("secret_prefix"),
+                            "token_expiry": stored.get("token_expiry"),
+                        }
                     else:
                         validate_secret(secret)
-                        secret_hash, secret_prefix = make_secret_record(secret)
-                        token_expiry = generate_token_expiry()
+                        new_hash, new_prefix = make_secret_record(secret)
+                        secret_record = {
+                            "hash": new_hash,
+                            "prefix": new_prefix,
+                            "token_expiry": generate_token_expiry(),
+                        }
                         if existing_hash:
-                            cursor.execute(
-                                "DELETE FROM ws_sessions WHERE owner_id = ?",
-                                (custodian_id,),
-                            )
+                            secret_rotated = True
+                elif stored is not None:
+                    secret_record = {
+                        "hash": stored.get("secret_hash"),
+                        "prefix": stored.get("secret_prefix"),
+                        "token_expiry": stored.get("token_expiry"),
+                    }
                 essence = (
                     stored.get("essence")
                     if stored and stored.get("essence") is not None
                     else STARTING_ESSENCE
                 )
-
-                orb = s.get("orb_color", [1, 1, 1])
-                aura = s.get("aura_color", [1, 1, 1])
-
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO souls (
-                        soul_id, owner_id, custodian_id, name, first_name, family_name, species, gender,
-                        level, xp, mother_id, father_id, hp, max_hp, satiety, hydration,
-                        essence, position, velocity, hometown, birth_date, activity,
-                        orb_color, aura_color, aura_visible,
-                        stat_hp_base, stat_atk_base, stat_def_base, stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base,
-                        stat_hp_iv, stat_atk_iv, stat_def_iv, stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv,
-                        stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev,
-                        nature, secret_hash, secret_prefix, updated_at, token_expiry, is_revoked
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?
-                    )
-                """,
-                    (
-                        soul_id,
-                        custodian_id,
-                        custodian_id,
-                        s.get("name"),
-                        s.get("first_name"),
-                        s.get("family_name"),
-                        s.get("species"),
-                        s.get("gender"),
-                        validated["level"],
-                        validated["xp"],
-                        _lineage_id(s.get("mother_id")),
-                        _lineage_id(s.get("father_id")),
-                        validated["hp"],
-                        validated["max_hp"],
-                        validated["satiety"],
-                        validated["hydration"],
-                        essence,
-                        json.dumps(validated["position"]),
-                        json.dumps(validated["velocity"]),
-                        json.dumps(s.get("hometown")),
-                        s.get("birth_date"),
-                        s.get("activity"),
-                        json.dumps(orb),
-                        json.dumps(aura),
-                        1 if s.get("aura_visible") else 0,
-                        validated["stat_hp_base"],
-                        validated["stat_atk_base"],
-                        validated["stat_def_base"],
-                        validated["stat_spa_base"],
-                        validated["stat_spd_base"],
-                        validated["stat_spe_base"],
-                        validated["stat_vis_base"],
-                        validated["stat_hp_iv"],
-                        validated["stat_atk_iv"],
-                        validated["stat_def_iv"],
-                        validated["stat_spa_iv"],
-                        validated["stat_spd_iv"],
-                        validated["stat_spe_iv"],
-                        validated["stat_vis_iv"],
-                        validated["stat_hp_ev"],
-                        validated["stat_atk_ev"],
-                        validated["stat_def_ev"],
-                        validated["stat_spa_ev"],
-                        validated["stat_spd_ev"],
-                        validated["stat_spe_ev"],
-                        validated["stat_vis_ev"],
-                        s.get("nature", "Hardy"),
-                        secret_hash,
-                        secret_prefix,
-                        now,
-                        token_expiry,
-                        0,
-                    ),
+                entries.append(
+                    {
+                        "soul_id": soul_id,
+                        "validated": validated,
+                        "fields": {
+                            "name": s.get("name"),
+                            "first_name": s.get("first_name"),
+                            "family_name": s.get("family_name"),
+                            "species": s.get("species"),
+                            "gender": s.get("gender"),
+                            "mother_id": _lineage_id(s.get("mother_id")),
+                            "father_id": _lineage_id(s.get("father_id")),
+                            "hometown": s.get("hometown"),
+                            "birth_date": s.get("birth_date"),
+                            "activity": s.get("activity"),
+                            "orb_color": s.get("orb_color", [1, 1, 1]),
+                            "aura_color": s.get("aura_color", [1, 1, 1]),
+                            "aura_visible": s.get("aura_visible"),
+                            "nature": s.get("nature", "Hardy"),
+                        },
+                        "secret": secret_record,
+                        "secret_rotated": secret_rotated,
+                        "essence": essence,
+                        "inventory": _validate_inventory_items(s.get("inventory", {})),
+                        "now": now,
+                    }
                 )
-
-                for item in _validate_inventory_items(s.get("inventory", {})):
-                    cursor.execute(
-                        "INSERT INTO soul_inventory (soul_id, item_name, quantity) VALUES (?, ?, ?)",
-                        (
-                            soul_id,
-                            item["name"],
-                            item["quantity"],
-                        ),
+            try:
+                result = gateway_for(request).command(
+                    "souls_upsert",
+                    {
+                        "custodian_id": custodian_id,
+                        "entries": entries,
+                        "delete_inventory_ids": valid_ids,
+                        "delete_soul_ids": valid_ids,
+                        "stale_ids": stale_ids,
+                        "newborn_ids": newborn_ids,
+                    },
+                )
+            except SimUnreachable:
+                raise HTTPException(status_code=503, detail="Simulation unavailable")
+            except SimCommandError as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+            if result.get("secret_rotated"):
+                # ws_sessions is API-owned: the sim reports rotations,
+                # the API revokes the sessions itself.
+                with database.get_db() as conn:
+                    conn.execute(
+                        "DELETE FROM ws_sessions WHERE owner_id = ?",
+                        (custodian_id,),
                     )
-                saved += 1
-                saved_ids.append(soul_id)
-            # Newborn starter grants (issue #22): one `mint` ledger row
-            # per newborn, in the same transaction as the soul INSERTs.
-            if newborn_ids:
-                tick = getattr(request.app.state, "world_tick", None)
-                tick_id = tick.tick_id if tick is not None else 0
-                for soul_id in newborn_ids:
-                    dormancy.mint_starter_grant(conn, tick_id, soul_id)
-            conn.commit()
-            for soul_id in saved_ids:
-                persistence.invalidate(soul_id)
+                    conn.commit()
+            saved = result["saved"]
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in update_souls: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -589,14 +538,8 @@ _FEED_REJECTION_STATUS = {
 
 
 def _settle_feed_intent(request: Request, record: dict) -> dict:
-    """Pump the tick's intent queue once and return the fresh intent row."""
-    tick = getattr(request.app.state, "world_tick", None)
-    if tick is None:
-        tick = WorldTick()
-    tick.pump_intents()
-    fresh = intents.get_intent_by_nonce(record["session_id"], record["nonce"])
-    assert fresh is not None
-    return fresh
+    """Wait for the sim's tick to adjudicate; return the fresh intent row."""
+    return gateway_for(request).await_settled(record["session_id"], record["nonce"])
 
 
 @router.post("/feed", dependencies=[Depends(market_write_limit)])
@@ -640,7 +583,7 @@ def feed_soul(
         else "rest_" + secrets.token_urlsafe(16)
     )
     try:
-        record, _created = biology.enqueue_feed_soul(
+        record = gateway_for(request).submit_intent(
             session_id,
             nonce,
             custodian_id,
@@ -648,11 +591,19 @@ def feed_soul(
             biology.KIND_FEED_SOUL,
             validated,
         )
-    except biology.BiologyRefusal as refusal:
+    except SimRefusal as refusal:
         raise HTTPException(
             status_code=_FEED_REFUSAL_STATUS.get(refusal.reason, 400),
             detail=refusal.detail,
         )
+    except SimUnreachable:
+        raise HTTPException(
+            status_code=503,
+            detail="Simulation unavailable: intent not accepted",
+        )
+    except SimError as exc:
+        logger.error(f"Error submitting feed_soul intent: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
     try:
         record = _settle_feed_intent(request, record)
     except Exception as e:
@@ -677,6 +628,7 @@ def feed_soul(
 def request_quip(
     soul_id: str,
     body: QuipRequest,
+    request: Request,
     identity: UserIdentity = Depends(get_api_key),
 ):
     """Request a personalized quip from a soul (issue #30).
@@ -707,65 +659,50 @@ def request_quip(
 
     soul = dict(row)
     day = quips.quip_day()
-    # Phase 1: atomically reserve a budget slot and verify funds under
-    # one BEGIN IMMEDIATE, so concurrent requests cannot overspend the
-    # daily budget. The reservation is released if generation or
-    # charging fails below.
-    with database.get_db() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            if quips.quips_remaining(conn, soul_id) <= 0:
-                conn.rollback()
-                resets_at = datetime.combine(
-                    datetime.now(timezone.utc).date() + timedelta(days=1),
-                    dtime.min,
-                    tzinfo=timezone.utc,
-                ).isoformat()
-                raise HTTPException(
-                    status_code=429,
-                    detail={
-                        "reason": "budget_exhausted",
-                        "message": "Quip budget exhausted: 3 personalized "
-                        "quips per soul per day.",
-                        "quips_remaining_today": 0,
-                        "resets_at": resets_at,
-                    },
-                )
-            balance = conn.execute(
-                "SELECT COALESCE(essence, 0.0) FROM souls WHERE soul_id = ?",
-                (soul_id,),
-            ).fetchone()[0]
-            if float(balance) < quips.QUIP_PRICE_ESSENCE:
-                conn.rollback()
-                raise HTTPException(
-                    status_code=402,
-                    detail={
-                        "reason": "insufficient_essence",
-                        "message": "Not enough essence for a quip.",
-                        "price": quips.QUIP_PRICE_ESSENCE,
-                        "essence": float(balance),
-                    },
-                )
-            quips.record_quip(conn, soul_id, day)
-            used = quips.get_quip_count(conn, soul_id, day)
-            conn.commit()
-        except HTTPException:
-            raise
-        except Exception:
-            conn.rollback()
-            raise
+    # Phase 1 (issue #37): the sim process atomically reserves a budget
+    # slot and verifies funds; the reservation is released below if
+    # generation or charging fails.
+    try:
+        reserved = gateway_for(request).command(
+            "quip_reserve", {"soul_id": soul_id, "day": day}
+        )
+    except SimUnreachable:
+        raise HTTPException(status_code=503, detail="Simulation unavailable")
+    except SimCommandError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if not reserved.get("reserved"):
+        if reserved.get("reason") == "budget_exhausted":
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "reason": "budget_exhausted",
+                    "message": "Quip budget exhausted: 3 personalized "
+                    "quips per soul per day.",
+                    "quips_remaining_today": 0,
+                    "resets_at": reserved.get("resets_at"),
+                },
+            )
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "reason": "insufficient_essence",
+                "message": "Not enough essence for a quip.",
+                "price": reserved.get("price"),
+                "essence": reserved.get("essence"),
+            },
+        )
+    used = reserved["quips_used_today"]
 
     # Phase 2: generate outside the write lock (LLM calls take seconds).
     try:
         gen = quips.generate_quip(soul, body.prompt)
     except Exception as exc:
-        with database.get_db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                quips.release_quip(conn, soul_id, day)
-                conn.commit()
-            except Exception:
-                conn.rollback()
+        try:
+            gateway_for(request).command(
+                "quip_release", {"soul_id": soul_id, "day": day}
+            )
+        except (SimUnreachable, SimCommandError):
+            logger.error("quip slot release failed after generation failure")
         raise HTTPException(
             status_code=502,
             detail={
@@ -774,37 +711,40 @@ def request_quip(
             },
         ) from exc
 
-    # Phase 3: charge the fixed price and write the ledger/usage rows.
+    # Phase 3: charge the fixed price and write the ledger/usage rows
+    # in the sim process. The full gen dict goes over IPC because the
+    # usage row records provider/model/tokens/cost.
     try:
-        with database.get_db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                essence_left = quips.charge_for_quip(conn, soul_id)
-                quips.write_usage_row(conn, soul_id, gen)
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-    except HTTPException as exc:
-        if "Insufficient essence" in str(exc.detail):
-            # Balance raced between reservation and charge: release the
-            # slot and report 402.
-            with database.get_db() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                try:
-                    quips.release_quip(conn, soul_id, day)
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "reason": "insufficient_essence",
-                    "message": "Not enough essence for a quip.",
-                    "price": quips.QUIP_PRICE_ESSENCE,
-                },
-            ) from exc
-        raise
+        charged = gateway_for(request).command(
+            "quip_charge",
+            {
+                "soul_id": soul_id,
+                "gen": gen,
+                "day": day,
+            },
+        )
+    except SimUnreachable:
+        raise HTTPException(status_code=503, detail="Simulation unavailable")
+    except SimCommandError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if not charged.get("charged"):
+        # Balance raced between reservation and charge: release the slot
+        # and report 402.
+        try:
+            gateway_for(request).command(
+                "quip_release", {"soul_id": soul_id, "day": day}
+            )
+        except (SimUnreachable, SimCommandError):
+            logger.error("quip slot release failed after charge failure")
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "reason": "insufficient_essence",
+                "message": "Not enough essence for a quip.",
+                "price": quips.QUIP_PRICE_ESSENCE,
+            },
+        )
+    essence_left = charged["essence_left"]
 
     owner_id = soul["owner_id"] or soul["custodian_id"] or ""
     viewport.viewport.notify_bubble(

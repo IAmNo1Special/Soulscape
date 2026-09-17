@@ -22,13 +22,17 @@ from .. import intents
 from .. import plots as plots_lib
 from ..rate_limit import market_write_limit, read_limit
 from ..security import UserIdentity, get_api_key
-from ..world_tick import WorldTick
+from ..sim_gateway import (
+    SimCommandError,
+    SimError,
+    SimRefusal,
+    SimUnreachable,
+    gateway_for,
+)
 
 logger = logging.getLogger("soulscape_hub")
 
-router = APIRouter(
-    prefix="/plots", tags=["Plots"], dependencies=[Depends(get_api_key)]
-)
+router = APIRouter(prefix="/plots", tags=["Plots"], dependencies=[Depends(get_api_key)])
 
 _REFUSAL_STATUS = {
     "claimant_not_found": 404,
@@ -48,9 +52,7 @@ def _refusal_http(refusal: plots_lib.PlotRefusal) -> HTTPException:
     )
 
 
-def _claim_actor(
-    identity: UserIdentity, soul_id: str | None
-) -> tuple[str, str | None]:
+def _claim_actor(identity: UserIdentity, soul_id: str | None) -> tuple[str, str | None]:
     """Return (claimant_soul_id, custodian_id) for a REST claim.
 
     The claimant is always a soul: its wallet pays the claim fee.
@@ -59,9 +61,7 @@ def _claim_actor(
     """
     if identity.is_operator:
         if not soul_id:
-            raise HTTPException(
-                status_code=400, detail="Operator must specify soul_id"
-            )
+            raise HTTPException(status_code=400, detail="Operator must specify soul_id")
         return soul_id, None
     if identity.is_tamer:
         if not soul_id:
@@ -73,15 +73,17 @@ def _claim_actor(
     return identity.id, identity.custodian_id or identity.owner_id
 
 
+def _sim_503() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="Simulation unavailable: intent not accepted; retry with "
+        "the same Idempotency-Key",
+    )
+
+
 def _settle_intent(request: Request, record: dict) -> dict:
-    """Run the tick's intent pump once and return the fresh intent row."""
-    tick = getattr(request.app.state, "world_tick", None)
-    if tick is None:
-        tick = WorldTick()
-    tick.pump_intents()
-    fresh = intents.get_intent_by_nonce(record["session_id"], record["nonce"])
-    assert fresh is not None
-    return fresh
+    """Wait for the sim's tick to adjudicate; return the fresh intent row."""
+    return gateway_for(request).await_settled(record["session_id"], record["nonce"])
 
 
 @router.get("", dependencies=[Depends(read_limit)])
@@ -107,9 +109,7 @@ def claim_plot(
         "claimant_soul_id": claimant_soul_id,
         "access_policy": body.get("access_policy", "open"),
     }
-    validated, error = intents.validate_payload(
-        plots_lib.KIND_PLOT_CLAIM, payload
-    )
+    validated, error = intents.validate_payload(plots_lib.KIND_PLOT_CLAIM, payload)
     if error is not None:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {error}")
     session_id = f"rest:{identity.id}"
@@ -119,7 +119,7 @@ def claim_plot(
         else "rest_" + secrets.token_urlsafe(16)
     )
     try:
-        record, _created = plots_lib.enqueue_plot_intent(
+        record = gateway_for(request).submit_intent(
             session_id,
             nonce,
             custodian_id,
@@ -127,9 +127,11 @@ def claim_plot(
             plots_lib.KIND_PLOT_CLAIM,
             validated,
         )
-    except plots_lib.PlotRefusal as refusal:
+    except SimRefusal as refusal:
         raise _refusal_http(refusal)
-    except Exception as e:
+    except SimUnreachable:
+        raise _sim_503()
+    except SimError as e:
         logger.error(f"Error in claim_plot: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -149,14 +151,10 @@ def claim_plot(
     result = record["result"] or {}
     reason = result.get("reason", "internal")
     detail = result.get("detail", reason)
-    raise HTTPException(
-        status_code=_REFUSAL_STATUS.get(reason, 400), detail=detail
-    )
+    raise HTTPException(status_code=_REFUSAL_STATUS.get(reason, 400), detail=detail)
 
 
-def _may_set_policy(
-    identity: UserIdentity, plot: dict[str, Any]
-) -> bool:
+def _may_set_policy(identity: UserIdentity, plot: dict[str, Any]) -> bool:
     if identity.is_operator:
         return True
     if plot.get("owner_type") == "soul" and plot.get("owner_id") == identity.id:
@@ -167,9 +165,10 @@ def _may_set_policy(
                 "SELECT custodian_id, owner_id FROM souls WHERE soul_id = ?",
                 (plot["owner_id"],),
             ).fetchone()
-            if row is not None and (
-                row["custodian_id"] or row["owner_id"]
-            ) == identity.custodian_id:
+            if (
+                row is not None
+                and (row["custodian_id"] or row["owner_id"]) == identity.custodian_id
+            ):
                 return True
     return False
 
@@ -178,6 +177,7 @@ def _may_set_policy(
 def set_plot_access(
     plot_id: str,
     body: Dict[str, Any],
+    request: Request,
     identity: UserIdentity = Depends(get_api_key),
 ):
     policy = body.get("access_policy")
@@ -200,9 +200,13 @@ def set_plot_access(
             raise HTTPException(
                 status_code=403, detail="Only the plot owner may set its policy"
             )
-        conn.execute(
-            "UPDATE plots SET access_policy = ? WHERE plot_id = ?",
-            (policy, plot_id),
+    try:
+        return gateway_for(request).command(
+            "plot_set_policy",
+            {"plot_id": plot_id, "access_policy": policy},
         )
-        conn.commit()
-    return {"status": "success", "plot_id": plot_id, "access_policy": policy}
+    except SimUnreachable:
+        raise HTTPException(status_code=503, detail="Simulation unavailable")
+    except SimCommandError as exc:
+        logger.error(f"Error in set_plot_access: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))

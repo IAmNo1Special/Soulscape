@@ -11,7 +11,7 @@ the question's soul (a stranger cannot answer another tamer's souls).
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from .. import database
@@ -23,6 +23,7 @@ from ..security import (
     get_api_key,
     require_scoped,
 )
+from ..sim_gateway import SimCommandError, SimUnreachable, gateway_for
 
 router = APIRouter(
     prefix="/mailbag", tags=["Mailbag"], dependencies=[Depends(get_api_key)]
@@ -68,12 +69,11 @@ def mailbag_pending(identity: UserIdentity = Depends(require_scoped)):
     return {"questions": questions}
 
 
-@router.post(
-    "/{question_id}/answer", dependencies=[Depends(market_write_limit)]
-)
+@router.post("/{question_id}/answer", dependencies=[Depends(market_write_limit)])
 def answer_mailbag(
     question_id: str,
     body: AnswerRequest,
+    request: Request,
     identity: UserIdentity = Depends(require_scoped),
 ):
     """Answer a soul's question (custody-checked).
@@ -103,14 +103,23 @@ def answer_mailbag(
             detail="Only a soul's tamer may answer its questions",
         )
     assert_custody(identity, soul["custodian_id"] or soul["owner_id"])
-    result = mailbag.answer_question(
-        question_id, row["soul_id"], body.answer, time.time()
-    )
+    try:
+        result = gateway_for(request).command(
+            "mailbag_answer",
+            {
+                "question_id": question_id,
+                "soul_id": row["soul_id"],
+                "answer": body.answer,
+                "now": time.time(),
+            },
+        )
+    except SimUnreachable:
+        raise HTTPException(status_code=503, detail="Simulation unavailable")
+    except SimCommandError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     if result["status"] == "refused":
         reason = result["reason"]
-        code = (
-            status.HTTP_404_NOT_FOUND if reason == "not_found" else 409
-        )
+        code = status.HTTP_404_NOT_FOUND if reason == "not_found" else 409
         raise HTTPException(
             status_code=code,
             detail={"reason": reason, "message": f"Cannot answer: {reason}."},

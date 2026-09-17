@@ -31,6 +31,7 @@ from .. import viewport
 from .. import biology
 from ..managers import manager
 from ..models import WsTicketResponse
+from ..sim_gateway import SimRefusal, SimUnreachable, gateway_for
 from ..security import (
     UserIdentity,
     require_scoped,
@@ -133,18 +134,27 @@ async def _handle_tamer_presence(
         )
         return
     try:
-        record = presence_module.enqueue_presence_intent(
-            session_id, nonce, tamer_id, payload
+        record = await _gw_submit(
+            websocket,
+            session_id,
+            nonce,
+            tamer_id,
+            f"tamer:{tamer_id}",
+            "tamer_presence",
+            payload,
         )
-    except ValueError as exc:
+    except SimRefusal as refusal:
         await websocket.send_json(
             protocol.envelope(
                 protocol.MessageType.ERROR,
                 code="BAD_PAYLOAD",
-                message=f"Intent rejected: BAD_PAYLOAD ({exc})",
+                message=f"Intent rejected: BAD_PAYLOAD ({refusal.detail})",
                 nonce=nonce,
             )
         )
+        return
+    except SimUnreachable:
+        await _sim_unavailable_envelope(websocket, nonce)
         return
     await websocket.send_json(_intent_ack(record))
 
@@ -228,52 +238,64 @@ async def _handle_intent(
         return
     if kind in plots.PLOT_KINDS:
         try:
-            record, _created = plots.enqueue_plot_intent(
-                session_id, nonce, custodian, soul_id, kind, payload
+            record = await _gw_submit(
+                websocket, session_id, nonce, custodian, soul_id, kind, payload
             )
-        except plots.PlotRefusal as refusal:
+        except SimRefusal as refusal:
+            code = refusal.ws_code or "REJECTED"
             await websocket.send_json(
                 protocol.envelope(
                     protocol.MessageType.ERROR,
-                    code=refusal.ws_code,
-                    message=f"Intent rejected: {refusal.ws_code}",
+                    code=code,
+                    message=f"Intent rejected: {code}",
                     nonce=nonce,
                 )
             )
+            return
+        except SimUnreachable:
+            await _sim_unavailable_envelope(websocket, nonce)
             return
         await websocket.send_json(_intent_ack(record))
         return
     if kind in market.MARKET_KINDS:
         try:
-            record, _created = market.enqueue_market_intent(
-                session_id, nonce, custodian, soul_id, kind, payload
+            record = await _gw_submit(
+                websocket, session_id, nonce, custodian, soul_id, kind, payload
             )
-        except market.MarketRefusal as refusal:
+        except SimRefusal as refusal:
+            code = refusal.ws_code or "REJECTED"
             await websocket.send_json(
                 protocol.envelope(
                     protocol.MessageType.ERROR,
-                    code=refusal.ws_code,
-                    message=f"Intent rejected: {refusal.ws_code}",
+                    code=code,
+                    message=f"Intent rejected: {code}",
                     nonce=nonce,
                 )
             )
+            return
+        except SimUnreachable:
+            await _sim_unavailable_envelope(websocket, nonce)
             return
         await websocket.send_json(_intent_ack(record))
         return
     if kind in biology.BIOLOGY_KINDS:
         try:
-            record, _created = biology.enqueue_feed_soul(
-                session_id, nonce, custodian, soul_id, kind, payload
+            record = await _gw_submit(
+                websocket, session_id, nonce, custodian, soul_id, kind, payload
             )
-        except biology.BiologyRefusal as refusal:
+        except SimRefusal as refusal:
+            code = refusal.ws_code or "REJECTED"
             await websocket.send_json(
                 protocol.envelope(
                     protocol.MessageType.ERROR,
-                    code=refusal.ws_code,
-                    message=f"Intent rejected: {refusal.ws_code}",
+                    code=code,
+                    message=f"Intent rejected: {code}",
                     nonce=nonce,
                 )
             )
+            return
+        except SimUnreachable:
+            await _sim_unavailable_envelope(websocket, nonce)
             return
         await websocket.send_json(_intent_ack(record))
         return
@@ -291,15 +313,61 @@ async def _handle_intent(
             )
         )
         return
-    record = intents.enqueue_intent(
-        session_id, nonce, custodian, soul_id, kind, payload
-    )
+    try:
+        record = await _gw_submit(
+            websocket, session_id, nonce, custodian, soul_id, kind, payload
+        )
+    except SimRefusal as refusal:
+        code = refusal.ws_code or "REJECTED"
+        await websocket.send_json(
+            protocol.envelope(
+                protocol.MessageType.ERROR,
+                code=code,
+                message=f"Intent rejected: {code} ({refusal.detail})",
+                nonce=nonce,
+            )
+        )
+        return
+    except SimUnreachable:
+        await _sim_unavailable_envelope(websocket, nonce)
+        return
     await websocket.send_json(_intent_ack(record))
 
 
-def _current_tick_id(websocket: WebSocket) -> int:
-    tick = getattr(websocket.app.state, "world_tick", None)
-    return tick.tick_id if tick is not None else 0
+async def _gw_submit(
+    websocket: WebSocket,
+    session_id: str,
+    nonce: str,
+    custodian: str | None,
+    soul_id: str,
+    kind: str,
+    payload: dict,
+) -> dict:
+    """Submit an intent to the sim without blocking the event loop."""
+    gw = gateway_for(websocket)
+    return await asyncio.to_thread(
+        gw.submit_intent, session_id, nonce, custodian, soul_id, kind, payload
+    )
+
+
+async def _sim_unavailable_envelope(websocket: WebSocket, nonce: str) -> None:
+    await websocket.send_json(
+        protocol.envelope(
+            protocol.MessageType.ERROR,
+            code="SIM_UNAVAILABLE",
+            message="Intent rejected: SIM_UNAVAILABLE (sim down; retry)",
+            nonce=nonce,
+        )
+    )
+
+
+async def _current_tick_id(websocket: WebSocket) -> int:
+    """Current sim tick id via IPC (0 when the sim is unreachable)."""
+    try:
+        status = await asyncio.to_thread(gateway_for(websocket).tick_status)
+    except SimUnreachable:
+        return 0
+    return int(status.get("tick_id", 0) or 0)
 
 
 async def _viewport_pump(
@@ -335,7 +403,7 @@ async def _viewport_pump(
                 )
                 for sid, vals in raw_identities.items()
             }
-            tick_id = _current_tick_id(websocket)
+            tick_id = await _current_tick_id(websocket)
             for op, domain in viewport.diff_positions(positions, session.committed):
                 session.enqueue(op, domain)
             for op, domain in viewport.diff_states(states, session.committed_states):
@@ -344,21 +412,22 @@ async def _viewport_pump(
                 dormant, session.committed_dormancy
             ):
                 session.enqueue(op, domain)
-            for op, domain in viewport.diff_biology(
-                biology, session.committed_biology
-            ):
+            for op, domain in viewport.diff_biology(biology, session.committed_biology):
                 session.enqueue(op, domain)
             for op, domain in viewport.diff_identities(
                 identities, session.committed_identities
             ):
                 session.enqueue(op, domain)
-            for op, domain in viewport.diff_abroad(
-                abroad, session, time.time()
-            ):
+            for op, domain in viewport.diff_abroad(abroad, session, time.time()):
                 session.enqueue(op, domain)
             result = await viewport.flush(
-                session, positions, tick_id, websocket.send_json,
-                states=states, dormant=dormant, biology=biology,
+                session,
+                positions,
+                tick_id,
+                websocket.send_json,
+                states=states,
+                dormant=dormant,
+                biology=biology,
                 identities=identities,
             )
             if result == "closed":
@@ -429,7 +498,7 @@ async def websocket_presence(
     await manager.connect(owner_id, websocket)
 
     vp_session = viewport.viewport.create(owner_id)
-    tick_id = _current_tick_id(websocket)
+    tick_id = await _current_tick_id(websocket)
     pump_task = asyncio.create_task(_viewport_pump(websocket, vp_session))
 
     try:
@@ -485,7 +554,7 @@ async def websocket_presence(
                         vp_session,
                         message.get("conn_id"),
                         message.get("last_seq"),
-                        _current_tick_id(websocket),
+                        await _current_tick_id(websocket),
                         websocket.send_json,
                     )
                     if outcome == "snapshot":
@@ -493,7 +562,7 @@ async def websocket_presence(
                             viewport.build_snapshot(
                                 vp_session,
                                 protocol.SnapReason.RESYNC,
-                                _current_tick_id(websocket),
+                                await _current_tick_id(websocket),
                             )
                         )
                     continue

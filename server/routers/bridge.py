@@ -17,11 +17,15 @@ All bridge reads are custody-scoped: a tamer sees only their own
 tokens and events.
 """
 
+import json
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from .. import bridge
+from .. import quips
+from .. import viewport
 from ..models import (
     BridgeActivityItem,
     BridgeEventIn,
@@ -31,6 +35,7 @@ from ..models import (
 )
 from ..rate_limit import key_write_limit, read_limit
 from ..security import UserIdentity, get_api_key
+from ..sim_gateway import SimCommandError, SimUnreachable, gateway_for
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -67,8 +72,7 @@ def _authenticate_bridge_token(request: Request) -> dict:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
                 "reason": "missing_token",
-                "message": "Authorization: Bearer <integration token> "
-                "required",
+                "message": "Authorization: Bearer <integration token> required",
             },
         )
     row = bridge.resolve_token(presented)
@@ -77,8 +81,7 @@ def _authenticate_bridge_token(request: Request) -> dict:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
                 "reason": "invalid_token",
-                "message": "Unknown, malformed, or revoked integration "
-                "token",
+                "message": "Unknown, malformed, or revoked integration token",
             },
         )
     return row
@@ -105,8 +108,7 @@ def create_bridge_token(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"reason": exc.reason, "message": exc.detail},
         ) from exc
-    logger.info("Bridge token created: %s for tamer %s",
-                meta["token_id"], owner)
+    logger.info("Bridge token created: %s for tamer %s", meta["token_id"], owner)
     return BridgeTokenCreated(**meta, token=plaintext)
 
 
@@ -124,9 +126,7 @@ def list_bridge_tokens(
     return [BridgeTokenMeta(**row) for row in bridge.list_tokens(owner)]
 
 
-@router.delete(
-    "/tokens/{token_id}", dependencies=[Depends(key_write_limit)]
-)
+@router.delete("/tokens/{token_id}", dependencies=[Depends(key_write_limit)])
 def revoke_bridge_token(
     token_id: str,
     tamer_id: str | None = Query(default=None),
@@ -155,9 +155,7 @@ _REFUSAL_STATUS = {
 
 
 @router.post("/events")
-def post_bridge_event(
-    payload: BridgeEventIn, request: Request
-) -> dict:
+def post_bridge_event(payload: BridgeEventIn, request: Request) -> dict:
     """Accept one external agent event.
 
     Auth: ``Authorization: Bearer <integration token>`` (constant-time
@@ -167,9 +165,7 @@ def post_bridge_event(
     attempts -> 422.
     """
     token_row = _authenticate_bridge_token(request)
-    retry_after = bridge.check_rate_limit(
-        token_row["tamer_id"], payload.source_id
-    )
+    retry_after = bridge.check_rate_limit(token_row["tamer_id"], payload.source_id)
     if retry_after > 0:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -180,32 +176,103 @@ def post_bridge_event(
                 "retry_after": round(retry_after, 1),
             },
         )
+    # Issue #37: validation, soul resolution, durable intent enqueue,
+    # and the quip-budget reservation run in the sim process. The LLM
+    # commentary generation stays API-side (vault keys live here),
+    # between the sim's reserve and finalize calls.
     try:
-        return bridge.ingest_event(
-            token_row,
-            payload.source_id,
-            payload.kind,
-            payload.summary,
-            payload.ref,
-            payload.commentary,
+        accepted = gateway_for(request).command(
+            "bridge_ingest",
+            {
+                "tamer_id": token_row["tamer_id"],
+                "source_id": payload.source_id,
+                "kind": payload.kind,
+                "summary": payload.summary,
+                "ref": payload.ref,
+                "commentary": payload.commentary,
+                "now": time.time(),
+            },
         )
-    except bridge.InjectionRejected as exc:
+    except SimUnreachable:
         raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Simulation unavailable: event not accepted",
+        )
+    except SimCommandError as exc:
+        raise _bridge_command_http(exc)
+    commentary = accepted.get("commentary")
+    if isinstance(commentary, dict) and commentary.get("status") == "reserved":
+        commentary = _finalize_bridge_commentary(request, accepted, commentary)
+    return {
+        "status": "accepted",
+        "event_id": accepted["event_id"],
+        "soul_id": accepted["soul_id"],
+        "kind": accepted["kind"],
+        "pivotal": accepted["pivotal"],
+        "commentary": commentary,
+    }
+
+
+def _bridge_command_http(exc: SimCommandError) -> HTTPException:
+    """Map a sim command failure to the bridge HTTP contract."""
+    if exc.reason == "injection_rejected":
+        try:
+            det = json.loads(exc.detail)
+        except (TypeError, ValueError):
+            det = {}
+        return HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "reason": "injection_rejected",
-                "pattern_class": exc.pattern_class,
-                "pattern": exc.pattern,
+                "pattern_class": det.get("pattern_class"),
+                "pattern": det.get("pattern"),
                 "message": "Summary rejected by the injection scrubber.",
             },
-        ) from exc
-    except bridge.BridgeRefusal as exc:
-        raise HTTPException(
-            status_code=_REFUSAL_STATUS.get(
-                exc.reason, status.HTTP_400_BAD_REQUEST
-            ),
-            detail={"reason": exc.reason, "message": exc.detail},
-        ) from exc
+        )
+    return HTTPException(
+        status_code=_REFUSAL_STATUS.get(exc.reason, status.HTTP_400_BAD_REQUEST),
+        detail={"reason": exc.reason, "message": exc.detail},
+    )
+
+
+def _finalize_bridge_commentary(
+    request: Request, accepted: dict, reservation: dict
+) -> dict:
+    """Generate commentary API-side, then finalize in the sim.
+
+    Generation failure releases the reserved quip slot and journals a
+    skip, mirroring the old inline render_commentary() behavior.
+    """
+    soul = accepted.get("commentary_soul") or {}
+    try:
+        gen = quips.generate_quip(soul, reservation["prompt"])
+    except Exception:
+        gen = None
+    try:
+        finalized = gateway_for(request).command(
+            "bridge_commentary_finalize",
+            {
+                "soul_id": accepted["soul_id"],
+                "event": accepted.get("commentary_event") or {},
+                "gen": gen,
+                "day": reservation["day"],
+            },
+        )
+    except (SimUnreachable, SimCommandError) as exc:
+        logger.error("bridge commentary finalize failed: %s", exc)
+        return {"status": "skipped", "reason": "finalize_failed"}
+    commentary = finalized
+    if finalized.get("status") == "rendered" and gen:
+        owner_id = soul.get("custodian_id") or soul.get("owner_id")
+        if owner_id:
+            viewport.viewport.notify_bubble(
+                owner_id,
+                accepted["soul_id"],
+                gen["text"],
+                kind="quip",
+                solicited=True,
+            )
+    return commentary
 
 
 @router.get(

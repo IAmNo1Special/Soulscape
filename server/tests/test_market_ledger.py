@@ -135,11 +135,13 @@ def test_rest_buy_idempotency_key(client, register_soul):
 
     headers = {"Idempotency-Key": "buy-once-123"}
     first = client.post(
-        f"/marketplace/buy/{listing_id}", json={"buyer_id": "id_buyer"},
+        f"/marketplace/buy/{listing_id}",
+        json={"buyer_id": "id_buyer"},
         headers=headers,
     )
     second = client.post(
-        f"/marketplace/buy/{listing_id}", json={"buyer_id": "id_buyer"},
+        f"/marketplace/buy/{listing_id}",
+        json={"buyer_id": "id_buyer"},
         headers=headers,
     )
     assert first.status_code == 200
@@ -166,18 +168,12 @@ def test_rest_buy_insufficient_funds_no_intent(client, register_soul):
     register_soul("poor_buyer", essence=10.0)
     listing_id = _list_via_rest(client, "poor_seller", 50.0)
 
-    res = client.post(
-        f"/marketplace/buy/{listing_id}", json={"buyer_id": "poor_buyer"}
-    )
+    res = client.post(f"/marketplace/buy/{listing_id}", json={"buyer_id": "poor_buyer"})
     assert res.status_code == 400
     assert _essence("poor_buyer") == 10.0
     with database.get_db() as conn:
-        assert (
-            conn.execute("SELECT COUNT(*) AS c FROM intents").fetchone()["c"] == 1
-        )
-        assert (
-            conn.execute("SELECT COUNT(*) AS c FROM escrows").fetchone()["c"] == 0
-        )
+        assert conn.execute("SELECT COUNT(*) AS c FROM intents").fetchone()["c"] == 1
+        assert conn.execute("SELECT COUNT(*) AS c FROM escrows").fetchone()["c"] == 0
         assert (
             conn.execute(
                 "SELECT COUNT(*) AS c FROM marketplace WHERE listing_id = ?",
@@ -280,9 +276,7 @@ def test_conservation_across_prices(client, register_soul):
             "GROUP BY entry_type"
         ).fetchall()
     totals = {r["entry_type"]: r["total"] for r in sums}
-    assert round(totals["debit"], 2) == round(
-        totals["credit"] + totals["tax"], 2
-    )
+    assert round(totals["debit"], 2) == round(totals["credit"] + totals["tax"], 2)
     assert totals["debit"] == round(sum(prices), 2)
     assert _fund() == pytest.approx(totals["tax"], abs=1e-9)
 
@@ -306,7 +300,9 @@ def test_verify_balances_detects_and_repairs(client, register_soul):
         conn.execute(
             "UPDATE souls SET essence = essence + 25.0 WHERE soul_id = 'vb_buyer'"
         )
-        conn.execute("UPDATE globals SET value = value + 3.0 WHERE key = 'essence_fund'")
+        conn.execute(
+            "UPDATE globals SET value = value + 3.0 WHERE key = 'essence_fund'"
+        )
         conn.commit()
 
         report = market.verify_balances(conn)
@@ -392,9 +388,7 @@ def test_cancel_custody_denied_for_other_tamer(client, register_soul):
         "/tamers/login", json={"username": "mallory", "password": "password123"}
     )
     token = login.json()["token"]
-    tamer_client = TestClient(
-        client.app, headers={"X-Hub-Secret": token}
-    )
+    tamer_client = TestClient(client.app, headers={"X-Hub-Secret": token})
     res = tamer_client.post(f"/marketplace/cancel/{listing_id}")
     assert res.status_code == 403, res.text
     res = client.get("/marketplace")
@@ -404,8 +398,13 @@ def test_cancel_custody_denied_for_other_tamer(client, register_soul):
 def test_market_intent_validators():
     payload, error = intents.validate_payload(
         "market_list",
-        {"item": {"n": 1}, "price": 5, "seller_soul_id": "s",
-         "listing_id": "l1", "seller_name": "S"},
+        {
+            "item": {"n": 1},
+            "price": 5,
+            "seller_soul_id": "s",
+            "listing_id": "l1",
+            "seller_name": "S",
+        },
     )
     assert error is None and payload["price"] == 5.0
     for bad in (
@@ -416,11 +415,15 @@ def test_market_intent_validators():
         {"item": {"n": 1}, "price": float("nan"), "seller_soul_id": "s"},
     ):
         assert intents.validate_payload("market_list", bad) == (None, "BAD_PAYLOAD")
-    assert intents.validate_payload(
-        "market_buy", {"listing_id": "l", "buyer_soul_id": "b"}
-    )[1] is None
+    assert (
+        intents.validate_payload(
+            "market_buy", {"listing_id": "l", "buyer_soul_id": "b"}
+        )[1]
+        is None
+    )
     assert intents.validate_payload("market_buy", {"listing_id": "l"}) == (
-        None, "BAD_PAYLOAD",
+        None,
+        "BAD_PAYLOAD",
     )
     assert intents.validate_payload("market_cancel", {"listing_id": "l"})[1] is None
     assert intents.validate_payload("market_cancel", {}) == (None, "BAD_PAYLOAD")
@@ -475,17 +478,25 @@ def test_reconcile_escrows_settles_against_intent_states(db_conn):
 
 
 def test_journal_replay_tolerates_market_events(db_conn):
-    state = {"s1": {"position": [1.0, 2.0], "velocity": [0.0, 0.0],
-                    "move_target": None}}
+    state = {
+        "s1": {"position": [1.0, 2.0], "velocity": [0.0, 0.0], "move_target": None}
+    }
     persistence.append_event(
-        db_conn, 7, persistence.EVENT_INTENT_ADJUDICATED,
-        {"intent_id": "ix", "kind": "market_buy", "soul_id": "s1",
-         "result": {"price": 10.0}},
+        db_conn,
+        7,
+        persistence.EVENT_INTENT_ADJUDICATED,
+        {
+            "intent_id": "ix",
+            "kind": "market_buy",
+            "soul_id": "s1",
+            "result": {"price": 10.0},
+        },
     )
     db_conn.commit()
     events = persistence.journal_tail(db_conn, 0)
     persistence.replay_tail(state, events, 7, 0.0, 0.2, (1920, 1080), exact=True)
     assert state["s1"]["position"] == [1.0, 2.0]
+
 
 @contextmanager
 def _open_ws(client: TestClient, path: str = "/ws/op1"):
@@ -659,6 +670,51 @@ def _start_server(db_path: str, port: int, authoritative: bool, log_path: str):
     return proc, log
 
 
+def _start_sim(db_path: str, sim_port: int, log_path: str):
+    """Start a real sim subprocess (issue #37): the world owner.
+
+    After the API "crashes" with a pending intent, the sim boots on the
+    same DB, runs boot recovery (re-pumps pending intents), and its tick
+    loop adjudicates -- exactly the production recovery path.
+    """
+    env = dict(os.environ)
+    env.update(
+        {
+            "SOULSCAPE_DB_PATH": db_path,
+            "SIM_PORT": str(sim_port),
+            "HUB_SECRET_KEY": HUB_SECRET,
+        }
+    )
+    env.pop("SOULSCAPE_SIM_MODE", None)
+    log = open(log_path, "w")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "server.sim_process"],
+        cwd=ROOT,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
+    return proc, log
+
+
+def _wait_sim(sim_port: int, timeout: float = 60.0) -> None:
+    from ..sim_ipc import SimClient
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            client = SimClient(port=sim_port)
+            try:
+                resp = client.call({"type": "ping"}, timeout=5.0)
+            finally:
+                client.close()
+            if resp.get("ok"):
+                return
+        except Exception:
+            time.sleep(0.25)
+    raise AssertionError(f"sim on {sim_port} never became reachable")
+
+
 async def _ws_buy_ack(port: int, nonce: str) -> dict:
     async with websockets.connect(
         f"ws://127.0.0.1:{port}/ws/op1",
@@ -717,10 +773,10 @@ async def test_crash_between_ack_and_settlement_settles_once(tmp_path):
         proc1.wait(timeout=15)
         log1.close()
 
-    port2 = _free_port()
-    proc2, log2 = _start_server(db_path, port2, True, str(tmp_path / "s2.log"))
+    sim_port = _free_port()
+    proc2, log2 = _start_sim(db_path, sim_port, str(tmp_path / "sim.log"))
     try:
-        await asyncio.to_thread(_wait_health, port2)
+        await asyncio.to_thread(_wait_sim, sim_port)
         status, result = await asyncio.to_thread(
             _wait_intent_settled, db_path, intent_id
         )
@@ -769,10 +825,10 @@ async def test_crash_with_rejected_outcome_refunds_escrow(tmp_path):
         proc1.wait(timeout=15)
         log1.close()
 
-    port2 = _free_port()
-    proc2, log2 = _start_server(db_path, port2, True, str(tmp_path / "s2.log"))
+    sim_port = _free_port()
+    proc2, log2 = _start_sim(db_path, sim_port, str(tmp_path / "sim.log"))
     try:
-        await asyncio.to_thread(_wait_health, port2)
+        await asyncio.to_thread(_wait_sim, sim_port)
         status, result = await asyncio.to_thread(
             _wait_intent_settled, db_path, intent_id
         )

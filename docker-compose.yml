@@ -1,0 +1,73 @@
+# docker-compose.yml — single-node, two-process Soulscape hub (issue #37).
+#
+#   sim  — owns the world: tick loop, intent adjudication, all writes to
+#           sim-owned tables. SQLite DB lives on a persistent volume.
+#   api  — stateless FastAPI: auth, rate limits, sessions, reads, and intent
+#           ingress over TCP IPC to the sim. Safe to restart/scale; the
+#           world survives API restarts.
+#
+# Bring up:  docker compose up --build
+# API:       http://localhost:9785  (health: /health)
+#
+# Both processes share one SQLite file on the `soulscape-data` volume.
+# WAL mode lets API readers run concurrently with the sim's writes.
+
+services:
+  sim:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    command: ["python", "-m", "server.sim_process"]
+    environment:
+      - SOULSCAPE_DB_PATH=/data/soulscape_hub.db
+      - SIM_HOST=0.0.0.0
+      - SIM_PORT=9786
+      - SIM_TICK_HZ=5
+      - HUB_SECRET_KEY=${HUB_SECRET_KEY:?set HUB_SECRET_KEY}
+      - HUB_OPERATOR_ID=${HUB_OPERATOR_ID:-999}
+    volumes:
+      - soulscape-data:/data
+    healthcheck:
+      # Real IPC ping through the sim's own framing code.
+      test: [
+        "CMD", "python", "-c",
+        "from server.sim_ipc import SimClient; c = SimClient(port=9786); r = c.call({'type': 'ping'}, timeout=5.0); c.close(); assert r['ok'] and r['tick_running'], r",
+      ]
+      interval: 10s
+      timeout: 6s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    command: ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "9785"]
+    depends_on:
+      sim:
+        condition: service_healthy
+    environment:
+      - SOULSCAPE_DB_PATH=/data/soulscape_hub.db
+      - SERVER_PORT=9785
+      - SIM_HOST=sim
+      - SIM_PORT=9786
+      - HUB_SECRET_KEY=${HUB_SECRET_KEY:?set HUB_SECRET_KEY}
+      - HUB_OPERATOR_ID=${HUB_OPERATOR_ID:-999}
+    ports:
+      - "9785:9785"
+    volumes:
+      - soulscape-data:/data
+    healthcheck:
+      test: [
+        "CMD", "python", "-c",
+        "import json, urllib.request; d = json.load(urllib.request.urlopen('http://127.0.0.1:9785/health', timeout=5)); assert d['status'] == 'online' and d['sim']['reachable'], d",
+      ]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  soulscape-data:

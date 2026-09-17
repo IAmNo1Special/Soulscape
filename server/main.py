@@ -8,9 +8,11 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .database import init_db
 from . import persistence
 from .key_vault import install_redaction_filter
+from .sim_gateway import gateway_for, get_gateway, reset_gateway
+from .sim_ipc import SimUnreachable
+from . import viewport
 from .routers import (
     bridge,
     keys,
@@ -25,9 +27,7 @@ from .routers import (
     websockets,
 )
 from .security import UserIdentity, get_api_key
-from .world_tick import TICK_HZ, WorldTick, hub_authoritative_enabled
 
-# Simple in-memory rate limiter
 _rate_limit_store: dict[str, list[float]] = {}
 _RATE_LIMIT_RPS = int(os.getenv("RATE_LIMIT_RPS", "100"))
 _RATE_LIMIT_ENABLED = os.getenv("DISABLE_RATE_LIMIT", "").lower() not in (
@@ -48,62 +48,81 @@ def _check_rate_limit(key: str) -> bool:
     return True
 
 
-# Load environment variables
 load_dotenv()
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("soulscape_hub")
 install_redaction_filter()
 
 
+def _wire_positions_provider(gateway) -> None:
+    """Feed the viewport pump read-through positions from the sim.
+
+    The API process no longer shares the sim's in-memory dirty set,
+    so the viewport overlays the sim's ``positions`` query instead.
+    If the sim is unreachable, fall back to the DB view (stale by at
+    most one flush interval, but always a consistent snapshot).
+    """
+
+    def _positions() -> dict[str, tuple[float, float]]:
+        try:
+            result = gateway.positions()
+        except SimUnreachable:
+            return persistence.read_positions_through()
+        out: dict[str, tuple[float, float]] = {}
+        for soul_id, entry in result.items():
+            try:
+                pos = entry["position"]
+                out[soul_id] = (float(pos[0]), float(pos[1]))
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+        return out
+
+    viewport.set_positions_provider(_positions)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize the database
-    logger.info("Initializing database...")
-    init_db()
+    # Issue #37: the API process NEVER initializes or migrates the
+    # database -- the SimProcess owns the schema and all sim-table
+    # writes. The API only verifies the database is readable.
+    from .database import DB_PATH, _get_connection
+
+    if not os.path.exists(DB_PATH):
+        logger.error("database %s missing -- start the SimProcess first", DB_PATH)
+    else:
+        try:
+            conn = _get_connection()
+            conn.execute("SELECT 1 FROM souls LIMIT 1")
+            conn.close()
+        except Exception as exc:
+            logger.error("database %s not readable: %s", DB_PATH, exc)
     install_redaction_filter()
 
     if not os.getenv("HUB_SECRET_KEY"):
-        logger.warning(
-            "⚠️  HUB_SECRET_KEY is not set in .env! Authentication will fail."
-        )
+        logger.warning("HUB_SECRET_KEY is not set in .env! Authentication will fail.")
 
-    app.state.world_tick = WorldTick()
-    if hub_authoritative_enabled():
-        tick = app.state.world_tick
-        report = await asyncio.to_thread(persistence.recover_world, tick)
+    gateway = get_gateway()
+    app.state.sim_gateway = gateway
+    _wire_positions_provider(gateway)
+    try:
+        ping = await asyncio.to_thread(gateway.ping)
         logger.info(
-            "boot recovery: mode=%s regime=%s souls=%d journal_replayed=%d "
-            "gap=%.1fs tick_id=%d",
-            report["mode"],
-            report["regime"],
-            report["souls"],
-            report["journal_replayed"],
-            report["gap_seconds"],
-            report["tick_id"],
+            "sim reachable: tick_id=%d tick_running=%s latency=%.1fms",
+            ping["tick_id"],
+            ping["tick_running"],
+            ping["latency_ms"],
         )
-        recovered = await asyncio.to_thread(tick.pump_intents)
-        if recovered:
-            logger.info("boot recovery: adjudicated %d pending intents", recovered)
-        # #26: boot catch-up for the nightly memory summarizer (runs
-        # only when >24h since the last run).
-        from .agents import memory as _memory
-
-        maint = await asyncio.to_thread(_memory.tick_maintenance)
-        if maint.get("ran"):
-            logger.info("boot: memory summarizer ran: %s", maint.get("report"))
-        logger.info("hub_authoritative=1: starting world tick at %d Hz", TICK_HZ)
-        await app.state.world_tick.start()
-    else:
-        logger.info("hub_authoritative flag off: world tick disabled")
+    except SimUnreachable:
+        logger.warning(
+            "sim unreachable at startup -- intents will 503 until the "
+            "SimProcess is up; reads serve from SQLite"
+        )
 
     yield
-    # Shutdown: Clean up resources if needed
     logger.info("Shutting down...")
-    tick = getattr(app.state, "world_tick", None)
-    if tick is not None:
-        await tick.stop()
+    viewport.set_positions_provider(None)
+    reset_gateway()
 
 
 app = FastAPI(
@@ -125,7 +144,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
 
 @app.get("/health", dependencies=[])
-async def health():
+async def health(request: Request):
     try:
         from .database import _get_connection
 
@@ -135,7 +154,19 @@ async def health():
         db_ok = True
     except Exception:
         db_ok = False
-    return {"status": "online", "db_ok": db_ok}
+    sim: dict = {"reachable": False}
+    try:
+        ping = await asyncio.to_thread(gateway_for(request).ping)
+        sim = {
+            "reachable": True,
+            "latency_ms": round(ping["latency_ms"], 2),
+            "tick_id": ping["tick_id"],
+            "tick_running": ping["tick_running"],
+        }
+    except SimUnreachable:
+        pass
+    status = "online" if (db_ok and sim["reachable"]) else "degraded"
+    return {"status": status, "db_ok": db_ok, "sim": sim}
 
 
 @app.middleware("http")
@@ -148,16 +179,15 @@ async def security_headers_middleware(request: Request, call_next):
 
 
 @app.get("/debug/tick")
-async def debug_tick(identity: UserIdentity = Depends(get_api_key)):
+async def debug_tick(request: Request, identity: UserIdentity = Depends(get_api_key)):
     if not identity.is_operator:
         raise HTTPException(status_code=403, detail="Operator only")
-    tick = getattr(app.state, "world_tick", None)
-    if tick is None:
-        return WorldTick().snapshot()
-    return tick.snapshot()
+    try:
+        return await asyncio.to_thread(gateway_for(request).tick_status)
+    except SimUnreachable:
+        raise HTTPException(status_code=503, detail="Simulation unavailable")
 
 
-# Include Routers
 app.include_router(bridge.router)
 app.include_router(keys.router)
 app.include_router(mailbag.router)

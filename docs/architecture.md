@@ -14,7 +14,7 @@ Soulscape is a **new frontend for AI agents**: not a chat window, but a persiste
 
 ## 1. System Topology
 
-One node, two processes (target state; see §9 migration):
+One node, two processes (**implemented** — ADR-0003; was "target state"):
 
 ```
 ┌────────────────────────── hub-api (uvicorn, workers=1) ──────────────────────────┐
@@ -193,8 +193,8 @@ Ordered, each step shippable:
 3. Move wallets/economy behind tick-boundary intent adjudication (durable intent queue).
 4. Introduce plot grid, allocation counter, origin commons.
 5. Hash grid replaces O(n²).
-6. Extract SimProcess to its own container/process + replay/operator tooling.
-7. Shard by ring bands **[S]**.
+6. Extract SimProcess to its own container/process + replay/operator tooling. **[done — ADR-0003]**
+7. Shard by ring bands **[S]** — revisit sharding on sustained ticks-behind or third-Tamer onboarding.
 
 Client rewrite runs in parallel: delete ADK brain, LocalStore/RemoteStore dual-write, pyautogui paths, command-queue-as-game-logic once flags flip; overlay mechanics land early (presentation-only). Dual-source-of-truth windows kept short and flagged.
 

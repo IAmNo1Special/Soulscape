@@ -1,9 +1,9 @@
-"""Hub world tick (issue #7).
+"""Hub world tick (issue #7, process-split in issue #37).
 
 Fixed-timestep 5 Hz simulation loop that owns Soul positions and movement
-physics. Active only behind the `hub_authoritative` feature flag
-(`HUB_AUTHORITATIVE=1`). Flag off: the tick is never started and the Hub
-behaves exactly as before.
+physics. Owned and run by the sim process (`server/sim_process.py`); the
+API never ticks. The legacy `HUB_AUTHORITATIVE` flag that once gated the
+API-embedded tick is retired -- the sim always ticks when it runs.
 
 The hot path touches only SQLite. No network calls, no LLM calls.
 

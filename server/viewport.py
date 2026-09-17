@@ -23,6 +23,20 @@ from . import persistence
 
 logger = logging.getLogger("soulscape_hub")
 
+# Issue #37: the API process no longer shares the sim's in-memory dirty
+# set. The API wires a provider (the sim gateway's read-through
+# positions query) at startup; the sim process leaves this None and
+# uses the local dirty set as before.
+_positions_provider: Callable[[], dict[str, tuple[float, float]]] | None = None
+
+
+def set_positions_provider(
+    fn: Callable[[], dict[str, tuple[float, float]]] | None,
+) -> None:
+    global _positions_provider
+    _positions_provider = fn
+
+
 PUMP_INTERVAL_SECONDS = 0.2
 RING_BUFFER_SIZE = 64
 SNAP_JUMP_PX = 250.0
@@ -220,6 +234,8 @@ def diff_abroad(
 def read_positions() -> dict[str, tuple[float, float]]:
     """Position map with the read-through view: the tick's unflushed dirty
     set overlaid on the DB, so the viewport never lags a flush."""
+    if _positions_provider is not None:
+        return _positions_provider()
     return persistence.read_positions_through()
 
 
@@ -365,10 +381,9 @@ def diff_biology(
         rounded = tuple(round(v, 1) for v in vals)
         if committed.get(soul_id) != rounded:
             sat, hyd, hp, max_hp = rounded
-            ops.append(
-                (_biology_op(soul_id, sat, hyd, hp, max_hp), _DOMAIN_PRIORITY)
-            )
+            ops.append((_biology_op(soul_id, sat, hyd, hp, max_hp), _DOMAIN_PRIORITY))
     return ops
+
 
 def diff_identities(
     current: dict[str, tuple[str, str, int, str]],
@@ -382,11 +397,12 @@ def diff_identities(
         if committed.get(soul_id) != vals:
             name, species, level, activity = vals
             ops.append(
-                (_identity_op(soul_id, name, species, level, activity), _DOMAIN_PRIORITY)
+                (
+                    _identity_op(soul_id, name, species, level, activity),
+                    _DOMAIN_PRIORITY,
+                )
             )
     return ops
-
-
 
 
 class ViewportSession:
@@ -573,8 +589,7 @@ async def flush(
             session.committed_dormancy = dict(dormant)
         if biology is not None:
             session.committed_biology = {
-                sid: tuple(round(v, 1) for v in vals)
-                for sid, vals in biology.items()
+                sid: tuple(round(v, 1) for v in vals) for sid, vals in biology.items()
             }
         if identities is not None:
             session.committed_identities = dict(identities)

@@ -22,7 +22,7 @@ from ..models import (
     TamerPresenceState,
 )
 from ..security import UserIdentity, require_scoped
-from ..world_tick import WorldTick
+from ..sim_gateway import SimError, SimRefusal, SimUnreachable, gateway_for
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -41,13 +41,8 @@ def _tamer_id_or_403(identity: UserIdentity) -> str:
 
 
 def _settle_intent(request: Request, record: dict) -> dict:
-    tick = getattr(request.app.state, "world_tick", None)
-    if tick is None:
-        tick = WorldTick()
-    tick.pump_intents()
-    fresh = intents.get_intent_by_nonce(record["session_id"], record["nonce"])
-    assert fresh is not None
-    return fresh
+    """Wait for the sim's tick to adjudicate; return the fresh intent row."""
+    return gateway_for(request).await_settled(record["session_id"], record["nonce"])
 
 
 @router.post("/report", response_model=TamerPresenceState)
@@ -75,11 +70,26 @@ def report_presence(
     session_id = f"rest:{identity.id}"
     nonce = presence_module.make_nonce()
     try:
-        record = presence_module.enqueue_presence_intent(
-            session_id, nonce, tamer_id, validated
+        record = gateway_for(request).submit_intent(
+            session_id,
+            nonce,
+            tamer_id,
+            f"tamer:{tamer_id}",
+            "tamer_presence",
+            validated,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except SimRefusal as refusal:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=refusal.detail
+        )
+    except SimUnreachable:
+        raise HTTPException(
+            status_code=503,
+            detail="Simulation unavailable: intent not accepted",
+        )
+    except SimError as exc:
+        logger.error(f"Error in report_presence: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
     fresh = _settle_intent(request, record)
     result = fresh.get("result") or {}
     if fresh["status"] == "rejected":

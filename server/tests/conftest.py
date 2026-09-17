@@ -1,5 +1,11 @@
 import os
 
+# Issue #37: the API under test talks to the sim through the IPC
+# gateway; the suite runs the sim in-process (same dispatcher, same
+# messages, no sockets). Must be set before sim_gateway.get_gateway()
+# is first called (lazily, on first gateway_for()).
+os.environ.setdefault("SOULSCAPE_SIM_MODE", "inprocess")
+
 import pytest
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient  # noqa: E402

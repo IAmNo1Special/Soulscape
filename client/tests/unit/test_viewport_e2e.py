@@ -83,6 +83,7 @@ class TestViewportEndToEnd(unittest.IsolatedAsyncioTestCase):
         server_db.init_db()
 
         os.environ["HUB_AUTHORITATIVE"] = "1"
+        os.environ["SOULSCAPE_SIM_MODE"] = "inprocess"
         os.environ["HUB_SECRET_KEY"] = HUB_SECRET
 
         self.port = _free_port()
@@ -99,6 +100,14 @@ class TestViewportEndToEnd(unittest.IsolatedAsyncioTestCase):
                 break
             await asyncio.sleep(0.05)
         self.assertTrue(self._server.started, "hub did not start")
+
+        # Issue #37: the API no longer ticks. Run the sim loop in-process
+        # (same dispatcher/messages as a real sim process) so intents
+        # adjudicate and souls move.
+        from server.sim_gateway import get_gateway
+
+        self._sim_tick = get_gateway().backend.host.tick
+        await self._sim_tick.start()
 
         await _arest(
             self.port,
@@ -119,11 +128,13 @@ class TestViewportEndToEnd(unittest.IsolatedAsyncioTestCase):
         )
 
     async def asyncTearDown(self) -> None:
+        await self._sim_tick.stop()
         self._server.should_exit = True
         await self._server_task
         self._tmp.cleanup()
         os.environ.pop("HUB_AUTHORITATIVE", None)
         os.environ.pop("HUB_SECRET_KEY", None)
+        os.environ.pop("SOULSCAPE_SIM_MODE", None)
 
     async def _connect(self):
         ws = await websockets.connect(

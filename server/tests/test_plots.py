@@ -108,11 +108,22 @@ def test_grid_geometry():
 def test_allocation_order_first_rings():
     ring1 = ["7:3", "7:4", "7:5", "8:3", "8:5", "9:3", "9:4", "9:5"]
     ring2 = [
-        "6:2", "6:3", "6:4", "6:5", "6:6",
-        "7:2", "7:6",
-        "8:2", "8:6",
-        "9:2", "9:6",
-        "10:2", "10:3", "10:4", "10:5", "10:6",
+        "6:2",
+        "6:3",
+        "6:4",
+        "6:5",
+        "6:6",
+        "7:2",
+        "7:6",
+        "8:2",
+        "8:6",
+        "9:2",
+        "9:6",
+        "10:2",
+        "10:3",
+        "10:4",
+        "10:5",
+        "10:6",
     ]
     order = plots.allocation_order()
     assert order[:8] == ring1
@@ -212,9 +223,7 @@ def test_claim_insufficient_funds_at_enqueue_no_intent(client, register_soul):
             "SELECT COUNT(*) AS c FROM intents WHERE kind = 'plot_claim'"
         ).fetchone()["c"]
         assert count == 0
-        assert conn.execute(
-            "SELECT COUNT(*) AS c FROM escrows"
-        ).fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM escrows").fetchone()["c"] == 0
     assert _essence("poor") == 50.0
     assert _fund() == 0.0
 
@@ -288,10 +297,8 @@ def test_claim_no_plots_left_refunds(register_soul):
 def test_claim_idempotency_key_single_charge(client, register_soul):
     register_soul("idem", essence=500.0)
     headers = {"Idempotency-Key": "claim-once-123"}
-    first = client.post("/plots/claim", json={"soul_id": "idem"},
-                        headers=headers)
-    second = client.post("/plots/claim", json={"soul_id": "idem"},
-                         headers=headers)
+    first = client.post("/plots/claim", json={"soul_id": "idem"}, headers=headers)
+    second = client.post("/plots/claim", json={"soul_id": "idem"}, headers=headers)
     assert first.status_code == 200 and second.status_code == 200
     assert first.json()["plot_id"] == second.json()["plot_id"] == "7:3"
     assert _essence("idem") == 400.00
@@ -496,9 +503,7 @@ def test_set_access_policy_operator_and_errors(client, register_soul):
     assert bad.status_code == 400
     commons = client.post("/plots/8:4/access", json={"access_policy": "closed"})
     assert commons.status_code == 400
-    missing = client.post(
-        "/plots/99:99/access", json={"access_policy": "closed"}
-    )
+    missing = client.post("/plots/99:99/access", json={"access_policy": "closed"})
     assert missing.status_code == 404
 
 
@@ -570,6 +575,51 @@ def _start_server(db_path: str, port: int, authoritative: bool, log_path: str):
     return proc, log
 
 
+def _start_sim(db_path: str, sim_port: int, log_path: str):
+    """Start a real sim subprocess (issue #37): the world owner.
+
+    After the API "crashes" with a pending intent, the sim boots on the
+    same DB, runs boot recovery (re-pumps pending intents), and its tick
+    loop adjudicates -- exactly the production recovery path.
+    """
+    env = dict(os.environ)
+    env.update(
+        {
+            "SOULSCAPE_DB_PATH": db_path,
+            "SIM_PORT": str(sim_port),
+            "HUB_SECRET_KEY": HUB_SECRET,
+        }
+    )
+    env.pop("SOULSCAPE_SIM_MODE", None)
+    log = open(log_path, "w")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "server.sim_process"],
+        cwd=ROOT,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
+    return proc, log
+
+
+def _wait_sim(sim_port: int, timeout: float = 60.0) -> None:
+    from ..sim_ipc import SimClient
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            client = SimClient(port=sim_port)
+            try:
+                resp = client.call({"type": "ping"}, timeout=5.0)
+            finally:
+                client.close()
+            if resp.get("ok"):
+                return
+        except Exception:
+            time.sleep(0.25)
+    raise AssertionError(f"sim on {sim_port} never became reachable")
+
+
 def _intent_status(intent_id):
     with database.get_db() as conn:
         row = conn.execute(
@@ -634,10 +684,10 @@ async def test_crash_between_ack_and_settlement_settles_once(tmp_path):
         proc1.wait(timeout=15)
         log1.close()
 
-    port2 = _free_port()
-    proc2, log2 = _start_server(db_path, port2, True, str(tmp_path / "s2.log"))
+    sim_port = _free_port()
+    proc2, log2 = _start_sim(db_path, sim_port, str(tmp_path / "sim.log"))
     try:
-        await asyncio.to_thread(_wait_health, port2)
+        await asyncio.to_thread(_wait_sim, sim_port)
         status, result = await asyncio.to_thread(
             _wait_intent_settled, db_path, intent_id
         )
