@@ -12,6 +12,7 @@ from .database import init_db
 from . import persistence
 from .key_vault import install_redaction_filter
 from .routers import (
+    bridge,
     keys,
     mailbag,
     marketplace,
@@ -157,6 +158,7 @@ async def debug_tick(identity: UserIdentity = Depends(get_api_key)):
 
 
 # Include Routers
+app.include_router(bridge.router)
 app.include_router(keys.router)
 app.include_router(mailbag.router)
 app.include_router(marketplace.router)

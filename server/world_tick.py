@@ -50,6 +50,7 @@ from . import world
 from . import biology
 from . import dormancy
 from . import affection
+from . import bridge
 from . import agents
 from . import expeditions
 from . import resources
@@ -195,6 +196,8 @@ class WorldTick:
                     presence_module.adjudicate_presence_intent(self, intent)
                 elif intent["kind"] in affection.AFFECTION_KINDS:
                     affection.adjudicate_affection_intent(self, intent)
+                elif intent["kind"] == bridge.BRIDGE_INTENT_KIND:
+                    bridge.adjudicate_bridge_event(self, intent)
                 else:
                     with database.get_db() as conn:
                         self._reject(conn, intent, "unknown_kind")

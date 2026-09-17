@@ -43,6 +43,9 @@ DEFAULT_DURATIONS = {
     # Issue #35: expedition farewell/welcome bubbles are cinematic
     # moments -- long enough to read, short enough to stay transient.
     "expedition": 6.0,
+    # Issue #36: pivotal tool events are alerts the tamer asked their
+    # tools to surface -- mailbag-like dwell so they get noticed.
+    "bridge": 10.0,
 }
 
 

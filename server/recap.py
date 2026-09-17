@@ -118,6 +118,7 @@ COMPACT_EVERY_TICKS = 432000
 #: Kind priority for the deterministic selection sort (higher first).
 #: Read whatever journal kinds exist; unknown kinds fall to 1.
 KIND_PRIORITY = {
+    "tool.event": 7,
     "loyalty_delta": 10,
     "mailbag_unanswered": 9,
     "mailbag_answered": 8,
@@ -132,6 +133,7 @@ KIND_PRIORITY = {
 #: Default salience per kind when the payload carries none. Same scale
 #: as #26 episode salience (mailbag_unanswered 0.6 matches its episode).
 SALIENCE_DEFAULTS = {
+    "tool.event": 0.5,
     "loyalty_delta": 0.7,
     "mailbag_unanswered": 0.6,
     "soul_woke": 0.6,
@@ -150,6 +152,11 @@ def _salience(event_type: str, payload: dict) -> float:
     if isinstance(sal, (int, float)):
         return float(sal)
     return float(SALIENCE_DEFAULTS.get(event_type, 0.2))
+
+
+def _unwrap_tool_summary(text: object) -> str:
+    text = str(text or "")
+    return text.replace("<untrusted>", "").replace("</untrusted>", "")
 
 
 def _short(text: str, limit: int) -> str:
@@ -191,6 +198,17 @@ def _render_line(event_type: str, payload: dict) -> str:
         return f"Arrived at plot {payload.get('dest_plot', '?')}"
     if event_type == "expedition_returned":
         return f"Back home from plot {payload.get('dest_plot', '?')}"
+    if event_type == "tool.event":
+        return (
+            f"Tool event ({payload.get('kind', '?')}) from "
+            f"{payload.get('source_id', '?')}: "
+            f"{_short(_unwrap_tool_summary(payload.get('summary', '?')), 90)}"
+        )
+    if event_type == "agent_sensation":
+        return (
+            f"Sensation: "
+            f"{_short(_unwrap_tool_summary(payload.get('text', '?')), 90)}"
+        )
     if event_type == "expedition_cancelled":
         return f"Expedition cancelled ({payload.get('reason', '?')})"
     return f"{event_type}: {_short(json.dumps(payload), 90)}"
@@ -261,9 +279,11 @@ def _candidate_sort_key(candidate: dict) -> tuple:
 
 
 def _render_source_line(candidate: dict) -> str:
-    summary = _short(candidate["summary"], 110)
+    summary = _short(_unwrap_tool_summary(candidate["summary"]), 110)
     if candidate["kind"] == "mailbag_unanswered":
         return f"Unanswered: {summary}"
+    if candidate["kind"] == "tool.event":
+        return f"Tool event: {summary}"
     return f"{candidate['kind']}: {summary}"
 
 

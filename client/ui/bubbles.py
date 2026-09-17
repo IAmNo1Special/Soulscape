@@ -7,7 +7,9 @@ The seam every other system calls to put words above a soul's orb:
 ``kind`` is a closed set: ``speech`` (ambient chatter), ``quip``
 (tamer-requested personalized quip), ``system`` (wallet/Hub feedback),
 ``greeting`` (unlock/hello reflexes), ``mailbag`` (issue #32: a soul's
-question for its tamer -- tapping it opens the mailbag answer surface).
+question for its tamer -- tapping it opens the mailbag answer surface),
+``bridge`` (issue #36: pivotal external-agent events from the tamer's
+tools).
 Unknown kinds raise ValueError.
 
 Bubbles are transient: each kind auto-dismisses after its documented
@@ -56,6 +58,9 @@ KIND_QUIP = "quip"
 KIND_SYSTEM = "system"
 KIND_GREETING = "greeting"
 KIND_MAILBAG = "mailbag"
+#: Issue #36: pivotal external-agent events (test_failed, needs_review,
+#: alert) surface as transient bubbles via the Hub's bridge seam.
+KIND_BRIDGE = "bridge"
 #: Issue #33: the overnight morning-note bubble. Solicited-adjacent
 #: (the tamer's own unlock), so it bypasses caps/quiet hours/work
 #: mode -- but per-soul mutes still block it (see system/noise.py).
@@ -73,6 +78,7 @@ BUBBLE_KINDS = frozenset(
         KIND_MAILBAG,
         KIND_MORNING_NOTE,
         KIND_EXPEDITION,
+        KIND_BRIDGE,
     }
 )
 

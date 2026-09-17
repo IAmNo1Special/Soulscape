@@ -197,6 +197,41 @@ def test_info_card_shows_needs_activity_essence_whereabouts_presence():
     assert "presence: online" in text
 
 
+def test_info_card_appends_recent_tool_events():
+    lines = build_info_card(
+        "soul-abcdef",
+        None,
+        None,
+        None,
+        "home",
+        "online",
+        recent_events=[
+            "ci reported test failed: 3 specs red",
+            "deploy done: shipped v2",
+        ],
+    )
+    text = "\n".join(lines)
+    assert "recent: ci reported test failed: 3 specs red" in text
+    assert "recent: deploy done: shipped v2" in text
+
+
+def test_info_card_clamps_event_count_and_length():
+    long_line = "x" * 200
+    lines = build_info_card(
+        "soul-abcdef",
+        None,
+        None,
+        None,
+        "home",
+        "online",
+        recent_events=["a", long_line, "c", "d"],
+    )
+    recent = [line for line in lines if line.startswith("recent: ")]
+    assert len(recent) == 3
+    assert recent[1] == "recent: " + "x" * 119 + "…"
+    assert "presence: online" in lines
+
+
 def test_info_card_falls_back_without_identity():
     lines = build_info_card("soul-abcdef", None, None, None, "home", "offline")
     assert lines[0] == "soul-abc"

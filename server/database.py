@@ -1084,6 +1084,53 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_recaps_soul_day
                 ON recaps (soul_id, generated_at)
             """)
+            # Issue #36: Agent Bridge. Integration tokens: the plaintext is
+            # returned once at creation and stored only as a SHA-256 hash
+            # (same vault discipline as #23's inference keys). Revocation
+            # is a revoked_at stamp; revoked tokens authenticate as 401.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bridge_tokens (
+                    token_id TEXT PRIMARY KEY,
+                    tamer_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    last4 TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    revoked_at REAL,
+                    last_used_at REAL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bridge_tokens_tamer
+                ON bridge_tokens (tamer_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bridge_tokens_hash
+                ON bridge_tokens (token_hash)
+            """)
+            # Issue #36: durable bridge-event rows backing the info-card
+            # activity log and tray tooltip. Custodian-private: reads are
+            # always tamer-scoped; nothing here flows to social/abroad.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bridge_events (
+                    event_id TEXT PRIMARY KEY,
+                    tamer_id TEXT NOT NULL,
+                    soul_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    ref TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bridge_events_tamer
+                ON bridge_events (tamer_id, created_at)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bridge_events_soul
+                ON bridge_events (soul_id, created_at)
+            """)
             _add_column_if_missing(
                 cursor, "tamers", "presence_app_opt_in INTEGER DEFAULT 0"
             )

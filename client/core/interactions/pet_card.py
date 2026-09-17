@@ -15,12 +15,15 @@ def build_info_card(
     essence: float | None,
     whereabouts: str,
     presence: str,
+    recent_events: list[str] | None = None,
 ) -> list[str]:
     """Build the card lines for a soul from viewport state.
 
     identity: {"name", "species", "level", "activity"} (may be None).
     biology: {"satiety", "hydration", "hp", "max_hp"} (may be None).
     presence: "online" | "stale" | "offline".
+    recent_events: up to 3 recent tool-activity lines (issue #36: bridge
+        event display summaries); appended as "recent: ..." lines.
     """
     identity = identity or {}
     biology = biology or {}
@@ -48,7 +51,14 @@ def build_info_card(
         lines.append(f"essence: {essence:.1f}")
     lines.append(f"whereabouts: {whereabouts}")
     lines.append(f"presence: {presence}")
+    for event in (recent_events or [])[:3]:
+        lines.append(f"recent: {_event_line(event)}")
     return lines
+
+
+def _event_line(text: str) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= 120 else text[:119] + "…"
 
 
 def _fmt(value: float | None) -> str:

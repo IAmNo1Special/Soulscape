@@ -245,3 +245,57 @@ class TamerPresenceState(BaseModel):
     app_category: Optional[str] = None
     updated_at: Optional[float] = None
     stale: bool = False
+
+
+class BridgeTokenCreate(BaseModel):
+    """Request body for POST /bridge/tokens."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+
+
+class BridgeTokenMeta(BaseModel):
+    """Integration-token metadata. Never carries token material."""
+
+    token_id: str
+    tamer_id: str
+    name: str
+    last4: str
+    created_at: float
+    revoked_at: Optional[float] = None
+    last_used_at: Optional[float] = None
+
+
+class BridgeTokenCreated(BridgeTokenMeta):
+    """Create response: metadata PLUS the plaintext token, shown once."""
+
+    token: str
+
+
+class BridgeEventIn(BaseModel):
+    """Strict schema for POST /bridge/events.
+
+    `extra="forbid"`: padded/unknown fields are rejected with 422.
+    summary >280 chars is rejected with 422 (never silently clamped).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=32)
+    summary: str = Field(min_length=1, max_length=280)
+    ref: Optional[str] = Field(default=None, max_length=256)
+    commentary: bool = False
+
+
+class BridgeActivityItem(BaseModel):
+    """One bridge event for the info-card activity log / tray tooltip."""
+
+    event_id: str
+    soul_id: str
+    source_id: str
+    kind: str
+    summary: str
+    ref: Optional[str] = None
+    created_at: float
