@@ -7,6 +7,7 @@ from ..core.commands import (
     OwnerPresenceCommand,
     PresenceReconcileCommand,
     StateUpdateCommand,
+    ViewportFrameCommand,
 )
 from .command_queue import CommandQueue
 from .logger import log
@@ -21,8 +22,9 @@ class NetworkService:
     the potentially high-latency network I/O (AsyncIO Loop).
     """
 
-    def __init__(self, owner_id: str):
+    def __init__(self, owner_id: str, viewport_consumer: Any = None):
         self.owner_id = owner_id
+        self.viewport_consumer = viewport_consumer
 
         # Upstream: Client -> Hub
         # Downstream: Hub -> Client (Commands)
@@ -41,6 +43,7 @@ class NetworkService:
             on_owner_offline=self._on_owner_offline,
             on_soul_updated=self._on_soul_updated,
             on_connect=self._on_connect,
+            on_viewport_frame=self._on_viewport_frame,
         )
 
     def _is_valid_owner(self, owner_id: str) -> bool:
@@ -138,6 +141,12 @@ class NetworkService:
         self.command_queue.put(
             StateUpdateCommand(souls_data=souls, owner_id=owner_id)
         )
+
+    async def _on_viewport_frame(self, frame: Dict[str, Any]) -> None:
+        if self.viewport_consumer is not None:
+            self.command_queue.put(
+                ViewportFrameCommand(consumer=self.viewport_consumer, frame=frame)
+            )
 
     # --- Internal Loop Logic ---
 

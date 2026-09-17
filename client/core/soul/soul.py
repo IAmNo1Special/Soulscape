@@ -396,6 +396,20 @@ class Soul:
         # Biology updates not critical for remote viewing unless displaying stats
         # For now, position is the main thing.
 
+    def visual_tick(self, dt: float) -> None:
+        """Advances animation-only state for one frame.
+
+        Used by the viewport render path, where positions come from the Hub
+        stream instead of the local simulation.
+        """
+        self.time += dt
+        angle: float = self.time * 0.5
+        self.bulge_position: list[float] = [
+            math.cos(angle) * 0.5,
+            math.sin(angle * 0.7) * 0.35,
+            math.sin(angle) * 0.5,
+        ]
+
     def update(self, dt: float) -> None:
         """Drives the soul's simulation and AI logic for a single frame.
 
@@ -405,18 +419,10 @@ class Soul:
         Args:
             dt: The time delta in fractional seconds.
         """
-        self.time += dt
+        self.visual_tick(dt)
 
         # Physics updates happen for all souls (synced via Hub)
         self.physics.update(dt)
-
-        # Visual Update
-        angle: float = self.time * 0.5
-        self.bulge_position: list[float] = [
-            math.cos(angle) * 0.5,
-            math.sin(angle * 0.7) * 0.35,
-            math.sin(angle) * 0.5,
-        ]
 
         # Simulation Update (Tick-based)
         if self.biology.is_alive():

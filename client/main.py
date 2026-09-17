@@ -24,8 +24,14 @@ from pyglet.window import key
 
 from .constants import SOUL_HEIGHT, SOUL_WIDTH
 from .core import MessageBoard, Soul
+from .core.commands import ViewportFrameCommand
 from .system.input_router import InputRouter
 from .system.logger import log, setup_logging
+from .system.network.viewport_client import (
+    ViewportConsumer,
+    ViewportMapper,
+    viewport_mode_enabled,
+)
 from .system.network_service import NetworkService
 from .system.persistence import load_settings, load_souls, save_settings
 from .system.tray import TrayController
@@ -83,7 +89,12 @@ class SoulscapeApp:
         self._last_render_snapshot: list | None = None
 
         # Unified Network Service
-        self.network_service = NetworkService(owner_id=self.instance_id)
+        self.viewport_mode: bool = viewport_mode_enabled()
+        self.viewport_consumer = ViewportConsumer() if self.viewport_mode else None
+        self.viewport_mapper = ViewportMapper() if self.viewport_mode else None
+        self.network_service = NetworkService(
+            owner_id=self.instance_id, viewport_consumer=self.viewport_consumer
+        )
 
         # Persistent Background Event Loop for non-UI tasks (saves, HTTP)
         self._loop = asyncio.new_event_loop()
@@ -147,7 +158,10 @@ class SoulscapeApp:
         self._gate_draw_on_dirty()
 
         # 4. Load Content
-        self.load_initial_souls()
+        if self.viewport_mode:
+            log.info("Viewport mode: souls render from the Hub stream.")
+        else:
+            self.load_initial_souls()
 
         # 5. Start Network Service
         if os.getenv("HUB_URL"):
@@ -411,6 +425,9 @@ class SoulscapeApp:
             if not command:
                 continue
 
+            if self.viewport_mode and not isinstance(command, ViewportFrameCommand):
+                continue
+
             try:
                 # Commands like PresenceReconcile can handle the App context
                 command.execute(context)
@@ -483,6 +500,11 @@ class SoulscapeApp:
         # 1. Process Network Events (Downstream)
         self._handle_network_events()
 
+        if self.viewport_mode:
+            self._update_viewport_souls(dt)
+            self._poll_topmost()
+            return
+
         # 2. Update Simulation
         for soul in self.active_souls:
             soul.update(dt)
@@ -527,6 +549,79 @@ class SoulscapeApp:
         if time.time() - self.last_topmost_time > 5:
             self.window_manager.set_always_on_top()
             self.last_topmost_time = time.time()
+
+        snapshot = [
+            (soul.biology.soul_id, round(soul.x, 3), round(soul.y, 3))
+            for soul in self.active_souls
+        ]
+        if snapshot != self._last_render_snapshot:
+            self._last_render_snapshot = snapshot
+            self.dirty_tracker.mark_dirty()
+
+    def _poll_topmost(self) -> None:
+        """Re-asserts the overlay always-on-top window flag."""
+        if time.time() - self.last_topmost_time > 5:
+            self.window_manager.set_always_on_top()
+            self.last_topmost_time = time.time()
+
+    def _update_viewport_souls(self, dt: float) -> None:
+        """Positions Hub-driven souls from the viewport interpolator.
+
+        Viewport mode only: no local simulation, no upstream broadcast, no
+        disk persistence — the Hub stream is the single source of truth.
+        """
+        consumer = self.viewport_consumer
+        mapper = self.viewport_mapper
+        if consumer is None or mapper is None:
+            return
+
+        region = consumer.region
+        if region is not None:
+            mapper.set_region(*region)
+
+        display = pyglet.display.get_display().get_default_screen()
+        positions = consumer.rendered_positions()
+
+        known = set(positions)
+        existing = {soul.biology.soul_id: soul for soul in self.active_souls}
+
+        for sid in known - set(existing):
+            wx, wy = positions[sid]
+            soul = Soul.from_dict(
+                data={
+                    "soul_id": sid,
+                    "name": f"Hub Soul {sid[:8]}",
+                    "position": [wx, wy],
+                    "owner_id": "hub",
+                },
+                on_right_click=self.handle_soul_right_click,
+                on_move_end=self.persist_souls_state,
+                on_state_change=self.persist_souls_state,
+                on_async_state_change=self.async_persist_souls_state,
+                soul_registry=self.active_souls,
+                screen_width=display.width,
+                screen_height=display.height,
+                local_instance_id=self.instance_id,
+                task_scheduler=self._run_coro,
+            )
+            self.active_souls.append(soul)
+            self.dirty_tracker.mark_dirty()
+
+        for sid in set(existing) - known:
+            soul = existing[sid]
+            soul.cleanup()
+            self.active_souls.remove(soul)
+            self.dirty_tracker.mark_dirty()
+
+        souls_by_id = {soul.biology.soul_id: soul for soul in self.active_souls}
+        for sid, (wx, wy) in positions.items():
+            soul = souls_by_id.get(sid)
+            if soul is None:
+                continue
+            sx, sy = mapper.world_to_screen(wx, wy, display.width, display.height)
+            soul.x, soul.y = sx, sy
+            soul.draw_y = sy
+            soul.visual_tick(dt)
 
         snapshot = [
             (soul.biology.soul_id, round(soul.x, 3), round(soul.y, 3))

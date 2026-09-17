@@ -30,12 +30,14 @@ class PresenceManager:
         on_owner_offline: Callable[[str], None],
         on_soul_updated: Callable[[list[dict], str], Coroutine[Any, Any, None]],
         on_connect: (Callable[[list[str]], Coroutine[Any, Any, None]] | None) = None,
+        on_viewport_frame: (Callable[[dict], Coroutine[Any, Any, None]] | None) = None,
     ):
         self.owner_id = owner_id
         self.on_owner_online = on_owner_online
         self.on_owner_offline = on_owner_offline
         self.on_soul_updated = on_soul_updated
         self.on_connect = on_connect
+        self.on_viewport_frame = on_viewport_frame
         self._ws: websockets.ClientConnection | None = None
         self._running = False
 
@@ -148,6 +150,13 @@ class PresenceManager:
                     oid = message.get("owner_id")
                     souls = message.get("souls", [])
                     await self.on_soul_updated(souls, oid)
+
+                elif msg_type in (
+                    protocol.MessageType.SNAPSHOT.value,
+                    protocol.MessageType.DELTA.value,
+                ):
+                    if self.on_viewport_frame is not None:
+                        await self.on_viewport_frame(message)
 
             except Exception as e:
                 log.error(f"Error processing WS message: {e}")
