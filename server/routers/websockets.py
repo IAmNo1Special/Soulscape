@@ -92,6 +92,62 @@ def _intent_custodian(identity: UserIdentity) -> str | None:
     return identity.custodian_id or identity.owner_id
 
 
+async def _handle_tamer_presence(
+    websocket: WebSocket,
+    message: dict,
+    identity: UserIdentity,
+    session_id: str,
+    nonce: str,
+    payload: dict,
+) -> None:
+    """Tamer-scoped presence intent (#28).
+
+    The tamer is the authenticated identity -- there is no client field
+    naming a tamer, so cross-tamer spoofing is impossible by construction.
+    Operators are rejected: they carry no tamer scope.
+    """
+    from .. import presence as presence_module
+
+    tamer_id = _intent_custodian(identity)
+    if tamer_id is None:
+        await websocket.send_json(
+            protocol.envelope(
+                protocol.MessageType.ERROR,
+                code="CUSTODY_DENIED",
+                message="Intent rejected: CUSTODY_DENIED (presence is tamer-scoped)",
+                nonce=nonce,
+            )
+        )
+        return
+    if payload.get("app_category") is not None and not (
+        presence_module.get_app_opt_in(tamer_id)
+    ):
+        await websocket.send_json(
+            protocol.envelope(
+                protocol.MessageType.ERROR,
+                code="BAD_PAYLOAD",
+                message="Intent rejected: BAD_PAYLOAD:app_category_no_opt_in",
+                nonce=nonce,
+            )
+        )
+        return
+    try:
+        record = presence_module.enqueue_presence_intent(
+            session_id, nonce, tamer_id, payload
+        )
+    except ValueError as exc:
+        await websocket.send_json(
+            protocol.envelope(
+                protocol.MessageType.ERROR,
+                code="BAD_PAYLOAD",
+                message=f"Intent rejected: BAD_PAYLOAD ({exc})",
+                nonce=nonce,
+            )
+        )
+        return
+    await websocket.send_json(_intent_ack(record))
+
+
 def _intent_ack(record: dict) -> dict:
     ack_status = {"pending": "accepted"}.get(record["status"], record["status"])
     ack = protocol.envelope(
@@ -133,6 +189,11 @@ async def _handle_intent(
                 message=f"Intent rejected: {error}",
                 nonce=nonce,
             )
+        )
+        return
+    if kind == "tamer_presence":
+        await _handle_tamer_presence(
+            websocket, message, identity, session_id, nonce, payload
         )
         return
     soul_id = message.get("soul_id")

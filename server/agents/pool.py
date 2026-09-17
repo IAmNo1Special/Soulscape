@@ -33,7 +33,7 @@ import random
 import secrets
 import time
 
-from .. import biology, database, dormancy, intents, persistence
+from .. import biology, database, dormancy, intents, persistence, presence
 from . import drives, memory, metering, reflex, scheduler, sensations, vocab
 
 logger = logging.getLogger("soulscape_hub")
@@ -306,6 +306,11 @@ class AgentPool:
             "drives": drive_vec,
             "observations": observations,
             "emote": reflex.emote_of(soul_id),
+            # #28: the custodian-tamer's redacted presence. None when
+            # unknown -- never fabricated.
+            "tamer_presence": presence.get_presence(
+                row.get("custodian_id") or row.get("owner_id"), now
+            ),
         }
         result = reflex.evaluate(
             soul_id,

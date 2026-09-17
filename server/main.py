@@ -11,7 +11,17 @@ from fastapi.responses import JSONResponse
 from .database import init_db
 from . import persistence
 from .key_vault import install_redaction_filter
-from .routers import keys, marketplace, metering, plots, social, souls, tamers, websockets
+from .routers import (
+    keys,
+    marketplace,
+    metering,
+    plots,
+    presence,
+    social,
+    souls,
+    tamers,
+    websockets,
+)
 from .security import UserIdentity, get_api_key
 from .world_tick import TICK_HZ, WorldTick, hub_authoritative_enabled
 
@@ -150,6 +160,7 @@ app.include_router(keys.router)
 app.include_router(marketplace.router)
 app.include_router(metering.router)
 app.include_router(plots.router)
+app.include_router(presence.router)
 app.include_router(social.router)
 app.include_router(souls.router)
 app.include_router(tamers.router)

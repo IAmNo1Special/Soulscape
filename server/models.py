@@ -3,7 +3,7 @@ Pydantic models for request and response validation in the Soulscape Hub API.
 """
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -206,3 +206,38 @@ class PricingUpdate(BaseModel):
 
     essence_per_usd: Optional[float] = None
     model_rates: Optional[Dict[str, List[float]]] = None
+
+
+class TamerPresenceReport(BaseModel):
+    """Strict REST schema for the privacy-gated presence payload (#28).
+
+    `extra="forbid"`: padded/unknown fields are rejected with 422. Enum
+    values are closed; unknown values are rejected with 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    presence: Literal["active", "idle", "locked", "away"]
+    idle_bucket: Literal["0-5", "5-30", "30+"]
+    event: Optional[Literal["tamer_return", "lock", "unlock"]] = None
+    app_category: Optional[
+        Literal["game", "browser", "media", "chat", "work", "other"]
+    ] = None
+
+
+class PresenceOptIn(BaseModel):
+    """Tamer-scoped toggle for the optional app-category signal (#28)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class TamerPresenceState(BaseModel):
+    tamer_id: str
+    presence: Optional[str] = None
+    idle_bucket: Optional[str] = None
+    last_event: Optional[str] = None
+    app_category: Optional[str] = None
+    updated_at: Optional[float] = None
+    stale: bool = False

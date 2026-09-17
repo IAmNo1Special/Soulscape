@@ -42,6 +42,7 @@ from . import intents
 from . import market
 from . import persistence
 from . import plots
+from . import presence as presence_module
 from . import social
 from . import world
 from . import biology
@@ -183,6 +184,8 @@ class WorldTick:
                     agents.consume.adjudicate_consume(
                         self, intent, agents.reflex.NullProvider()
                     )
+                elif intent["kind"] == presence_module.KIND_TAMER_PRESENCE:
+                    presence_module.adjudicate_presence_intent(self, intent)
                 else:
                     with database.get_db() as conn:
                         self._reject(conn, intent, "unknown_kind")
@@ -223,17 +226,20 @@ class WorldTick:
             raise
         # #26: rejections are notable intent outcomes (salience-gated:
         # adjudications are too frequent to log; rejections are rare).
-        agents.memory.log_episode(
-            intent["soul_id"],
-            "intent_outcome",
-            {
-                "summary": f"intent {intent['kind']} rejected: {reason}",
-                "intent_id": intent["intent_id"],
-                "kind": intent["kind"],
-                "reason": reason,
-            },
-            salience=0.6,
-        )
+        # #28: tamer_presence intents are tamer-scoped and may carry a
+        # synthetic soul_id ("tamer:<id>") -- never an episode key.
+        if intent["kind"] != presence_module.KIND_TAMER_PRESENCE:
+            agents.memory.log_episode(
+                intent["soul_id"],
+                "intent_outcome",
+                {
+                    "summary": f"intent {intent['kind']} rejected: {reason}",
+                    "intent_id": intent["intent_id"],
+                    "kind": intent["kind"],
+                    "reason": reason,
+                },
+                salience=0.6,
+            )
 
     def _adjudicate_move_to(self, intent: dict) -> None:
         intent_id = intent["intent_id"]

@@ -203,6 +203,33 @@ def _validate_feed_soul(
     }, None
 
 
+def _validate_tamer_presence(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Strict allowlist for the privacy-gated presence payload (#28).
+
+    The WS frame carries envelope keys plus the redacted payload. Any key
+    outside the envelope + the presence allowlist is rejected outright --
+    padded or probing fields never reach adjudication.
+    """
+    from . import presence as presence_module
+
+    envelope_keys = {
+        "v",
+        "type",
+        "kind",
+        "nonce",
+        "session_id",
+        "signature",
+        "soul_id",
+    }
+    payload = {k: v for k, v in message.items() if k not in envelope_keys}
+    validated, error = presence_module.validate_presence_payload(payload)
+    if error is not None:
+        return None, f"BAD_PAYLOAD:{error}"
+    return validated, None
+
+
 _KIND_VALIDATORS = {
     "move_to": _validate_move_to,
     "feed_soul": _validate_feed_soul,
@@ -214,6 +241,7 @@ _KIND_VALIDATORS = {
     "social_edit": _validate_social_edit,
     "social_delete": _validate_social_delete,
     "plot_claim": _validate_plot_claim,
+    "tamer_presence": _validate_tamer_presence,
 }
 
 

@@ -996,6 +996,20 @@ def init_db():
                 "INSERT OR IGNORE INTO globals (key, value) "
                 "VALUES ('plot_claim_seq', 0.0)"
             )
+            # Issue #28: tamer presence (privacy-gated redacted reports).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tamer_presence (
+                    tamer_id TEXT PRIMARY KEY,
+                    presence TEXT NOT NULL,
+                    idle_bucket TEXT NOT NULL,
+                    last_event TEXT,
+                    app_category TEXT,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            _add_column_if_missing(
+                cursor, "tamers", "presence_app_opt_in INTEGER DEFAULT 0"
+            )
             from . import plots as plots_module
 
             plots_module.seed_plots(conn)

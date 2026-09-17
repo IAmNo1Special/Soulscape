@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import re
+import sys
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +15,12 @@ from .command_queue import CommandQueue
 from .logger import log
 from .network.client import NetworkClient
 from .network.presence import PresenceManager
+from .presence import (
+    PresencePipeline,
+    PresenceRedactor,
+    build_sampler,
+    get_app_category_opt_in,
+)
 
 
 class NetworkService:
@@ -44,6 +51,8 @@ class NetworkService:
             on_connect=self._on_connect,
             on_viewport_frame=self._on_viewport_frame,
         )
+        # #28: tamer presence uplink (started in start(); online-only).
+        self._presence_pipeline: Optional[PresencePipeline] = None
 
     def _is_valid_owner(self, owner_id: str) -> bool:
         """Validates that an owner_id is safe and well-formed."""
@@ -59,11 +68,48 @@ class NetworkService:
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
+        self._start_presence_pipeline()
         log.info(f"NetworkService started for owner: {self.owner_id}")
+
+    def _start_presence_pipeline(self) -> None:
+        """Start the #28 tamer-presence uplink (online mode only).
+
+        This service only runs in online mode (SoulscapeApp starts it
+        exclusively on the online path), so presence is never sampled or
+        shipped offline. The real sampler is Windows-only; other
+        platforms log and skip rather than fabricate signals.
+        """
+        try:
+            sampler = build_sampler()
+        except Exception as exc:
+            log.warning(f"Presence pipeline disabled: {exc}")
+            return
+        if sys.platform != "win32":
+            log.info(
+                "Presence pipeline idle: no platform sampler "
+                "(Windows-only); nothing sampled or shipped."
+            )
+            return
+        redactor = PresenceRedactor(
+            sampler, app_category_opt_in=get_app_category_opt_in()
+        )
+        self._presence_pipeline = PresencePipeline(
+            redactor,
+            send=self.send_intent,
+            get_soul_id=lambda: self.owner_id,
+        )
+        self._presence_pipeline.start()
+        log.info("Tamer presence pipeline started (change + 60s heartbeat).")
 
     def stop(self) -> None:
         """Stops the network service."""
         self._running = False
+        if self._presence_pipeline is not None:
+            try:
+                self._presence_pipeline.stop()
+            except Exception:
+                pass
+            self._presence_pipeline = None
         if self._loop:
             # We schedule the formal shutdown coroutine in the loop
             asyncio.run_coroutine_threadsafe(self._shutdown_async(), self._loop)

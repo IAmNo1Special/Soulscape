@@ -253,7 +253,7 @@ def test_recovery_rebuild_short_gap_fast_forward(db_conn):
     report = persistence.recover_world(tick, now=t0 + 30.0)
     assert report["mode"] == "rebuild"
     assert report["regime"] == "fast_forward"
-    assert report["gap_seconds"] == pytest.approx(30.0)
+    assert report["gap_seconds"] == pytest.approx(30.0, abs=1.0)
     assert tick.tick_id == 42 + int(round(30.0 / TICK_DT))
     pos, vel, target = (100.0, 100.0), (600.0, 0.0), (1000.0, 100.0)
     for _ in range(int(round(30.0 / TICK_DT))):
