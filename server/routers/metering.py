@@ -102,6 +102,7 @@ def update_pricing(
             {
                 "essence_per_usd": body.essence_per_usd,
                 "model_rates": body.model_rates,
+                "operator_id": identity.id,
             },
         )
     except SimUnreachable:
@@ -130,7 +131,9 @@ def trigger_settle(request: Request, identity: UserIdentity = Depends(get_api_ke
     metering_debit intents for the next tick-pump settlement."""
     _assert_operator(identity)
     try:
-        report = gateway_for(request).command("metering_settle", {})
+        report = gateway_for(request).command(
+            "metering_settle", {"operator_id": identity.id}
+        )
     except SimUnreachable:
         raise HTTPException(status_code=503, detail="Simulation unavailable")
     except SimCommandError as exc:

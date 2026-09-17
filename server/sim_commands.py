@@ -391,10 +391,23 @@ def quip_charge(params: dict[str, Any], tick: Any) -> dict[str, Any]:
 @command("plot_set_policy")
 def plot_set_policy(params: dict[str, Any], tick: Any) -> dict[str, Any]:
     """POST /plots/{id}/policy: the UPDATE plots write."""
+    from . import persistence
+
     with database.get_db() as conn:
         conn.execute(
             "UPDATE plots SET access_policy = ? WHERE plot_id = ?",
             (params["access_policy"], params["plot_id"]),
+        )
+        # Issue #38: operator interventions journal as typed events so
+        # dispute replays can show "why did X happen".
+        persistence.append_operator_event(
+            conn,
+            tick.tick_id,
+            operator_id=params.get("operator_id") or "operator",
+            action="plot_policy",
+            target_type="plot",
+            target_id=params["plot_id"],
+            details=f"access_policy={params['access_policy']}",
         )
         conn.commit()
     return {
@@ -421,6 +434,7 @@ def mailbag_answer(params: dict[str, Any], tick: Any) -> dict[str, Any]:
 @command("metering_set_pricing")
 def metering_set_pricing(params: dict[str, Any], tick: Any) -> dict[str, Any]:
     """POST /metering/pricing: operator pricing update."""
+    from . import persistence
     from .agents import metering
 
     try:
@@ -429,6 +443,20 @@ def metering_set_pricing(params: dict[str, Any], tick: Any) -> dict[str, Any]:
                 conn,
                 essence_per_usd=params.get("essence_per_usd"),
                 model_rates=params.get("model_rates"),
+            )
+            # Issue #38: typed operator journal event (see
+            # plot_set_policy).
+            persistence.append_operator_event(
+                conn,
+                tick.tick_id,
+                operator_id=params.get("operator_id") or "operator",
+                action="pricing_update",
+                target_type="metering",
+                target_id="pricing",
+                details=(
+                    f"essence_per_usd={params.get('essence_per_usd')} "
+                    f"model_rates={'set' if params.get('model_rates') else 'unchanged'}"
+                ),
             )
             conn.commit()
     except ValueError as exc:
@@ -439,9 +467,23 @@ def metering_set_pricing(params: dict[str, Any], tick: Any) -> dict[str, Any]:
 @command("metering_settle")
 def metering_settle(params: dict[str, Any], tick: Any) -> dict[str, Any]:
     """POST /metering/settle: force a metering batch (operator)."""
+    from . import persistence
     from .agents import metering
 
-    return metering.maybe_run_batch(force=True)
+    report = metering.maybe_run_batch(force=True)
+    # Issue #38: typed operator journal event (see plot_set_policy).
+    with database.get_db() as conn:
+        persistence.append_operator_event(
+            conn,
+            tick.tick_id,
+            operator_id=params.get("operator_id") or "operator",
+            action="metering_settle",
+            target_type="metering",
+            target_id=str(report.get("batch_id") or ""),
+            details=f"created={report.get('created')}",
+        )
+        conn.commit()
+    return report
 
 
 @command("bridge_ingest")

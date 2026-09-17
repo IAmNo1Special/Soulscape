@@ -62,6 +62,73 @@ EVENT_SOUL_RECOVERED = "soul_recovered"
 EVENT_SOUL_FED = "soul_fed"
 EVENT_SOUL_DORMANT = "soul_dormant"
 EVENT_SOUL_WOKE = "soul_woke"
+#: Metering settlement outcome (canonical home; agents.metering
+#: re-exports it). Carries intent_id.
+EVENT_METERING_DEBIT_SETTLED = "metering_debit_settled"
+#: Bridge tool-event outcome (canonical home; bridge re-exports it).
+#: Carries intent_id since issue #38.
+EVENT_TOOL_EVENT = "tool.event"
+
+#: Journal event types that record an intent's adjudication outcome.
+#: Most subsystems emit intent_adjudicated/intent_rejected; subsystems
+#: with richer domain events use their own type but always carry
+#: ``intent_id`` in the payload. The issue #38 replay window replays
+#: exactly the intents with an outcome event in the selected range.
+ADJUDICATION_OUTCOME_TYPES = frozenset(
+    {
+        EVENT_INTENT_ADJUDICATED,
+        EVENT_INTENT_REJECTED,
+        EVENT_SOUL_FED,
+        EVENT_METERING_DEBIT_SETTLED,
+        EVENT_TOOL_EVENT,
+    }
+)
+#: Journal header event: a sim run started under this scenario seed
+#: (issue #38). Appended once at sim boot; the replay resolves its
+#: seed from it when --seed is not given.
+EVENT_RUN_START = "run_start"
+#: Operator interventions journal as typed events under this prefix,
+#: e.g. "operator.pricing_update" (issue #38). The replay surfaces
+#: them so dispute investigations show "why did X happen".
+EVENT_OPERATOR_PREFIX = "operator."
+
+#: Snapshot format version written by take_snapshot (issue #38).
+SNAPSHOT_FORMAT = 2
+
+
+def append_run_start(
+    conn: sqlite3.Connection,
+    tick_id: int,
+    seed: str | None,
+    tick_dt: float,
+) -> bool:
+    """Journal the sim-boot header (issue #38).
+
+    Records the scenario seed and the RNG derivation contract so a
+    replay can verify it is reproducing the right run. Idempotent:
+    skips when the latest run_start already carries the same payload
+    (e.g. a double start without an intervening restart).
+    """
+    from . import determinism as _determinism
+
+    payload = {
+        "seed": seed,
+        "snapshot_format": SNAPSHOT_FORMAT,
+        "derivation": _determinism.DERIVATION_VERSION,
+        "tick_dt": tick_dt,
+    }
+    row = conn.execute(
+        "SELECT payload FROM journal WHERE type = ? ORDER BY seq DESC LIMIT 1",
+        (EVENT_RUN_START,),
+    ).fetchone()
+    if row is not None:
+        try:
+            if json.loads(row["payload"]) == payload:
+                return False
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    append_event(conn, tick_id, EVENT_RUN_START, payload)
+    return True
 
 _UNSET: object = object()
 
@@ -332,6 +399,60 @@ def append_event(
     return int(cursor.lastrowid)
 
 
+def append_operator_event(
+    conn: sqlite3.Connection,
+    tick_id: int,
+    operator_id: str,
+    action: str,
+    target_type: str = "",
+    target_id: str = "",
+    details: str = "",
+) -> int:
+    """Journal a typed operator intervention (issue #38).
+
+    Writes ``operator.<action>`` inside the caller's transaction so it
+    commits atomically with the mutation it describes. The replay CLI
+    surfaces these events as interventions; they also ride alongside
+    the existing audit_log rows (which stay the human-readable trail).
+    """
+    return append_event(
+        conn,
+        tick_id,
+        f"{EVENT_OPERATOR_PREFIX}{action}",
+        {
+            "operator_id": operator_id,
+            "action": action,
+            "target_type": target_type,
+            "target_id": target_id,
+            "details": details,
+        },
+    )
+
+
+def journal_seq_range_for_intent(
+    conn: sqlite3.Connection, intent_id: str
+) -> tuple[int, int] | None:
+    """(min_seq, max_seq) of adjudication journal events for an intent.
+
+    Used by the #27 dispute API to hand an investigator the exact
+    journal window the replay CLI needs for that intent. Covers every
+    outcome event type (issue #38), not just the generic two: feed,
+    metering settlement, and bridge tool events carry intent_id too.
+    """
+    placeholders = ", ".join("?" for _ in ADJUDICATION_OUTCOME_TYPES)
+    row = conn.execute(
+        f"SELECT MIN(seq) AS lo, MAX(seq) AS hi FROM journal "
+        f"WHERE type IN ({placeholders}) AND payload LIKE ?",
+        (
+            *sorted(ADJUDICATION_OUTCOME_TYPES),
+            f'%"intent_id": "{intent_id}"%',
+        ),
+    ).fetchone()
+    if row is None or row["lo"] is None:
+        return None
+    return (int(row["lo"]), int(row["hi"]))
+
+
 def journal_head(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT COALESCE(MAX(seq), 0) AS head FROM journal").fetchone()
     return int(row["head"])
@@ -413,20 +534,37 @@ def read_state_through(conn: sqlite3.Connection) -> dict[str, dict]:
 
 
 def take_snapshot(
-    conn: sqlite3.Connection, tick_id: int, state: dict[str, dict] | None = None
+    conn: sqlite3.Connection,
+    tick_id: int,
+    state: dict[str, dict] | None = None,
+    scenario_seed: str | None = None,
 ) -> int:
-    """Write a zlib-compressed world snapshot; returns snapshot_id."""
+    """Write a zlib-compressed world snapshot; returns snapshot_id.
+
+    Format v2 (issue #38): the header records the scenario seed, and
+    ``tables`` carries a full dump of every adjudication-relevant
+    table so the replay CLI can rebuild the exact pre-window world
+    state in a temp DB. The legacy ``souls`` kinematics view is kept
+    so existing readers (recovery, viewport) keep working.
+    """
     if state is None:
         state = read_state_through(conn)
+    from . import determinism as _determinism
+
+    if scenario_seed is None:
+        scenario_seed = _determinism.current_seed()
     blob = zlib.compress(
         json.dumps(
             {
-                "v": 1,
+                "v": 2,
                 "tick_id": tick_id,
                 "journal_seq": journal_head(conn),
                 "created_at": time.time(),
+                "scenario_seed": scenario_seed,
+                "derivation": _determinism.DERIVATION_VERSION,
                 "bounds": list(database.SCREEN_BOUNDS),
                 "souls": state,
+                "tables": dump_world_tables(conn),
             },
             separators=(",", ":"),
         ).encode("utf-8"),
@@ -441,6 +579,80 @@ def take_snapshot(
     return int(cursor.lastrowid)
 
 
+#: Tables whose rows are adjudication inputs. The snapshot dumps them
+#: wholesale; the replay restores them into a temp DB before
+#: re-running the window's intents. History/ephemeral tables
+#: (journal, snapshots, sessions, rate limits, LLM keys/usage,
+#: recaps, episodes...) are intentionally excluded: replay compares
+#: intent outcomes, not auxiliary history.
+SNAPSHOT_TABLES = (
+    "souls",
+    "soul_inventory",
+    "intents",
+    "escrows",
+    "marketplace",
+    "messages",
+    "ledger",
+    "plots",
+    "pet_cooldowns",
+    "tamer_presence",
+    "tamers",
+    "metering_events",
+    "decision_traces",
+    "metering_config",
+    "globals",
+    "resource_nodes",
+    "bridge_events",
+    "bridge_tokens",
+    "quip_budgets",
+)
+
+
+def dump_world_tables(conn: sqlite3.Connection) -> dict[str, list[dict]]:
+    """Dump every SNAPSHOT_TABLES table as a {table: [row-dicts]} map."""
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    dumped: dict[str, list[dict]] = {}
+    for table in SNAPSHOT_TABLES:
+        if table not in existing:
+            continue
+        dumped[table] = [
+            dict(row) for row in conn.execute(f"SELECT * FROM {table}").fetchall()
+        ]
+    return dumped
+
+
+def restore_world_tables(
+    conn: sqlite3.Connection, tables: dict[str, list[dict]]
+) -> None:
+    """Replace SNAPSHOT_TABLES contents with a dump from the snapshot.
+
+    Runs inside the caller's transaction. Tables are cleared first so
+    the temp DB holds exactly the snapshot state -- no live leftovers.
+    """
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    for table in SNAPSHOT_TABLES:
+        if table not in existing or table not in tables:
+            continue
+        conn.execute(f"DELETE FROM {table}")
+        for row in tables[table]:
+            columns = ", ".join(row.keys())
+            placeholders = ", ".join("?" for _ in row)
+            conn.execute(
+                f"INSERT INTO {table} ({columns}) VALUES ({placeholders})",
+                tuple(row.values()),
+            )
+
+
 def latest_snapshots(
     conn: sqlite3.Connection, limit: int = SNAPSHOT_KEEP
 ) -> list[dict]:
@@ -452,6 +664,23 @@ def latest_snapshots(
     return [dict(row) for row in rows]
 
 
+def newest_snapshot_before(
+    conn: sqlite3.Connection, journal_seq: int
+) -> dict | None:
+    """Newest snapshot with journal_seq strictly before the given seq.
+
+    Issue #38: dispute handoffs must hand the replay a snapshot that
+    precedes the replay window, never one taken after the disputed
+    event.
+    """
+    row = conn.execute(
+        "SELECT snapshot_id, tick_id, journal_seq, created_at FROM snapshots "
+        "WHERE journal_seq < ? ORDER BY snapshot_id DESC LIMIT 1",
+        (journal_seq,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def load_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict | None:
     """Decompress and validate a snapshot blob; None when corrupt."""
     row = conn.execute(
@@ -461,7 +690,7 @@ def load_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict | None:
         return None
     try:
         snap = json.loads(zlib.decompress(bytes(row["blob"])).decode("utf-8"))
-        assert snap["v"] == 1 and isinstance(snap["souls"], dict)
+        assert snap["v"] in (1, 2) and isinstance(snap["souls"], dict)
         return snap
     except Exception:
         logger.warning("snapshot %d failed integrity check", snapshot_id)

@@ -40,6 +40,7 @@ import time
 from typing import Any
 
 from . import database
+from . import determinism
 from . import dormancy
 from . import persistence
 from .intents import _row_to_dict as _intent_row_to_dict
@@ -458,12 +459,18 @@ def enqueue_plot_intent(
 
 
 def _apply_claim(
-    conn: sqlite3.Connection, tick_id: int, intent: dict[str, Any]
+    conn: sqlite3.Connection,
+    tick: Any,
+    intent: dict[str, Any],
+    now: float | None = None,
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     intent_id = intent["intent_id"]
     claimant_soul_id = payload["claimant_soul_id"]
     access_policy = payload.get("access_policy", ACCESS_OPEN)
+    # Issue #38: claimed_at + ledger timestamps ride the adjudication
+    # clock so a seeded replay writes identical rows.
+    now = determinism.tick_now(tick) if now is None else now
     _check_claimant(conn, intent["custodian_id"], intent["soul_id"], claimant_soul_id)
     claimant = conn.execute(
         "SELECT 1 FROM souls WHERE soul_id = ?", (claimant_soul_id,)
@@ -493,9 +500,8 @@ def _apply_claim(
             )
         # The top-up debit can freeze the claimant; journal the flip.
         dormancy.note_essence_change(
-            conn, claimant_soul_id, essence_before or 0.0, tick_id
+            conn, claimant_soul_id, essence_before or 0.0, tick.tick_id, now=now
         )
-    now = time.time()
     cursor = conn.execute(
         "UPDATE plots SET owner_type = ?, owner_id = ?, access_policy = ?, "
         "claimed_at = ?, claim_seq = ? "
@@ -523,8 +529,8 @@ def _apply_claim(
         "(tick_id, intent_id, entry_type, soul_id, amount, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         [
-            (tick_id, intent_id, LEDGER_DEBIT, claimant_soul_id, fee, now),
-            (tick_id, intent_id, LEDGER_TAX, None, fee, now),
+            (tick.tick_id, intent_id, LEDGER_DEBIT, claimant_soul_id, fee, now),
+            (tick.tick_id, intent_id, LEDGER_TAX, None, fee, now),
         ],
     )
     # Issue #35: a claimed plot becomes the claimant's home plot.
@@ -563,8 +569,10 @@ def _settle_once(tick: Any, intent: dict[str, Any]) -> None:
                 conn.rollback()
                 return
             try:
+                # Issue #38: one adjudication clock per intent.
+                now = determinism.tick_now(tick)
                 if kind == KIND_PLOT_CLAIM:
-                    result = _apply_claim(conn, tick.tick_id, intent)
+                    result = _apply_claim(conn, tick, intent, now=now)
                 else:
                     raise PlotRefusal("unknown_kind", kind)
                 status, event = "adjudicated", persistence.EVENT_INTENT_ADJUDICATED

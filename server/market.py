@@ -36,6 +36,7 @@ import time
 from typing import Any
 
 from . import database
+from . import determinism
 from . import dormancy
 from . import persistence
 from . import resources
@@ -331,8 +332,11 @@ def _write_ledger(
     tick_id: int,
     intent_id: str,
     rows: list[tuple[str, str | None, float]],
+    now: float | None = None,
 ) -> None:
-    now = time.time()
+    # Issue #38: ledger created_at rides the adjudication clock so a
+    # seeded replay writes identical rows.
+    now = time.time() if now is None else now
     conn.executemany(
         "INSERT INTO ledger "
         "(tick_id, intent_id, entry_type, soul_id, amount, created_at) "
@@ -345,7 +349,10 @@ def _write_ledger(
 
 
 def _apply_list(
-    conn: sqlite3.Connection, tick_id: int, intent: dict[str, Any]
+    conn: sqlite3.Connection,
+    tick: Any,
+    intent: dict[str, Any],
+    now: float | None = None,
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     seller_soul_id = payload["seller_soul_id"]
@@ -359,7 +366,16 @@ def _apply_list(
     ).fetchone()
     if seller is None:
         raise MarketRefusal("seller_not_found", "Seller soul not found")
-    listing_id = payload.get("listing_id") or "lst_" + secrets.token_urlsafe(6)
+    # Issue #38: a client-supplied listing_id is authoritative; a minted
+    # one is record-and-replayed in the replay CLI (it is part of the
+    # recorded result) and secrets-based live.
+    listing_id = payload.get("listing_id") or determinism.tick_gen_id(
+        tick,
+        intent["intent_id"],
+        "listing_id",
+        lambda: "lst_" + secrets.token_urlsafe(6),
+    )
+    now = determinism.tick_now(tick) if now is None else now
     # Issue #34: a resource listing escrows the items out of the
     # seller's inventory at list time (the qty rides in the item JSON).
     listed = resources.resource_listing(payload.get("item"))
@@ -380,22 +396,30 @@ def _apply_list(
             payload.get("seller_name", ""),
             json.dumps(payload["item"]),
             round(float(payload["price"]), 2),
-            time.time(),
+            now,
         ),
     )
     _write_ledger(
-        conn, tick_id, intent["intent_id"], [(LEDGER_MEMO, seller_soul_id, 0.0)]
+        conn,
+        tick.tick_id,
+        intent["intent_id"],
+        [(LEDGER_MEMO, seller_soul_id, 0.0)],
+        now=now,
     )
     return {"listing_id": listing_id}
 
 
 def _apply_buy(
-    conn: sqlite3.Connection, tick_id: int, intent: dict[str, Any]
+    conn: sqlite3.Connection,
+    tick: Any,
+    intent: dict[str, Any],
+    now: float | None = None,
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     intent_id = intent["intent_id"]
     buyer_soul_id = intent["soul_id"]
     listing_id = payload["listing_id"]
+    now = determinism.tick_now(tick) if now is None else now
     if intent["custodian_id"] is not None and payload.get("buyer_soul_id") != (
         buyer_soul_id
     ):
@@ -441,7 +465,9 @@ def _apply_buy(
         item_name, qty = sold
         resources.add_item(conn, buyer_soul_id, item_name, qty)
     if seller_row.rowcount:
-        dormancy.note_essence_change(conn, seller_id, seller_before or 0.0, tick_id)
+        dormancy.note_essence_change(
+            conn, seller_id, seller_before or 0.0, tick.tick_id, now=now
+        )
     if seller_row.rowcount == 0:
         logger.warning(
             "buy %s: seller soul %s gone; credit kept in ledger only",
@@ -457,13 +483,14 @@ def _apply_buy(
     )
     _write_ledger(
         conn,
-        tick_id,
+        tick.tick_id,
         intent_id,
         [
             (LEDGER_DEBIT, buyer_soul_id, debit),
             (LEDGER_CREDIT, seller_id, seller_net),
             (LEDGER_TAX, None, tax),
         ],
+        now=now,
     )
     return {
         "listing_id": listing_id,
@@ -476,10 +503,14 @@ def _apply_buy(
 
 
 def _apply_cancel(
-    conn: sqlite3.Connection, tick_id: int, intent: dict[str, Any]
+    conn: sqlite3.Connection,
+    tick: Any,
+    intent: dict[str, Any],
+    now: float | None = None,
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     listing_id = payload["listing_id"]
+    now = determinism.tick_now(tick) if now is None else now
     row = conn.execute(
         "SELECT seller_id, item FROM marketplace WHERE listing_id = ?",
         (listing_id,),
@@ -499,7 +530,11 @@ def _apply_cancel(
         item_name, qty = cancelled
         resources.add_item(conn, row["seller_id"], item_name, qty)
     _write_ledger(
-        conn, tick_id, intent["intent_id"], [(LEDGER_MEMO, intent["soul_id"], 0.0)]
+        conn,
+        tick.tick_id,
+        intent["intent_id"],
+        [(LEDGER_MEMO, intent["soul_id"], 0.0)],
+        now=now,
     )
     return {"listing_id": listing_id, "seller_id": row["seller_id"]}
 
@@ -526,12 +561,15 @@ def _settle_once(tick: Any, intent: dict[str, Any]) -> None:
                 conn.rollback()
                 return
             try:
+                # Issue #38: one adjudication clock per intent; helpers
+                # take it explicitly so replay is bit-identical.
+                now = determinism.tick_now(tick)
                 if kind == KIND_MARKET_LIST:
-                    result = _apply_list(conn, tick.tick_id, intent)
+                    result = _apply_list(conn, tick, intent, now=now)
                 elif kind == KIND_MARKET_BUY:
-                    result = _apply_buy(conn, tick.tick_id, intent)
+                    result = _apply_buy(conn, tick, intent, now=now)
                 elif kind == KIND_MARKET_CANCEL:
-                    result = _apply_cancel(conn, tick.tick_id, intent)
+                    result = _apply_cancel(conn, tick, intent, now=now)
                 else:
                     raise MarketRefusal("unknown_kind", kind)
                 status, event = "adjudicated", persistence.EVENT_INTENT_ADJUDICATED

@@ -38,6 +38,7 @@ import threading
 import time
 
 from . import database
+from . import determinism
 from . import intents
 from . import mailbag
 from . import market
@@ -84,8 +85,16 @@ def _parse_pair(raw) -> tuple[float, float]:
 
 
 class WorldTick:
-    def __init__(self, tick_dt: float = TICK_DT):
+    def __init__(self, tick_dt: float = TICK_DT, scenario_seed: str | None = None):
         self.tick_dt = tick_dt
+        # Issue #38: one seed drives every adjudication RNG (see
+        # determinism.py for the derivation). None = legacy unseeded
+        # behavior; the replay CLI sets it explicitly.
+        self.scenario_seed = determinism.current_seed(scenario_seed)
+        # Issue #38: set to a determinism.ReplayContext by the replay
+        # CLI; None in live mode. Adjudication consults it for the
+        # frozen clock and record-and-replay ids.
+        self.replay: determinism.ReplayContext | None = None
         self.tick_id = 0
         self.enabled = False
         self.running = False
@@ -107,6 +116,13 @@ class WorldTick:
             return
         self.enabled = True
         self.running = True
+        # Issue #38: journal the run header (scenario seed + RNG
+        # derivation contract) once at sim boot; idempotent.
+        with database.get_db() as conn:
+            persistence.append_run_start(
+                conn, self.tick_id, self.scenario_seed, self.tick_dt
+            )
+            conn.commit()
         self._task = asyncio.create_task(self._run_loop())
 
     async def stop(self) -> None:
@@ -126,7 +142,7 @@ class WorldTick:
             try:
                 self.flush()
                 with database.get_db() as conn:
-                    persistence.take_snapshot(conn, self.tick_id)
+                    persistence.take_snapshot(conn, self.tick_id, scenario_seed=self.scenario_seed)
                     persistence.prune_snapshots(conn)
                 self._last_snapshot_tick = self.tick_id
             except Exception:
@@ -173,45 +189,56 @@ class WorldTick:
     def _pump_intents_locked(self) -> int:
         done = 0
         for intent in intents.pending_intents():
-            try:
-                if intent["kind"] == "move_to":
-                    self._adjudicate_move_to(intent)
-                elif intent["kind"] in market.MARKET_KINDS:
-                    market.adjudicate_market_intent(self, intent)
-                elif intent["kind"] in social.SOCIAL_KINDS:
-                    social.adjudicate_social_intent(self, intent)
-                elif intent["kind"] in plots.PLOT_KINDS:
-                    plots.adjudicate_plot_intent(self, intent)
-                elif intent["kind"] in biology.BIOLOGY_KINDS:
-                    biology.adjudicate_feed_soul(self, intent)
-                elif intent["kind"] in metering.METERING_KINDS:
-                    metering.adjudicate_metering_intent(self, intent)
-                elif intent["kind"] in agents.consume.CONSUME_KINDS:
-                    agents.consume.adjudicate_consume(
-                        self, intent, resources.node_provider()
-                    )
-                elif intent["kind"] in resources.RESOURCE_KINDS:
-                    resources.adjudicate_gather(self, intent)
-                elif intent["kind"] == presence_module.KIND_TAMER_PRESENCE:
-                    presence_module.adjudicate_presence_intent(self, intent)
-                elif intent["kind"] in affection.AFFECTION_KINDS:
-                    affection.adjudicate_affection_intent(self, intent)
-                elif intent["kind"] == bridge.BRIDGE_INTENT_KIND:
-                    bridge.adjudicate_bridge_event(self, intent)
-                else:
-                    with database.get_db() as conn:
-                        self._reject(conn, intent, "unknown_kind")
-            except Exception:
-                logger.exception("Intent adjudication failed: %s", intent["intent_id"])
-                with database.get_db() as conn:
-                    try:
-                        self._reject(conn, intent, "internal")
-                    except Exception:
-                        logger.exception(
-                            "Intent rejection failed: %s", intent["intent_id"]
-                        )
+            self._adjudicate_one(intent)
             done += 1
         return done
+
+    def _adjudicate_one(self, intent: dict) -> None:
+        """Adjudicate a single intent through the real dispatch.
+
+        Extracted from the pump loop so the replay CLI (issue #38)
+        re-runs exactly this code path per intent, in journal order,
+        against a temp DB -- same function, no fork.
+        """
+        try:
+            if intent["kind"] == "move_to":
+                self._adjudicate_move_to(intent)
+            elif intent["kind"] in market.MARKET_KINDS:
+                market.adjudicate_market_intent(self, intent)
+            elif intent["kind"] in social.SOCIAL_KINDS:
+                social.adjudicate_social_intent(self, intent)
+            elif intent["kind"] in plots.PLOT_KINDS:
+                plots.adjudicate_plot_intent(self, intent)
+            elif intent["kind"] in biology.BIOLOGY_KINDS:
+                biology.adjudicate_feed_soul(self, intent)
+            elif intent["kind"] in metering.METERING_KINDS:
+                metering.adjudicate_metering_intent(self, intent)
+            elif intent["kind"] in agents.consume.CONSUME_KINDS:
+                agents.consume.adjudicate_consume(
+                    self, intent, resources.node_provider()
+                )
+            elif intent["kind"] in resources.RESOURCE_KINDS:
+                resources.adjudicate_gather(
+                    self, intent, now=determinism.tick_now(self)
+                )
+            elif intent["kind"] == presence_module.KIND_TAMER_PRESENCE:
+                presence_module.adjudicate_presence_intent(self, intent)
+            elif intent["kind"] in affection.AFFECTION_KINDS:
+                affection.adjudicate_affection_intent(self, intent)
+            elif intent["kind"] == bridge.BRIDGE_INTENT_KIND:
+                bridge.adjudicate_bridge_event(self, intent)
+            else:
+                with database.get_db() as conn:
+                    self._reject(conn, intent, "unknown_kind")
+        except Exception:
+            logger.exception("Intent adjudication failed: %s", intent["intent_id"])
+            with database.get_db() as conn:
+                try:
+                    self._reject(conn, intent, "internal")
+                except Exception:
+                    logger.exception(
+                        "Intent rejection failed: %s", intent["intent_id"]
+                    )
 
     def _reject(self, conn, intent: dict, reason: str) -> None:
         result = {"reason": reason}
@@ -605,7 +632,7 @@ class WorldTick:
     def _maybe_snapshot(self) -> None:
         if self.tick_id - self._last_snapshot_tick >= persistence.SNAPSHOT_EVERY_TICKS:
             with database.get_db() as conn:
-                persistence.take_snapshot(conn, self.tick_id)
+                persistence.take_snapshot(conn, self.tick_id, scenario_seed=self.scenario_seed)
                 persistence.prune_snapshots(conn)
             self._last_snapshot_tick = self.tick_id
 

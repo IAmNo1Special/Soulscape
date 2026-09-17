@@ -45,6 +45,7 @@ import time
 from typing import Any
 
 from . import database
+from . import determinism
 from . import dormancy
 from . import persistence
 from .intents import _row_to_dict as _intent_row_to_dict
@@ -91,8 +92,17 @@ def _sanitize(text: str) -> str:
     return clean[:2000].strip()
 
 
-def _new_message_id() -> str:
-    return "msg_" + secrets.token_urlsafe(9)
+def _new_message_id(
+    tick: Any = None, intent_id: str | None = None
+) -> str:
+    # Issue #38: minted ids are record-and-replayed in the replay CLI
+    # (they are part of the recorded result) and secrets-based live.
+    return determinism.tick_gen_id(
+        tick,
+        intent_id or "",
+        "message_id",
+        lambda: "msg_" + secrets.token_urlsafe(9),
+    )
 
 
 def _check_author(
@@ -363,7 +373,10 @@ def enqueue_social_intent(
 
 
 def _apply_post(
-    conn: sqlite3.Connection, tick_id: int, intent: dict[str, Any]
+    conn: sqlite3.Connection,
+    tick: Any,
+    intent: dict[str, Any],
+    now: float | None = None,
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     author_type = payload["author_type"]
@@ -383,8 +396,10 @@ def _apply_post(
     amount = _paid_amount(author_type, KIND_SOCIAL_POST)
     if amount > 0:
         _require_held_escrow(conn, intent["intent_id"])
-    message_id = _new_message_id()
-    now = time.time()
+    message_id = _new_message_id(tick, intent["intent_id"])
+    # Issue #38: message + ledger timestamps ride the adjudication
+    # clock so a seeded replay writes identical rows.
+    now = determinism.tick_now(tick) if now is None else now
     conn.execute(
         "INSERT INTO messages "
         "(message_id, parent_id, author_type, author_id, author_name, "
@@ -410,13 +425,16 @@ def _apply_post(
             "INSERT INTO ledger "
             "(tick_id, intent_id, entry_type, soul_id, amount, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            [(tick_id, intent["intent_id"], LEDGER_DEBIT, author_id, amount, now)],
+            [(tick.tick_id, intent["intent_id"], LEDGER_DEBIT, author_id, amount, now)],
         )
     return {"message_id": message_id, "cost": amount}
 
 
 def _apply_reply(
-    conn: sqlite3.Connection, tick_id: int, intent: dict[str, Any]
+    conn: sqlite3.Connection,
+    tick: Any,
+    intent: dict[str, Any],
+    now: float | None = None,
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     author_type = payload["author_type"]
@@ -433,8 +451,9 @@ def _apply_reply(
     amount = _paid_amount(author_type, KIND_SOCIAL_REPLY)
     if amount > 0:
         _require_held_escrow(conn, intent["intent_id"])
-    message_id = _new_message_id()
-    now = time.time()
+    message_id = _new_message_id(tick, intent["intent_id"])
+    # Issue #38: see _apply_post -- timestamps ride the tick clock.
+    now = determinism.tick_now(tick) if now is None else now
     conn.execute(
         "INSERT INTO messages "
         "(message_id, parent_id, author_type, author_id, author_name, "
@@ -460,13 +479,16 @@ def _apply_reply(
             "INSERT INTO ledger "
             "(tick_id, intent_id, entry_type, soul_id, amount, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            [(tick_id, intent["intent_id"], LEDGER_DEBIT, author_id, amount, now)],
+            [(tick.tick_id, intent["intent_id"], LEDGER_DEBIT, author_id, amount, now)],
         )
     return {"message_id": message_id, "cost": amount}
 
 
 def _apply_edit(
-    conn: sqlite3.Connection, tick_id: int, intent: dict[str, Any]
+    conn: sqlite3.Connection,
+    tick: Any,
+    intent: dict[str, Any],
+    now: float | None = None,
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     message = _get_message(conn, payload["message_id"])
@@ -491,13 +513,21 @@ def _apply_edit(
         )
     conn.execute(
         "UPDATE messages SET body = ?, edited_at = ? WHERE message_id = ?",
-        (payload["body"], time.time(), message["message_id"]),
+        # Issue #38: edited_at rides the adjudication clock.
+        (
+            payload["body"],
+            determinism.tick_now(tick) if now is None else now,
+            message["message_id"],
+        ),
     )
     return {"message_id": message["message_id"]}
 
 
 def _apply_delete(
-    conn: sqlite3.Connection, tick_id: int, intent: dict[str, Any]
+    conn: sqlite3.Connection,
+    tick: Any,
+    intent: dict[str, Any],
+    now: float | None = None,
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     message = _get_message(conn, payload["message_id"])
@@ -546,14 +576,17 @@ def _settle_once(tick: Any, intent: dict[str, Any]) -> None:
                 conn.rollback()
                 return
             try:
+                # Issue #38: one adjudication clock per intent; helpers
+                # take it explicitly so replay is bit-identical.
+                now = determinism.tick_now(tick)
                 if kind == KIND_SOCIAL_POST:
-                    result = _apply_post(conn, tick.tick_id, intent)
+                    result = _apply_post(conn, tick, intent, now=now)
                 elif kind == KIND_SOCIAL_REPLY:
-                    result = _apply_reply(conn, tick.tick_id, intent)
+                    result = _apply_reply(conn, tick, intent, now=now)
                 elif kind == KIND_SOCIAL_EDIT:
-                    result = _apply_edit(conn, tick.tick_id, intent)
+                    result = _apply_edit(conn, tick, intent, now=now)
                 elif kind == KIND_SOCIAL_DELETE:
-                    result = _apply_delete(conn, tick.tick_id, intent)
+                    result = _apply_delete(conn, tick, intent, now=now)
                 else:
                     raise SocialRefusal("unknown_kind", kind)
                 status, event = "adjudicated", persistence.EVENT_INTENT_ADJUDICATED

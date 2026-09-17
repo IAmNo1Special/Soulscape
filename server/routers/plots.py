@@ -203,7 +203,11 @@ def set_plot_access(
     try:
         return gateway_for(request).command(
             "plot_set_policy",
-            {"plot_id": plot_id, "access_policy": policy},
+            {
+                "plot_id": plot_id,
+                "access_policy": policy,
+                "operator_id": identity.id,
+            },
         )
     except SimUnreachable:
         raise HTTPException(status_code=503, detail="Simulation unavailable")

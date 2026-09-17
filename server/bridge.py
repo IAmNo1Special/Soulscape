@@ -75,7 +75,9 @@ import re
 import secrets
 import time
 
-from . import database, intents, persistence
+from typing import Any
+
+from . import database, determinism, intents, persistence
 from .agents import memory as agent_memory
 from .agents import scheduler as think_scheduler
 from .agents import sensations
@@ -115,7 +117,8 @@ RATE_WINDOW_SECONDS = 3600.0
 TOKEN_PREFIX = "brg_"
 
 #: Journal event type for every bridged event (arch: typed tool.event).
-EVENT_TOOL_EVENT = "tool.event"
+#: Canonical home: persistence.EVENT_TOOL_EVENT.
+EVENT_TOOL_EVENT = persistence.EVENT_TOOL_EVENT
 
 #: recap_sources kind feeding #33's ambient recap.
 RECAP_KIND_TOOL_EVENT = "tool.event"
@@ -675,7 +678,7 @@ def adjudicate_bridge_event(tick, intent: dict) -> None:
             if row is None or row["status"] != "pending":
                 conn.rollback()
                 return
-            result = _apply_bridge_event(conn, tick.tick_id, intent, payload)
+            result = _apply_bridge_event(conn, tick, intent, payload)
             conn.execute(
                 "UPDATE intents SET status = ?, result = ? "
                 "WHERE intent_id = ?",
@@ -702,7 +705,7 @@ def adjudicate_bridge_event(tick, intent: dict) -> None:
 
 
 def _apply_bridge_event(
-    conn, tick_id: int, intent: dict, payload: dict
+    conn, tick: Any, intent: dict, payload: dict, now: float | None = None
 ) -> dict:
     soul_id = payload.get("soul_id")
     tamer_id = payload.get("tamer_id")
@@ -719,7 +722,10 @@ def _apply_bridge_event(
             "custody_changed",
             "Soul custody changed since the event was accepted",
         )
-    now = time.time()
+    # Issue #38: the event timestamp and the 1h recency window ride the
+    # adjudication clock so a seeded replay computes the same result.
+    now = determinism.tick_now(tick) if now is None else now
+    tick_id = tick.tick_id
     event_id = payload["event_id"]
     kind = payload["kind"]
     pivotal = kind in PIVOTAL_KINDS
@@ -743,6 +749,9 @@ def _apply_bridge_event(
         tick_id,
         EVENT_TOOL_EVENT,
         {
+            # Issue #38: intent_id maps this outcome event to the
+            # adjudicated intent for deterministic replay.
+            "intent_id": intent["intent_id"],
             "soul_id": soul_id,
             "tamer_id": tamer_id,
             "event_id": event_id,

@@ -52,6 +52,7 @@ from dataclasses import dataclass
 
 from . import biology
 from . import database
+from . import determinism
 from . import dormancy
 from . import persistence
 from . import plots
@@ -433,7 +434,9 @@ def _pet_cooldown_remaining(
 def _adjudicate_pet(tick, intent: dict) -> None:
     soul_id = intent["soul_id"]
     tamer_id = intent["custodian_id"] or "operator"
-    now = time.time()
+    # Issue #38: pet cooldowns ride the adjudication clock so a seeded
+    # replay makes the same allow/deny decision.
+    now = determinism.tick_now(tick)
     new_loyalty: float | None = None
     with database.get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -502,7 +505,13 @@ def _adjudicate_carry_move(tick, intent: dict) -> None:
     phase = payload.get("phase", "move")
     if phase not in CARRY_PHASES:
         raise AffectionRefusal("bad_phase", f"Unknown carry phase: {phase!r}")
-    now = time.time()
+    # Issue #38: carry timing rides the adjudication clock; the escape
+    # roll rides the scenario-seeded stream. In replay the in-memory
+    # session is rebuilt by processing the window's carry intents in
+    # order (same as live); a window that starts mid-carry cannot
+    # rebuild it and the diff flags that honestly.
+    now = determinism.tick_now(tick)
+    rng = determinism.tick_rng(tick, "affection", intent["intent_id"])
     result: dict | None = None
     with database.get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -518,7 +527,7 @@ def _adjudicate_carry_move(tick, intent: dict) -> None:
             if phase == "grab":
                 result = _carry_grab(conn, intent, soul, now)
             elif phase == "move":
-                result = _carry_move_step(conn, intent, soul, payload, now)
+                result = _carry_move_step(conn, intent, soul, payload, now, rng=rng)
             else:
                 result = _carry_release(conn, intent, now)
             _settle(conn, tick.tick_id, intent, "adjudicated", result)
@@ -566,7 +575,7 @@ def _carry_grab(conn, intent: dict, soul: dict, now: float) -> dict:
 
 
 def _carry_move_step(
-    conn, intent: dict, soul: dict, payload: dict, now: float
+    conn, intent: dict, soul: dict, payload: dict, now: float, rng=None
 ) -> dict:
     soul_id = intent["soul_id"]
     owner_id = _owner_of(conn, soul_id)
@@ -588,7 +597,9 @@ def _carry_move_step(
             "Carry cannot cross a plot border; soul stays at last valid position",
         )
     dt = min(now - session.last_move_at, MAX_ESCAPE_DT_S)
-    if roll_escape(soul.get("nature"), dt):
+    # Issue #38: the escape roll draws from the scenario-seeded
+    # per-intent stream; unseeded it keeps the legacy module RNG.
+    if roll_escape(soul.get("nature"), dt, rng=rng):
         _escape(conn, intent, tx, ty, now)
         return {
             "phase": "move",

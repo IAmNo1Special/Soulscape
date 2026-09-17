@@ -156,6 +156,7 @@ def note_essence_change(
     *,
     reason: str | None = None,
     shortfall: float | None = None,
+    now: float | None = None,
 ) -> tuple[bool, bool]:
     """Journal dormancy transitions after a cached-essence write.
 
@@ -176,13 +177,15 @@ def note_essence_change(
     now_dormant = is_dormant(essence_after)
     if was_dormant == now_dormant:
         return now_dormant, False
-    now = time.time()
+    # Issue #38: the flip timestamp rides the adjudication clock when
+    # the caller passes one (seeded replay writes identical payloads).
+    at = time.time() if now is None else now
     if now_dormant:
         payload = {
             "soul_id": soul_id,
             "essence_before": essence_before,
             "essence_after": essence_after,
-            "at": now,
+            "at": at,
         }
         if reason is not None:
             payload["reason"] = reason
@@ -205,7 +208,7 @@ def note_essence_change(
                 "soul_id": soul_id,
                 "essence_before": essence_before,
                 "essence_after": essence_after,
-                "at": now,
+                "at": at,
             },
         )
         reset_think_schedule(soul_id)

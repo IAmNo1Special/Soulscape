@@ -38,7 +38,7 @@ import sqlite3
 import time
 from typing import Any
 
-from .. import database, dormancy, persistence
+from .. import database, determinism, dormancy, persistence
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -66,8 +66,9 @@ SETTLEMENT_CADENCE_S = 300.0
 #: immediate batch even inside the cadence window.
 UNSETTLED_THRESHOLD_ESSENCE = 5.0
 
-#: Journal event type for settled metering batches.
-EVENT_METERING_DEBIT_SETTLED = "metering_debit_settled"
+#: Journal event type for settled metering batches (canonical home:
+#: persistence.EVENT_METERING_DEBIT_SETTLED; re-exported here).
+EVENT_METERING_DEBIT_SETTLED = persistence.EVENT_METERING_DEBIT_SETTLED
 
 #: Journaled reason when an unpayable debit freezes a soul.
 REASON_UNPAYABLE_LLM_DEBIT = "unpayable_llm_debit"
@@ -420,8 +421,11 @@ def _write_ledger(
     tick_id: int,
     intent_id: str,
     rows: list[tuple[str, str | None, float]],
+    now: float | None = None,
 ) -> None:
-    now = time.time()
+    # Issue #38: ledger created_at rides the adjudication clock so a
+    # seeded replay writes identical rows.
+    now = time.time() if now is None else now
     conn.executemany(
         "INSERT INTO ledger "
         "(tick_id, intent_id, entry_type, soul_id, amount, created_at) "
@@ -515,7 +519,10 @@ def _settle_once(tick: Any, intent: dict[str, Any]) -> None:
             balance = essence_before if essence_before is not None else 0.0
             debited = min(balance, due)
             shortfall = round(due - debited, 6)
-            now = time.time()
+            # Issue #38: settled_at + ledger timestamps ride the
+            # adjudication clock so a seeded replay writes identical
+            # rows.
+            now = determinism.tick_now(tick)
             # No debt carry: the actually-available debit is allocated
             # across events in order. Ledger rows move only what was
             # really taken, so verify_balances() never drifts; each
@@ -535,6 +542,7 @@ def _settle_once(tick: Any, intent: dict[str, Any]) -> None:
                         (LEDGER_DEBIT, soul_id, actual),
                         (LEDGER_TAX, None, actual),
                     ],
+                    now=now,
                 )
                 conn.execute(
                     "UPDATE metering_events SET essence_charged = ?, "
@@ -570,9 +578,13 @@ def _settle_once(tick: Any, intent: dict[str, Any]) -> None:
                     tick.tick_id,
                     reason=REASON_UNPAYABLE_LLM_DEBIT,
                     shortfall=shortfall,
+                    # Issue #38: adjudication clock, not wall clock.
+                    now=now,
                 )
             elif not soul_missing:
-                dormancy.note_essence_change(conn, soul_id, balance, tick.tick_id)
+                dormancy.note_essence_change(
+                    conn, soul_id, balance, tick.tick_id, now=now
+                )
             result = {
                 "batch_id": batch_id,
                 "n_events": len(charges),
@@ -776,5 +788,43 @@ def soul_line_items(
                 (line["debit_intent_id"],),
             ).fetchall()
             line["ledger_rows"] = [dict(r) for r in rows]
+        # Issue #38: forensic handoff -- the exact journal window the
+        # replay CLI needs to re-run this line's settlement, plus the
+        # latest snapshot anchor. The dispute endpoint identifies the
+        # intent/window; the CLI performs the rerun (the API never
+        # shells out).
+        line["replay"] = _replay_handoff(conn, event["settled_by"])
         lines.append(line)
     return lines
+
+
+def _replay_handoff(conn: sqlite3.Connection, settlement_intent_id: str | None) -> dict:
+    """Replay metadata for one settled line (issue #38)."""
+    seq_range = (
+        persistence.journal_seq_range_for_intent(conn, settlement_intent_id)
+        if settlement_intent_id
+        else None
+    )
+    # The snapshot must precede the replay window: newest snapshot
+    # with journal_seq strictly before the window start.
+    snap = (
+        persistence.newest_snapshot_before(conn, seq_range[0])
+        if seq_range is not None
+        else None
+    )
+    snapshot_id = snap["snapshot_id"] if snap is not None else None
+    tail = (
+        f"{seq_range[0]}-{seq_range[1]}"
+        if seq_range is not None
+        else "<journal-seq-lo>-<journal-seq-hi>"
+    )
+    return {
+        "settlement_intent_id": settlement_intent_id,
+        "journal_seq_range": list(seq_range) if seq_range else None,
+        "snapshot_id": snapshot_id,
+        "cli": (
+            "python -m server.replay "
+            f"--snapshot {snapshot_id if snapshot_id is not None else '<id>'} "
+            f"--journal-tail {tail} --diff-against recorded"
+        ),
+    }

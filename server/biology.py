@@ -49,6 +49,7 @@ import sqlite3
 import time
 
 from . import database
+from . import determinism
 from . import dormancy
 from . import persistence
 from . import viewport
@@ -478,8 +479,11 @@ def _write_ledger(
     tick_id: int,
     intent_id: str,
     rows: list[tuple[str, str, float]],
+    now: float | None = None,
 ) -> None:
-    now = time.time()
+    # Issue #38: ledger created_at rides the adjudication clock so a
+    # seeded replay writes identical rows.
+    now = time.time() if now is None else now
     conn.executemany(
         "INSERT INTO ledger "
         "(tick_id, intent_id, entry_type, soul_id, amount, created_at) "
@@ -740,7 +744,12 @@ def adjudicate_feed_soul(tick, intent: dict) -> None:
                 (FEED_SOUL_COST, recipient_soul_id),
             )
             dormancy.note_essence_change(
-                conn, recipient_soul_id, recipient_before or 0.0, tick.tick_id
+                conn,
+                recipient_soul_id,
+                recipient_before or 0.0,
+                tick.tick_id,
+                # Issue #38: adjudication clock, not wall clock.
+                now=determinism.tick_now(tick),
             )
             conn.execute(
                 "UPDATE escrows SET status = 'applied' "
@@ -755,6 +764,8 @@ def adjudicate_feed_soul(tick, intent: dict) -> None:
                     (_LEDGER_FEED_DEBIT, feeder_soul_id, -FEED_SOUL_COST),
                     (_LEDGER_FEED_CREDIT, recipient_soul_id, FEED_SOUL_COST),
                 ],
+                # Issue #38: adjudication clock, not wall clock.
+                now=determinism.tick_now(tick),
             )
             result = {
                 "recipient_soul_id": recipient_soul_id,

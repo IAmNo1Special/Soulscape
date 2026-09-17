@@ -23,6 +23,7 @@ import time
 from typing import Any
 
 from . import database
+from . import determinism
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -286,7 +287,9 @@ def adjudicate_presence_intent(tick, intent: dict[str, Any]) -> None:
 
     intent_id = intent["intent_id"]
     tamer_id = intent.get("custodian_id")
-    now = time.time()
+    # Issue #38: presence timestamps ride the adjudication clock so a
+    # seeded replay writes identical rows.
+    now = determinism.tick_now(tick)
     payload = intent.get("payload") or {}
     validated, error = validate_presence_payload(payload)
     if error is not None or validated is None:
@@ -320,7 +323,9 @@ def adjudicate_presence_intent(tick, intent: dict[str, Any]) -> None:
             returned = True
     # Issue #33: an unlock is a wake. Generate the overnight recap when
     # due (>22 h) and emit at most one morning-note bubble per cycle.
-    if validated.get("event") == EVENT_UNLOCK:
+    # Issue #38: suppressed in replay -- recap generation is an
+    # auxiliary LLM-backed side effect, not the adjudication outcome.
+    if validated.get("event") == EVENT_UNLOCK and getattr(tick, "replay", None) is None:
         from . import recap as recap_module
 
         try:
