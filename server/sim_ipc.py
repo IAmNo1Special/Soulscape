@@ -384,7 +384,8 @@ class SimServer:
                 while not self._stopping.is_set():
                     try:
                         msg = recv_frame(conn, CALL_TIMEOUT_S)
-                    except SimUnreachable:
+                    except (SimUnreachable, TimeoutError):
+                        logger.info("sim connection idle, closing")
                         break
                     try:
                         response = self.dispatcher.handle(msg)
@@ -458,6 +459,13 @@ class SimClient:
 
     def call(self, msg: dict[str, Any], timeout: float | None = None) -> dict[str, Any]:
         timeout = self.timeout if timeout is None else timeout
+        try:
+            return self._round_trip(msg, timeout)
+        except (OSError, SimError):
+            self._drop()
+            return self._round_trip(msg, timeout)
+
+    def _round_trip(self, msg: dict[str, Any], timeout: float) -> dict[str, Any]:
         try:
             send_frame(self._sock(), msg)
         except (OSError, SimError) as exc:

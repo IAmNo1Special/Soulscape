@@ -6,7 +6,9 @@ processes (the two-process survival test lives in
 test_sim_survives_api_restart.py).
 """
 
+import logging
 import socket
+import time
 
 import pytest
 
@@ -223,7 +225,92 @@ def test_tcp_round_trip():
         server.stop()
 
 
-def test_client_unreachable_is_503_mappable():
+def test_client_retries_once_on_stale_connection():
+    port = _free_port()
+    server = SimServer(SimDispatcher(), port=port)
+    server.start()
+    try:
+        client = SimClient(port=port)
+        assert client.call({"type": "ping"}, timeout=5.0)["ok"] is True
+        stale = client._local.sock
+        stale.close()
+        resp = client.call({"type": "ping"}, timeout=5.0)
+        assert resp["ok"] is True
+        assert client._local.sock is not stale
+    finally:
+        server.stop()
+
+
+def test_retry_of_intent_submit_is_nonce_idempotent(db_conn):
+    port = _free_port()
+    server = SimServer(SimDispatcher(), port=port)
+    server.start()
+    try:
+        client = SimClient(port=port)
+        first = client.call(
+            {
+                "type": "intent_submit",
+                "session_id": "sess",
+                "nonce": "nonce-retry-1",
+                "custodian_id": "tamer1",
+                "soul_id": "tamer:tamer1",
+                "kind": "tamer_presence",
+                "payload": {"presence": "active", "idle_bucket": "0-5"},
+            },
+            timeout=5.0,
+        )
+        assert first["ok"] is True
+        client._local.sock.close()
+        second = client.call(
+            {
+                "type": "intent_submit",
+                "session_id": "sess",
+                "nonce": "nonce-retry-1",
+                "custodian_id": "tamer1",
+                "soul_id": "tamer:tamer1",
+                "kind": "tamer_presence",
+                "payload": {"presence": "active", "idle_bucket": "0-5"},
+            },
+            timeout=5.0,
+        )
+        assert second["ok"] is True
+        assert second["created"] is False
+        assert second["record"]["intent_id"] == first["record"]["intent_id"]
+        rows = db_conn.execute(
+            "SELECT COUNT(*) AS n FROM intents "
+            "WHERE session_id = 'sess' AND nonce = 'nonce-retry-1'"
+        ).fetchone()
+        assert rows["n"] == 1
+    finally:
+        server.stop()
+
+
+def test_server_idle_close_does_not_log_error(monkeypatch, caplog):
+    import server.sim_ipc as ipc_module
+
+    monkeypatch.setattr(ipc_module, "CALL_TIMEOUT_S", 0.2)
+    port = _free_port()
+    server = SimServer(SimDispatcher(), port=port)
+    server.start()
+    try:
+        with caplog.at_level(logging.INFO, logger="soulscape_hub"):
+            client = SimClient(port=port)
+            client.call({"type": "ping"}, timeout=5.0)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if any(
+                    r.message == "sim connection idle, closing" for r in caplog.records
+                ):
+                    break
+                time.sleep(0.05)
+            errors = [
+                r
+                for r in caplog.records
+                if r.levelno >= logging.ERROR and "sim connection" in r.message
+            ]
+            assert not errors
+    finally:
+        server.stop()
     client = SimClient(port=_free_port())  # nothing listening
     with pytest.raises(SimUnreachable):
         client.call({"type": "ping"}, timeout=2.0)
