@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse
 
 from .database import init_db
 from . import persistence
-from .routers import marketplace, plots, social, souls, tamers, websockets
+from .key_vault import install_redaction_filter
+from .routers import keys, marketplace, plots, social, souls, tamers, websockets
 from .security import UserIdentity, get_api_key
 from .world_tick import TICK_HZ, WorldTick, hub_authoritative_enabled
 
@@ -41,6 +42,7 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("soulscape_hub")
+install_redaction_filter()
 
 
 @asynccontextmanager
@@ -48,6 +50,7 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize the database
     logger.info("Initializing database...")
     init_db()
+    install_redaction_filter()
 
     if not os.getenv("HUB_SECRET_KEY"):
         logger.warning(
@@ -136,6 +139,7 @@ async def debug_tick(identity: UserIdentity = Depends(get_api_key)):
 
 
 # Include Routers
+app.include_router(keys.router)
 app.include_router(marketplace.router)
 app.include_router(plots.router)
 app.include_router(social.router)

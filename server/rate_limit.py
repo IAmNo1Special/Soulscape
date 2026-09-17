@@ -69,6 +69,7 @@ def rate_limited(limit: int, window_seconds: int, scope: str):
 read_limit = rate_limited(120, 60, "reads")
 social_write_limit = rate_limited(6, 60, "social_write")
 market_write_limit = rate_limited(30, 60, "market_write")
+key_write_limit = rate_limited(30, 60, "keys_write")
 
 
 def check_login_limit(username: str, ip: str) -> None:

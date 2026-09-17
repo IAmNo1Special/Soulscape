@@ -75,6 +75,7 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM escrows")
     cursor.execute("DELETE FROM ledger")
     cursor.execute("DELETE FROM plots")
+    cursor.execute("DELETE FROM llm_keys")
     # The journal is append-only in production, so recovery treats its seq
     # column as gapless. Reset the AUTOINCREMENT sequences too, or a test that
     # leaves journal/snapshot rows behind would hand the next test a journal

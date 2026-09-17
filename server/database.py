@@ -726,6 +726,27 @@ def init_db():
                     expires_at REAL NOT NULL
                 )
             """)
+            # Encrypted BYO LLM provider key vault (issue #23):
+            # ciphertext-only at rest; plaintext never stored.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS llm_keys (
+                    key_id TEXT PRIMARY KEY,
+                    tamer_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    last4 TEXT NOT NULL DEFAULT '',
+                    nonce BLOB NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    created_at REAL NOT NULL,
+                    rotated_at REAL,
+                    revoked_at REAL,
+                    superseded_by TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_llm_keys_owner
+                ON llm_keys(tamer_id, provider)
+            """)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS intents (
                     intent_id TEXT PRIMARY KEY,

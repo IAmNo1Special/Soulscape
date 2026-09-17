@@ -175,3 +175,25 @@ class TamerSessionResponse(BaseModel):
 class WsTicketResponse(BaseModel):
     ticket: str
     expires_in: int
+
+
+class KeyUploadRequest(BaseModel):
+    provider: str
+    key: str
+    label: str = ""
+
+
+class KeyRotateRequest(BaseModel):
+    new_key: str
+
+
+class KeyMetadata(BaseModel):
+    key_id: str
+    tamer_id: str
+    provider: str
+    label: str
+    last4: str
+    created_at: float
+    rotated_at: Optional[float] = None
+    revoked_at: Optional[float] = None
+    superseded_by: Optional[str] = None
