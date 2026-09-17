@@ -10,6 +10,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 import websockets
+from shared import protocol
 
 log = logging.getLogger("soulscape")
 
@@ -28,9 +29,7 @@ class PresenceManager:
         on_owner_online: Callable[[str], Coroutine[Any, Any, None]],
         on_owner_offline: Callable[[str], None],
         on_soul_updated: Callable[[list[dict], str], Coroutine[Any, Any, None]],
-        on_connect: (
-            Callable[[list[str]], Coroutine[Any, Any, None]] | None
-        ) = None,
+        on_connect: (Callable[[list[str]], Coroutine[Any, Any, None]] | None) = None,
     ):
         self.owner_id = owner_id
         self.on_owner_online = on_owner_online
@@ -45,9 +44,7 @@ class PresenceManager:
         # Case-insensitive replacement of HTTP scheme
         hub_url_lower = hub_url.lower()
         if hub_url_lower.startswith("https://"):
-            ws_url = (
-                "wss://" + hub_url[8:]
-            )  # Remove "https://" and add "wss://"
+            ws_url = "wss://" + hub_url[8:]  # Remove "https://" and add "wss://"
         elif hub_url_lower.startswith("http://"):
             ws_url = "ws://" + hub_url[7:]  # Remove "http://" and add "ws://"
         else:
@@ -105,8 +102,7 @@ class PresenceManager:
                 if not self._running:
                     break
                 log.warning(
-                    f"WebSocket connection lost: {e}. "
-                    f"Reconnecting in {backoff}s..."
+                    f"WebSocket connection lost: {e}. Reconnecting in {backoff}s..."
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)  # Cap at 30 seconds
@@ -121,16 +117,17 @@ class PresenceManager:
         """Listen for presence events from the Hub."""
         async for raw_message in ws:
             try:
-
                 message = json.loads(raw_message)
-                msg_type = message.get("type")
+                env = protocol.parse_envelope(message)
+                if env.v != protocol.PROTOCOL_VERSION:
+                    log.warning(f"Unsupported protocol version: {env.v}")
+                    continue
+                msg_type = env.type
 
                 if msg_type == "connected":
                     # Initial connection — load all currently online owners
                     online_owners = message.get("online_owners", [])
-                    log.info(
-                        f"Hub reports {len(online_owners)} online owner(s)."
-                    )
+                    log.info(f"Hub reports {len(online_owners)} online owner(s).")
                     if self.on_connect:
                         await self.on_connect(online_owners)
 
@@ -160,7 +157,9 @@ class PresenceManager:
         if self._ws:
             try:
                 await self._ws.send(
-                    json.dumps({"type": "soul_update", "souls": souls})
+                    json.dumps(
+                        protocol.envelope(protocol.MessageType.SOUL_UPDATE, souls=souls)
+                    )
                 )
             except Exception as e:
                 log.error(f"Error sending soul update: {e}")

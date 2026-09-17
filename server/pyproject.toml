@@ -11,7 +11,11 @@ dependencies = [
     "uvicorn>=0.40.0",
     "python-dotenv>=1.2.1",
     "websockets>=15.0.1",
+    "shared",
 ]
+
+[tool.uv.sources]
+shared = { workspace = true }
 
 [dependency-groups]
 dev = [

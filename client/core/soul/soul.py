@@ -31,7 +31,7 @@ class Soul:
     is a no-op while no brain is attached.
 
     Attributes:
-        soul_id: A unique integer identifier for the soul instance.
+        soul_id: A unique string identifier for the soul instance.
         name: The display name of the soul.
         species: The Species object defining biological defaults.
         gender: The Gender object defining reproductive capabilities.
@@ -235,10 +235,7 @@ class Soul:
         self.local_instance_id = local_instance_id
         self.agent: Any = None
 
-        if (
-            self.owner_id == self.local_instance_id
-            or self.local_instance_id is None
-        ):
+        if self.owner_id == self.local_instance_id or self.local_instance_id is None:
             log.info(f"Attaching GOAP brain for local soul: {self.biology.name}")
             self.agent = GoapBrain(soul=self)
         else:
@@ -262,9 +259,7 @@ class Soul:
         """
         if self.biology.satiety < 20 or self.biology.hydration < 20:
             event = random.choice(["hallucination", "fatigue"])
-            print(
-                f"Due to low levels, {self.biology.name} experiences {event}!"
-            )
+            print(f"Due to low levels, {self.biology.name} experiences {event}!")
 
     # --- Main Update ---
 
@@ -479,9 +474,7 @@ class Soul:
                 try:
                     command.execute(self)
                 except Exception as e:
-                    log.error(
-                        f"Error executing command {type(command).__name__}: {e}"
-                    )
+                    log.error(f"Error executing command {type(command).__name__}: {e}")
 
     def schedule_task(self, coro: Any) -> None:
         """Schedules an async task on the background loop via the scheduler callback."""
@@ -554,9 +547,7 @@ class Soul:
         """
         y_top_left = screen_height - y
         if self.physics:
-            self.physics.on_mouse_drag(
-                x, y_top_left, dx, -dy, buttons, modifiers
-            )
+            self.physics.on_mouse_drag(x, y_top_left, dx, -dy, buttons, modifiers)
 
     def on_mouse_release(
         self, x: int, y: int, button: int, modifiers: int, screen_height: int

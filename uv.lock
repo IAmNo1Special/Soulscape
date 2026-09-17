@@ -232,6 +232,7 @@ dependencies = [
     { name = "pyglet" },
     { name = "pystray" },
     { name = "python-dotenv" },
+    { name = "shared" },
     { name = "ttkbootstrap" },
     { name = "watchdog" },
     { name = "websockets" },
@@ -252,6 +253,7 @@ requires-dist = [
     { name = "pyglet", specifier = ">=2.1.6" },
     { name = "pystray", specifier = ">=0.19.5" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "shared", editable = "shared" },
     { name = "ttkbootstrap", specifier = ">=1.20.1" },
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "websockets", specifier = ">=15.0.1" },
@@ -941,6 +943,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "shared" },
     { name = "uvicorn" },
     { name = "websockets" },
 ]
@@ -956,6 +959,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.128.6" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "shared", editable = "shared" },
     { name = "uvicorn", specifier = ">=0.40.0" },
     { name = "websockets", specifier = ">=15.0.1" },
 ]
@@ -966,7 +970,7 @@ dev = [{ name = "httpx", specifier = ">=0.28.1" }]
 [[package]]
 name = "shared"
 version = "0.1.0"
-source = { virtual = "shared" }
+source = { editable = "shared" }
 dependencies = [
     { name = "pydantic" },
 ]

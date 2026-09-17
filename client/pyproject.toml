@@ -15,7 +15,12 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "websockets>=15.0.1",
     "goapauto==0.3.1",
+    "shared",
 ]
+
+[tool.uv.sources]
+shared = { workspace = true }
+
 
 [dependency-groups]
 dev = [

@@ -18,6 +18,8 @@ from fastapi import (
     status,
 )
 
+from shared import protocol
+
 from .. import database
 from ..managers import manager
 from ..models import WsTicketResponse
@@ -120,16 +122,16 @@ async def websocket_presence(
         # Send session info + current online owners to the newly connected client
         online = manager.get_online_owners()
         await websocket.send_json(
-            {
-                "type": "connected",
-                "session_id": session_id,
-                "online_owners": [oid for oid in online if oid != owner_id],
-            }
+            protocol.envelope(
+                protocol.MessageType.CONNECTED,
+                session_id=session_id,
+                online_owners=[oid for oid in online if oid != owner_id],
+            )
         )
 
         # Broadcast to others that this owner came online
         await manager.broadcast(
-            {"type": "owner_online", "owner_id": owner_id},
+            protocol.envelope(protocol.MessageType.OWNER_ONLINE, owner_id=owner_id),
             exclude=owner_id,
         )
 
@@ -146,11 +148,11 @@ async def websocket_presence(
                 ):
                     logger.warning(f"Rate limit exceeded for {owner_id}")
                     await websocket.send_json(
-                        {
-                            "type": "error",
-                            "code": "RATE_LIMITED",
-                            "message": "Too many requests",
-                        }
+                        protocol.envelope(
+                            protocol.MessageType.ERROR,
+                            code="RATE_LIMITED",
+                            message="Too many requests",
+                        )
                     )
                     continue
 
@@ -274,11 +276,11 @@ async def websocket_presence(
                         validated_souls.append(soul)
 
                     await manager.broadcast(
-                        {
-                            "type": "soul_updated",
-                            "owner_id": owner_id,
-                            "souls": validated_souls,
-                        },
+                        protocol.envelope(
+                            protocol.MessageType.SOUL_UPDATED,
+                            owner_id=owner_id,
+                            souls=validated_souls,
+                        ),
                         exclude=owner_id,
                     )
             except json.JSONDecodeError:
@@ -294,5 +296,5 @@ async def websocket_presence(
         database.delete_ws_session(session_id)
         manager.disconnect(owner_id)
         await manager.broadcast(
-            {"type": "owner_offline", "owner_id": owner_id},
+            protocol.envelope(protocol.MessageType.OWNER_OFFLINE, owner_id=owner_id),
         )
