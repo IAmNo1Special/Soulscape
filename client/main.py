@@ -47,6 +47,7 @@ from .system.dirty_tracker import DirtyTracker
 from .system.dpi import declare_per_monitor_v2_dpi_awareness
 from .system.fullscreen import foreground_is_exclusive_fullscreen
 from .ui.graphics.scene_renderer import SceneRenderer
+from .ui.graphics.visual_reflexes import VisualReflexController
 from .ui.gui.gui_service import GuiCommand, run_gui_service
 
 # Explicitly load dotenv
@@ -72,6 +73,9 @@ class SoulscapeApp:
         self.tray_controller: Any = None
         self.scene_renderer: Any = None
         self.input_router: Any = None
+        # Issue #29: water-cooler reflexes (unlock greeting, long-idle
+        # nap, input-burst reaction + typing-dip). Local-only.
+        self.reflex_controller: VisualReflexController | None = None
 
         # Load settings
         self.saved_settings: dict[str, Any] = load_settings()
@@ -151,6 +155,7 @@ class SoulscapeApp:
         # 2b. Initialize Scene Renderer and Input Router
         self.scene_renderer = SceneRenderer()
         self.input_router = InputRouter()
+        self.reflex_controller = VisualReflexController()
 
         # Apply initial aura visibility
         self.scene_renderer.aura_visible = self.global_aura_visible
@@ -516,6 +521,7 @@ class SoulscapeApp:
 
         if self.viewport_mode:
             self._update_viewport_souls(dt)
+            self._update_visual_reflexes()
             self._poll_topmost()
             return
 
@@ -523,6 +529,7 @@ class SoulscapeApp:
         soul_physics.begin_separation_frame()
         for soul in self.active_souls:
             soul.update(dt)
+        self._update_visual_reflexes()
 
         # ... (periodic save/topmost unchanged) ...
         if time.time() - self.last_save_time > 30:
@@ -547,6 +554,25 @@ class SoulscapeApp:
         if time.time() - self.last_topmost_time > 5:
             self.window_manager.set_always_on_top()
             self.last_topmost_time = time.time()
+
+    def _update_visual_reflexes(self) -> None:
+        """Applies water-cooler reflex overlays to souls (issue #29).
+
+        Local-only: the controller consumes #28's coarse input-activity
+        signal and presence events; nothing leaves the machine.
+        """
+        if self.reflex_controller is None:
+            return
+        soul_ids = [soul.biology.soul_id for soul in self.active_souls]
+        overlays = self.reflex_controller.frame(soul_ids)
+        by_id = {soul.biology.soul_id: soul for soul in self.active_souls}
+        for sid, overlay in overlays.items():
+            soul = by_id.get(sid)
+            if soul is None:
+                continue
+            soul.reflex_kind = overlay.reflex
+            soul.reflex_t = overlay.reflex_t
+            soul.typing_dip = overlay.typing_dip
 
     def _update_viewport_souls(self, dt: float) -> None:
         """Positions Hub-driven souls from the viewport interpolator.
@@ -612,6 +638,9 @@ class SoulscapeApp:
             # Issue #22: dormant (unfunded) souls render as statues too,
             # amber-tinted to distinguish them from collapsed statues.
             soul.dormant_statue = consumer.is_dormant(sid)
+            # Issue #29: stale Hub presence renders the "offline" statue
+            # variant (desaturated, frozen).
+            soul.offline_stale = consumer.is_stale(sid)
             if not soul.statue and not soul.dormant_statue:
                 soul.visual_tick(dt)
 

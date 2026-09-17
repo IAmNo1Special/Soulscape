@@ -221,6 +221,16 @@ class Soul:
         # Issue #22: dormant (unfunded) souls render as statues too, but
         # amber-tinted to distinguish them from collapsed statues.
         self.dormant_statue: bool = False
+        # Issue #29: shader-state mapping inputs owned by the client.
+        # offline_stale marks a viewport soul whose Hub presence is
+        # stale/unknown (desaturated "offline" statue variant). The
+        # reflex fields are written each frame by the water-cooler
+        # reflex controller (local-only) and consumed by
+        # state_to_uniforms in the scene renderer.
+        self.offline_stale: bool = False
+        self.reflex_kind: str | None = None
+        self.reflex_t: float = 0.0
+        self.typing_dip: float = 0.0
 
         # Updates
         self.last_update_time: float = time.time()

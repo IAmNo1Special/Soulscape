@@ -29,6 +29,11 @@ _MAX_TURN_RATE = 2.0 * math.pi
 STATUE_STATE = "collapsed"
 _NORMAL_STATE = "normal"
 
+#: Seconds without a Hub sample before a soul's presence reads stale
+#: (issue #29: the "offline" statue variant). Well above the 400 ms
+#: dead-reckoning cap so live souls never flicker.
+STALE_THRESHOLD_SECONDS = 2.0
+
 #: Dim factor applied to the desaturated statue color.
 _STATUE_DIM = 0.72
 
@@ -99,11 +104,15 @@ class SoulTrack:
         self.samples: collections.deque[_Sample] = collections.deque(
             maxlen=MAX_BUFFER_SAMPLES
         )
+        # Issue #29: last sample time, for the presence-staleness check
+        # ("offline" statue variant).
+        self.last_t: float | None = None
 
     def snap(self, x: float, y: float, now: float) -> None:
         """Clear history and anchor at the new position instantly."""
         self.samples.clear()
         self.samples.append(_Sample(now, x, y))
+        self.last_t = now
 
     def push(self, x: float, y: float, now: float) -> None:
         """Append a streamed position sample."""
@@ -111,6 +120,7 @@ class SoulTrack:
             self.snap(x, y, now)
             return
         self.samples.append(_Sample(now, x, y))
+        self.last_t = now
 
     def position_at(self, t: float) -> tuple[float, float] | None:
         """Render position at time t: interpolate, dead-reckon, or hold."""
@@ -210,6 +220,18 @@ class ViewportConsumer:
     def is_dormant(self, soul_id: str) -> bool:
         """Whether the soul is frozen (unfunded) per the Hub (issue #22)."""
         return self._dormant.get(soul_id, False)
+
+    def is_stale(self, soul_id: str, now: float | None = None) -> bool:
+        """Whether the soul's Hub presence is stale/unknown (issue #29).
+
+        True when no sample arrived within STALE_THRESHOLD_SECONDS --
+        the "offline" statue variant. Unknown souls read as stale.
+        """
+        track = self._tracks.get(soul_id)
+        if track is None or track.last_t is None:
+            return True
+        moment = self._clock() if now is None else now
+        return (moment - track.last_t) > STALE_THRESHOLD_SECONDS
 
     def dormant_souls(self) -> dict[str, bool]:
         """Snapshot of per-soul dormancy for the render path."""

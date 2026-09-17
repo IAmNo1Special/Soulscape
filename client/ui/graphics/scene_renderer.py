@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from pyglet import math as pmath
@@ -36,9 +37,45 @@ from ...constants import (
     ORB_Y_OFFSET,
 )
 from .resources import ResourceManager, resource_manager
+from .soul_uniforms import (
+    STATUE_COLLAPSED,
+    STATUE_DORMANT,
+    STATUE_OFFLINE,
+    state_to_uniforms,
+)
 
 if TYPE_CHECKING:
     from ...core import Soul
+
+
+def _statue_kind(soul: Soul) -> str | None:
+    if soul.dormant_statue:
+        return STATUE_DORMANT
+    if soul.statue:
+        return STATUE_COLLAPSED
+    if soul.offline_stale:
+        return STATUE_OFFLINE
+    return None
+
+
+def _soul_state(soul: Soul, base_color: tuple[float, float, float]) -> dict:
+    biology = soul.biology
+    return {
+        "satiety": max(0.0, min(1.0, biology.satiety / 100.0)),
+        "hydration": max(0.0, min(1.0, biology.hydration / 100.0)),
+        "hp": biology.get_current_health() / max(1, biology.max_health()),
+        "statue_kind": _statue_kind(soul),
+        "typing_dip": soul.typing_dip,
+        "reflex": soul.reflex_kind,
+        "reflex_t": soul.reflex_t,
+        "base_color": base_color,
+    }
+
+
+def _bob_offset(uniforms: dict, soul_time: float) -> float:
+    return uniforms["bob_amplitude"] * math.sin(
+        soul_time * uniforms["bob_speed"] + uniforms["bob_phase"]
+    )
 
 
 class SceneRenderer:
@@ -121,8 +158,13 @@ class SceneRenderer:
                 scaled_orb_model = model.scale(
                     (ORB_SCALE, ORB_SCALE, ORB_SCALE)
                 )
+                uniforms = state_to_uniforms(
+                    _soul_state(soul, soul.display_orb_color())
+                )
                 positioned_orb_model = scaled_orb_model.translate(
-                    pmath.Vec3(0, ORB_Y_OFFSET, 0)
+                    pmath.Vec3(
+                        0, ORB_Y_OFFSET + _bob_offset(uniforms, soul.time), 0
+                    )
                 )
 
                 program["model"] = positioned_orb_model
@@ -131,7 +173,12 @@ class SceneRenderer:
                 program["time"] = soul.time
                 program["bulge_position"] = soul.bulge_position
                 program["bulge_strength"] = ORB_BULGE_STRENGTH
-                program["base_color_uniform"] = soul.display_orb_color()
+                program["base_color_uniform"] = uniforms["base_color_uniform"]
+                program["desat_factor"] = uniforms["desat_factor"]
+                program["brightness"] = uniforms["brightness"]
+                program["opacity"] = uniforms["opacity"]
+                program["pulse_rate"] = uniforms["pulse_rate"]
+                program["pulse_strength"] = uniforms["pulse_strength"]
 
                 # 3. Draw
                 vlist.draw(GL_TRIANGLES)
@@ -181,8 +228,13 @@ class SceneRenderer:
                 aura_model = model.scale(
                     (AURA_SCALE_X, AURA_SCALE_Y, AURA_SCALE_Z)
                 )
+                uniforms = state_to_uniforms(
+                    _soul_state(soul, soul.display_aura_color())
+                )
                 aura_model = aura_model.translate(
-                    pmath.Vec3(0, AURA_Y_OFFSET, 0)
+                    pmath.Vec3(
+                        0, AURA_Y_OFFSET + _bob_offset(uniforms, soul.time), 0
+                    )
                 )
 
                 program["model"] = aura_model
@@ -191,8 +243,14 @@ class SceneRenderer:
                 program["time"] = soul.time
                 program["bulge_position"] = soul.bulge_position
                 program["bulge_strength"] = AURA_BULGE_STRENGTH
-                program["base_brightness"] = AURA_BASE_BRIGHTNESS
-                program["base_color_uniform"] = soul.display_aura_color()
+                program["base_brightness"] = (
+                    uniforms["brightness"] * AURA_BASE_BRIGHTNESS
+                )
+                program["base_color_uniform"] = uniforms["base_color_uniform"]
+                program["desat_factor"] = uniforms["desat_factor"]
+                program["opacity"] = uniforms["opacity"]
+                program["pulse_rate"] = uniforms["pulse_rate"]
+                program["pulse_strength"] = uniforms["pulse_strength"]
 
                 # 3. Draw
                 vlist.draw(GL_TRIANGLES)

@@ -6,6 +6,10 @@ out vec4 fragColor;
 uniform float time;
 uniform float base_brightness;
 uniform vec3 base_color_uniform; // New uniform for custom base color
+uniform float desat_factor; // Issue #29: 0 full color .. 1 full grayscale
+uniform float opacity; // Issue #29: typing-dip / reflex alpha multiplier
+uniform float pulse_rate; // Issue #29: pulse speed multiplier
+uniform float pulse_strength; // Issue #29: pulse amplitude multiplier
 
 
 void main() {
@@ -19,7 +23,8 @@ void main() {
     float baseAlpha = smoothstep(1.0, 0.2, dist) * intensity;
     
     // Create a more flame-like alpha distribution
-    float alpha = baseAlpha * (0.7 + 0.3 * sin(dist * 10.0 - time * 3.0));
+    // (issue #29: pulse_rate freezes the shimmer when 0)
+    float alpha = baseAlpha * (0.7 + 0.3 * sin(dist * 10.0 - time * 3.0 * pulse_rate));
     // Remove the bottom fade out to ensure full coverage
     alpha *= smoothstep(0.0, 0.1, 1.0);
     
@@ -31,9 +36,9 @@ void main() {
         pow(heightFactor, 0.7)  // Non-linear gradient
     );
     
-    // Add subtle pulsing highlights
-    float pulse1 = 0.7 + 0.3 * sin(time * 1.0 + v_position.y * 3.0);  
-    float pulse2 = 0.7 + 0.3 * sin(time * 1.2 + v_position.y * 2.5);  
+    // Add subtle pulsing highlights (issue #29: pulse uniforms)
+    float pulse1 = 0.7 + 0.3 * sin(time * 1.0 * pulse_rate + v_position.y * 3.0);
+    float pulse2 = 0.7 + 0.3 * sin(time * 1.2 * pulse_rate + v_position.y * 2.5);
     
     // Add more dynamic color variation, derived from the base_color_uniform
     vec3 highlight1 = base_color_uniform + vec3(0.3, 0.3, 0.3); // Lighter version of base
@@ -41,9 +46,9 @@ void main() {
     
     // Blend colors based on position
     vec3 final_color = mix(
-        mix(base_color, highlight1, pulse1 * 0.3),
+        mix(base_color, highlight1, pulse1 * 0.3 * pulse_strength),
         highlight2,
-        pulse2 * 0.2 * heightFactor
+        pulse2 * 0.2 * heightFactor * pulse_strength
     );
     
     // Add rim lighting for depth, also tinted by the base color
@@ -51,12 +56,17 @@ void main() {
     rim = smoothstep(0.3, 1.0, rim);
     final_color += rim * base_color_uniform * 0.5; // Use base color for rim light tint
     
+    // Issue #29: state-driven desaturation, then brightness
+    vec3 gray = vec3(dot(final_color, vec3(0.299, 0.587, 0.114)));
+    final_color = mix(final_color, gray, desat_factor);
+
     // Ensure brightness is in a good range
     final_color = clamp(final_color * base_brightness, vec3(0.0), vec3(2.0)); // Clamped min to 0.0 for darker colors
 
     // Final alpha with edge falloff
     alpha *= smoothstep(0.0, 0.2, 1.0 - dist); // Fade out at edges
     alpha *= 1.5; // Increase overall visibility
+    alpha *= opacity; // Issue #29: typing-dip / reflex alpha
     
     fragColor = vec4(final_color, alpha);
 }
