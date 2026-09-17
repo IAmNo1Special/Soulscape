@@ -85,6 +85,7 @@ class SoulResponse(BaseModel):
     hydration: Optional[float] = 100.0
     essence: Optional[float] = 0.0
     position: Optional[List[float]] = [0.0, 0.0]
+    velocity: Optional[List[float]] = [0.0, 0.0]
     hometown: Optional[Any] = None
     birth_date: Optional[str] = None
     activity: Optional[str] = None

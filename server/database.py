@@ -541,6 +541,7 @@ def _migrate_souls(cursor) -> None:
     _add_column_if_missing(cursor, "souls", "secret_hash TEXT")
     _add_column_if_missing(cursor, "souls", "secret_prefix TEXT")
     _add_column_if_missing(cursor, "souls", "updated_at REAL")
+    _add_column_if_missing(cursor, "souls", "velocity TEXT")
     cursor.execute("PRAGMA table_info(souls)")
     cols = {row["name"] for row in cursor.fetchall()}
     if "secret" in cols:

@@ -22,6 +22,7 @@ STARTING_ESSENCE = 100.0
 MAX_LEVEL_PER_HOUR = 10.0
 MAX_XP_PER_HOUR = 100000.0
 MAX_POSITION = 4096.0
+MAX_VELOCITY = 500.0
 MAX_ITEM_QUANTITY = 99
 MAX_ITEM_NAME_LEN = 64
 
@@ -121,6 +122,23 @@ def _validate_soul_state(
                 pass
         pos = stored_pos
     out["position"] = [float(_clamp(pos[0], 0.0, MAX_POSITION)), float(_clamp(pos[1], 0.0, MAX_POSITION))]
+    vel = s.get("velocity", [0, 0])
+    if (
+        not isinstance(vel, (list, tuple))
+        or len(vel) != 2
+        or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in vel)
+    ):
+        stored_vel = [0, 0]
+        if stored is not None and stored.get("velocity"):
+            try:
+                stored_vel = json.loads(stored["velocity"])
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+        vel = stored_vel
+    out["velocity"] = [
+        float(_clamp(vel[0], -MAX_VELOCITY, MAX_VELOCITY)),
+        float(_clamp(vel[1], -MAX_VELOCITY, MAX_VELOCITY)),
+    ]
     return out, None
 
 
@@ -174,7 +192,7 @@ def get_souls(
                 cursor.execute(
                     "SELECT soul_id, owner_id, name, first_name, family_name, "
                     "species, gender, level, essence, hp, max_hp, satiety, "
-                    "hydration, xp, position, hometown, birth_date, activity, "
+                    "hydration, xp, position, velocity, hometown, birth_date, activity, "
                     "mother_id, father_id, orb_color, aura_color, aura_visible, "
                     "stat_hp_base, stat_atk_base, stat_def_base, "
                     "stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base, "
@@ -194,7 +212,7 @@ def get_souls(
                 cursor.execute(
                     "SELECT soul_id, owner_id, name, first_name, family_name, "
                     "species, gender, level, essence, hp, max_hp, satiety, "
-                    "hydration, xp, position, hometown, birth_date, activity, "
+                    "hydration, xp, position, velocity, hometown, birth_date, activity, "
                     "mother_id, father_id, orb_color, aura_color, aura_visible, "
                     "stat_hp_base, stat_atk_base, stat_def_base, "
                     "stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base, "
@@ -230,7 +248,7 @@ def get_souls(
 
             for s in souls:
                 s["inventory"] = inv_map.get(s["soul_id"], {})
-                for key in ["orb_color", "aura_color", "hometown", "position"]:
+                for key in ["orb_color", "aura_color", "hometown", "position", "velocity"]:
                     if (
                         s.get(key)
                         and isinstance(s[key], str)
@@ -266,7 +284,7 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
 
             cursor.execute(
                 "SELECT soul_id, secret_hash, secret_prefix, token_expiry, "
-                "essence, xp, level, position, updated_at "
+                "essence, xp, level, position, velocity, updated_at "
                 "FROM souls WHERE owner_id = ?",
                 (owner_id,),
             )
@@ -355,7 +373,7 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                     INSERT OR REPLACE INTO souls (
                         soul_id, owner_id, name, first_name, family_name, species, gender,
                         level, xp, mother_id, father_id, hp, max_hp, satiety, hydration,
-                        essence, position, hometown, birth_date, activity,
+                        essence, position, velocity, hometown, birth_date, activity,
                         orb_color, aura_color, aura_visible,
                         stat_hp_base, stat_atk_base, stat_def_base, stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base,
                         stat_hp_iv, stat_atk_iv, stat_def_iv, stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv,
@@ -364,7 +382,7 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
@@ -391,6 +409,7 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         validated["hydration"],
                         essence,
                         json.dumps(validated["position"]),
+                        json.dumps(validated["velocity"]),
                         json.dumps(s.get("hometown")),
                         s.get("birth_date"),
                         s.get("activity"),

@@ -4,11 +4,13 @@ import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .database import init_db
 from .routers import marketplace, social, souls, websockets
+from .security import UserIdentity, get_api_key
+from .world_tick import TICK_HZ, WorldTick, hub_authoritative_enabled
 
 # Simple in-memory rate limiter
 _rate_limit_store: dict[str, list[float]] = {}
@@ -50,9 +52,19 @@ async def lifespan(app: FastAPI):
             "⚠️  HUB_SECRET_KEY is not set in .env! Authentication will fail."
         )
 
+    app.state.world_tick = WorldTick()
+    if hub_authoritative_enabled():
+        logger.info("hub_authoritative=1: starting world tick at %d Hz", TICK_HZ)
+        await app.state.world_tick.start()
+    else:
+        logger.info("hub_authoritative flag off: world tick disabled")
+
     yield
     # Shutdown: Clean up resources if needed
     logger.info("Shutting down...")
+    tick = getattr(app.state, "world_tick", None)
+    if tick is not None:
+        await tick.stop()
 
 
 app = FastAPI(
@@ -94,6 +106,16 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
+
+
+@app.get("/debug/tick")
+async def debug_tick(identity: UserIdentity = Depends(get_api_key)):
+    if not identity.is_operator:
+        raise HTTPException(status_code=403, detail="Operator only")
+    tick = getattr(app.state, "world_tick", None)
+    if tick is None:
+        return WorldTick().snapshot()
+    return tick.snapshot()
 
 
 # Include Routers
