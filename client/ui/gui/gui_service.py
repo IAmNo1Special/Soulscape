@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import os
 import sys
 import traceback
 from enum import Enum
@@ -10,6 +11,8 @@ from typing import Any
 
 import ttkbootstrap as ttk
 
+from ...system.mailbag_client import MailbagClient
+from ...system.persistence import resolve_hub_url
 from .message_board_gui import MessageBoardWindow
 from .settings_gui import (
     GlobalSettingsDialog,
@@ -48,6 +51,12 @@ class GuiService:
         self.root: ttk.Window | None = None
         self.active_dialog: Any = None
         self.message_board_window: MessageBoardWindow | None = None
+        # Issue #32: the GUI process talks to the Hub directly for the
+        # mailbag tab (HUB_URL / HUB_SECRET_KEY env are inherited).
+        self._mailbag_client = MailbagClient(
+            resolve_hub_url=resolve_hub_url,
+            resolve_hub_secret=lambda: os.getenv("HUB_SECRET_KEY", ""),
+        )
         print("DEBUG: GuiService Initialized")
 
     def run(self) -> None:
@@ -228,6 +237,7 @@ class GuiService:
         d.show()
 
     def _show_message_board(self, msg):
+        initial_tab = msg.get("tab", "feed") or "feed"
         if (
             self.message_board_window is None
             or not self.message_board_window.winfo_exists()
@@ -295,11 +305,18 @@ class GuiService:
                 on_reply=on_reply,
                 on_delete=on_delete,
                 on_edit=on_edit,
+                on_fetch_mailbag=self._mailbag_client.pending,
+                on_answer_mailbag=self._mailbag_client.answer,
+                initial_tab=initial_tab,
             )
             # It's a Toplevel, so we don't need to call show() unless we made it that way
             # MessageBoardWindow.__init__ calls super().__init__ which creates the window.
         else:
             self.message_board_window.lift()
+            if initial_tab == "mailbag":
+                self.message_board_window.notebook.select(
+                    self.message_board_window.mailbag_tab
+                )
 
 
 def run_gui_service(command_queue: Any, result_queue: Any) -> None:

@@ -33,7 +33,7 @@ import random
 import secrets
 import time
 
-from .. import biology, database, dormancy, intents, persistence, presence
+from .. import biology, database, dormancy, intents, mailbag, persistence, presence
 from . import drives, memory, metering, reflex, scheduler, sensations, vocab
 
 logger = logging.getLogger("soulscape_hub")
@@ -464,12 +464,26 @@ class AgentPool:
             )
             if intent_id is not None:
                 enqueued.append(intent_id)
+        # #32 mailbag: a successful LLM deliberation may attach one free
+        # question for the tamer (an optional think-output field, NOT a
+        # vocab action). ask_question enforces the 3-pending cap (the 4th
+        # drops, journaled) and fans the question bubble. The heuristic
+        # fallback above returns early, so degraded brains never ask.
+        question = str(result.get("question") or "").strip()
+        mailbag_result: dict | None = None
+        if question:
+            try:
+                mailbag_result = mailbag.ask_question(
+                    soul_id, question, now, tick_id
+                )
+            except Exception:
+                logger.exception("mailbag ask failed for %s", soul_id)
         # #27: join the deliberation's trace to the intents it produced.
         trace_id = result.get("trace_id")
         if trace_id and enqueued:
             metering.attach_intent_ids(trace_id, enqueued)
         self.think_scheduler.schedule_next(soul_id, now)
-        return {
+        summary = {
             "soul_id": soul_id,
             "status": "deliberated",
             "escalation": escalation,
@@ -480,6 +494,9 @@ class AgentPool:
             "enqueued": enqueued,
             "trace_id": trace_id,
         }
+        if mailbag_result is not None:
+            summary["mailbag"] = mailbag_result
+        return summary
 
     async def think_batch(
         self,

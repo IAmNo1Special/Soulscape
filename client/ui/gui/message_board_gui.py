@@ -120,6 +120,100 @@ class FeedCard(ttk.Frame):
         return count
 
 
+class MailbagQuestionCard(ttk.Frame):
+    """A card for one pending soul question with an answer box (issue #32)."""
+
+    def __init__(
+        self,
+        parent: ttk.Frame,
+        question: dict,
+        on_answer: Callable[[str, str], dict],
+        padding: int = 15,
+    ):
+        super().__init__(parent, bootstyle="secondary", padding=2)
+        self.question = question
+        self.on_answer = on_answer
+
+        self.inner = ttk.Frame(self, bootstyle="dark", padding=padding)
+        self.inner.pack(fill=BOTH, expand=YES)
+
+        # Who asked + how long ago
+        meta_frame = ttk.Frame(self.inner, bootstyle="dark")
+        meta_frame.pack(fill=X, anchor=NW)
+        ttk.Label(
+            meta_frame,
+            text=f"From: {question.get('soul_id', '?')}",
+            font=("Segoe UI", 10, "bold"),
+            bootstyle="primary",
+        ).pack(side=LEFT)
+        age = self._age_str(question.get("created_at"))
+        ttk.Label(
+            meta_frame,
+            text=f" • asked {age} ago",
+            font=("Segoe UI", 8),
+            bootstyle="secondary",
+        ).pack(side=LEFT, padx=(5, 0))
+
+        # The question itself
+        ttk.Label(
+            self.inner,
+            text=question.get("question", ""),
+            font=("Segoe UI", 11),
+            wraplength=500,
+            bootstyle="light",
+        ).pack(fill=X, anchor=NW, pady=(5, 10))
+
+        # Answer box
+        self.answer_entry = ScrolledText(
+            self.inner, height=4, autohide=True, font=("Segoe UI", 10)
+        )
+        self.answer_entry.pack(fill=X, pady=(0, 10))
+
+        self.status = ttk.Label(self.inner, text="", font=("Segoe UI", 9))
+        self.status.pack(anchor=W, pady=(0, 5))
+
+        self.send_btn = ttk.Button(
+            self.inner,
+            text="Send answer",
+            bootstyle="success",
+            command=self._send,
+        )
+        self.send_btn.pack(anchor=E)
+
+    def _age_str(self, created_at: float | None) -> str:
+        try:
+            mins = max(0, int((time.time() - float(created_at)) / 60))
+        except (TypeError, ValueError):
+            return "?"
+        if mins < 1:
+            return "just now"
+        if mins < 60:
+            return f"{mins}m"
+        return f"{mins // 60}h {mins % 60}m"
+
+    def _send(self) -> None:
+        """Post the tamer's answer through the injected callback."""
+        text = self.answer_entry.text.get("1.0", END).strip()
+        if not text:
+            self.status.configure(
+                text="Write an answer first.", bootstyle="danger"
+            )
+            return
+        result = self.on_answer(self.question["question_id"], text)
+        if result.get("status") == "answered":
+            self.send_btn.configure(state="disabled")
+            self.answer_entry.text.configure(state="disabled")
+            self.status.configure(
+                text="Answer sent — the soul will hear it soon.",
+                bootstyle="success",
+            )
+        else:
+            self.status.configure(
+                text=result.get("message", "Could not send."),
+                bootstyle="danger",
+            )
+
+
 class MessageBoardWindow(ttk.Toplevel):
     """Window for displaying the message board."""
 
@@ -130,8 +224,18 @@ class MessageBoardWindow(ttk.Toplevel):
         on_reply: Callable[[int, str, str, str], None] | None = None,
         on_delete: Callable[[int, str], None] | None = None,
         on_edit: Callable[[int, str, str], None] | None = None,
+        on_fetch_mailbag: Callable[[], list[dict]] | None = None,
+        on_answer_mailbag: Callable[[str, str], dict] | None = None,
+        initial_tab: str = "feed",
     ):
-        """Initializes the message board window."""
+        """Initializes the message board window.
+
+        Issue #32 adds a "Mailbag" tab alongside the social feed: the
+        tamer's answer surface for pending soul questions. The tab is
+        headless-testable through the injected callbacks: on_fetch_mailbag
+        returns the pending question dicts, on_answer_mailbag posts an
+        answer and returns the result dict.
+        """
         super().__init__(title="Soulscape Global Frequency", master=parent)
         self.geometry("900x700")
         self.board = MessageBoard()
@@ -139,6 +243,9 @@ class MessageBoardWindow(ttk.Toplevel):
         self.on_reply = on_reply
         self.on_delete = on_delete
         self.on_edit = on_edit
+        self.on_fetch_mailbag = on_fetch_mailbag
+        self.on_answer_mailbag = on_answer_mailbag
+        self.initial_tab = initial_tab
         self.current_thread_id: str | None = None
         self._last_data_hash: str | None = None
 
@@ -183,15 +290,102 @@ class MessageBoardWindow(ttk.Toplevel):
             command=self._refresh_data,
         ).pack(side=RIGHT, padx=5)
 
+        # --- Tabs: social feed + mailbag answer surface (issue #32) ---
+        self.notebook = ttk.Notebook(main_container)
+        self.notebook.pack(fill=BOTH, expand=YES)
+
+        self.feed_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.feed_tab, text="Feed")
+
+        self.mailbag_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.mailbag_tab, text="Mailbag")
+
         # --- Content Area (Reddit Style Feed) ---
         self.scroll_frame = ScrolledFrame(
-            main_container,
+            self.feed_tab,
             autohide=True,
         )
         self.scroll_frame.pack(fill=BOTH, expand=YES)
 
         # We'll use a 2-column grid inside the scroll_frame's container
         self.feed_container = self.scroll_frame
+
+        # --- Mailbag tab: pending soul questions + answer boxes ---
+        mailbag_header = ttk.Frame(self.mailbag_tab)
+        mailbag_header.pack(fill=X, pady=(0, 10))
+
+        ttk.Label(
+            mailbag_header,
+            text="Soul Mailbag",
+            font=("Segoe UI", 20, "bold"),
+            bootstyle="light",
+        ).pack(side=LEFT)
+
+        ttk.Button(
+            mailbag_header,
+            text="Refresh",
+            bootstyle="secondary-outline",
+            command=self._refresh_mailbag,
+        ).pack(side=RIGHT)
+
+        self.mailbag_error = ttk.Label(
+            self.mailbag_tab, text="", font=("Segoe UI", 9), bootstyle="danger"
+        )
+        self.mailbag_error.pack(fill=X, pady=(0, 5))
+
+        self.mailbag_scroll = ScrolledFrame(self.mailbag_tab, autohide=True)
+        self.mailbag_scroll.pack(fill=BOTH, expand=YES)
+        self.mailbag_container = self.mailbag_scroll
+
+        if self.initial_tab == "mailbag":
+            self.notebook.select(self.mailbag_tab)
+
+        self._refresh_mailbag()
+
+    def _refresh_mailbag(self) -> None:
+        """Rebuilds the mailbag tab from the injected fetch callback."""
+        for widget in self.mailbag_container.winfo_children():
+            widget.destroy()
+        if not self.on_fetch_mailbag:
+            ttk.Label(
+                self.mailbag_container,
+                text="Mailbag unavailable — no Hub connection.",
+                font=("Segoe UI", 10),
+                bootstyle="secondary",
+            ).pack(anchor=NW, pady=10)
+            return
+        try:
+            questions = self.on_fetch_mailbag() or []
+        except Exception as exc:
+            self.mailbag_error.configure(text=f"Could not load: {exc}")
+            questions = []
+        if not questions:
+            ttk.Label(
+                self.mailbag_container,
+                text="No pending questions. The souls are quiet… for now.",
+                font=("Segoe UI", 10),
+                bootstyle="secondary",
+            ).pack(anchor=NW, pady=10)
+            return
+        for question in questions:
+            card = MailbagQuestionCard(
+                self.mailbag_container,
+                question,
+                on_answer=self._on_answer_question,
+            )
+            card.pack(fill=X, pady=(0, 10))
+
+    def _on_answer_question(self, question_id: str, text: str) -> dict:
+        """Post one answer; refresh the tab once the Hub confirms."""
+        if not self.on_answer_mailbag:
+            return {
+                "status": "error",
+                "message": "Mailbag unavailable — no Hub connection.",
+            }
+        result = self.on_answer_mailbag(question_id, text)
+        if result.get("status") == "answered":
+            self.after(500, self._refresh_mailbag)
+        return result
 
     def _refresh_data(self) -> None:
         """Refreshes the message data from the board."""
@@ -269,6 +463,7 @@ class MessageBoardWindow(ttk.Toplevel):
             # Only refresh if data file actually changed to avoid flickering
             safe_run_async(self.board.refresh())
             self._refresh_data()
+            self._refresh_mailbag()
             self.after(5000, self._auto_refresh)
 
     def _show_post_dialog(self) -> None:

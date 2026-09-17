@@ -13,6 +13,7 @@ from . import persistence
 from .key_vault import install_redaction_filter
 from .routers import (
     keys,
+    mailbag,
     marketplace,
     metering,
     plots,
@@ -157,6 +158,7 @@ async def debug_tick(identity: UserIdentity = Depends(get_api_key)):
 
 # Include Routers
 app.include_router(keys.router)
+app.include_router(mailbag.router)
 app.include_router(marketplace.router)
 app.include_router(metering.router)
 app.include_router(plots.router)

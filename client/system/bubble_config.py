@@ -34,6 +34,9 @@ DEFAULT_DURATIONS = {
     "quip": 8.0,
     "system": 5.0,
     "greeting": 5.0,
+    # Issue #32: soul questions for the tamer stay up longer -- the
+    # tamer may need a moment to notice and open the mailbag.
+    "mailbag": 10.0,
 }
 
 

@@ -1031,6 +1031,41 @@ def init_db():
                     updated_at REAL NOT NULL
                 )
             """)
+            # Issue #32: mailbag -- tamer questions for souls.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mailbag (
+                    question_id TEXT PRIMARY KEY,
+                    soul_id TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    answer TEXT,
+                    answered_at REAL,
+                    answer_latency_ms REAL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mailbag_soul_status
+                ON mailbag (soul_id, status)
+            """)
+            # Issue #32: recap source queue. #33's ambient recap consumes
+            # rows from here (kind, ref_id, summary); mailbag writes
+            # kind='mailbag_unanswered' when a question expires unanswered.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recap_sources (
+                    source_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    soul_id TEXT NOT NULL,
+                    ref_id TEXT,
+                    summary TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_recap_sources_kind
+                ON recap_sources (kind, created_at)
+            """)
             _add_column_if_missing(
                 cursor, "tamers", "presence_app_opt_in INTEGER DEFAULT 0"
             )

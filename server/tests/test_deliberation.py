@@ -288,15 +288,55 @@ def test_semantic_stub_documented():
 
 
 def test_parse_output_valid():
-    intents, rationale = deliberation.parse_output(GOOD_JSON)
+    intents, rationale, question = deliberation.parse_output(GOOD_JSON)
     assert intents == [("move_to", {"x": 120.0, "y": 100.0})]
     assert rationale == "Exploring east for resources."
+    assert question == ""
 
 
 def test_parse_output_fenced():
     raw = "```json\n" + GOOD_JSON + "\n```"
-    intents, _ = deliberation.parse_output(raw)
+    intents, _, question = deliberation.parse_output(raw)
     assert intents[0][0] == "move_to"
+    assert question == ""
+
+
+def test_parse_output_question_extracted():
+    raw = json.dumps(
+        {
+            "intents": [{"action": "wait", "params": {}}],
+            "rationale": "resting",
+            "question": "Do you like rain?",
+        }
+    )
+    intents, _, question = deliberation.parse_output(raw)
+    assert intents[0][0] == "wait"
+    assert question == "Do you like rain?"
+
+
+def test_parse_output_blank_question_is_no_question():
+    for blank in ("", "   "):
+        raw = json.dumps(
+            {
+                "intents": [{"action": "wait", "params": {}}],
+                "rationale": "resting",
+                "question": blank,
+            }
+        )
+        _, _, question = deliberation.parse_output(raw)
+        assert question == ""
+
+
+def test_parse_output_rejects_non_string_question():
+    raw = json.dumps(
+        {
+            "intents": [{"action": "wait", "params": {}}],
+            "rationale": "resting",
+            "question": {"nested": "not a string"},
+        }
+    )
+    with pytest.raises(deliberation.DeliberationFailure):
+        deliberation.parse_output(raw)
 
 
 def test_parse_output_rejects():

@@ -63,7 +63,8 @@ from .system.dpi import declare_per_monitor_v2_dpi_awareness
 from .system.fullscreen import foreground_is_exclusive_fullscreen
 from .ui.graphics.scene_renderer import SceneRenderer
 from .ui.graphics.visual_reflexes import VisualReflexController
-from .ui.bubbles import BUBBLE_KINDS, BubbleManager
+from .ui.bubbles import BUBBLE_KINDS, KIND_MAILBAG, Bubble, BubbleManager
+from .system.mailbag_client import MailbagClient
 from .ui.gui.gui_service import GuiCommand, run_gui_service
 
 # Explicitly load dotenv
@@ -104,6 +105,14 @@ class SoulscapeApp:
             max_visible_per_soul=self.bubble_config.display.max_visible_per_soul,
             queue_depth=self.bubble_config.display.queue_depth,
         )
+        # Issue #32: tapping a mailbag bubble opens the answer surface.
+        self.bubble_manager.set_tap_handler(self._on_bubble_tap)
+        # Issue #32: Hub client for the mailbag badge + answer surface.
+        self.mailbag_client = MailbagClient(
+            resolve_hub_url=resolve_hub_url,
+            resolve_hub_secret=lambda: os.getenv("HUB_SECRET_KEY", ""),
+        )
+        self._mailbag_count_cache: tuple[float, int] = (0.0, 0)
         # Pause toggle (tray): freezes local sim + reflex visuals.
         self.sim_paused: bool = False
 
@@ -243,13 +252,7 @@ class SoulscapeApp:
         def on_draw() -> None:
             self.overlay_window.clear()
             self.scene_renderer.render(self.active_souls, self.overlay_window.height)
-            positions = {
-                soul.biology.soul_id: (
-                    soul.x + soul.width / 2,
-                    self.overlay_window.height - soul.draw_y,
-                )
-                for soul in self.active_souls
-            }
+            positions = self._soul_screen_positions()
             jobs = self.bubble_manager.layout(positions)
             if jobs:
                 self.scene_renderer.render_bubbles(jobs)
@@ -269,6 +272,14 @@ class SoulscapeApp:
         @self.overlay_window.event
         def on_mouse_press(x: int, y: int, button: int, modifiers: int) -> bool | None:
             """Pyglet event handler for mouse press events."""
+            # Issue #32: bubble taps win over soul clicks -- a mailbag
+            # bubble opens the answer surface and swallows the click.
+            if button == pyglet.window.mouse.LEFT:
+                tapped = self.bubble_manager.tap_at(
+                    x, y, self._soul_screen_positions()
+                )
+                if tapped is not None:
+                    return True
             # Use InputRouter to find target soul
             target_soul = self.input_router.get_soul_at(
                 self.active_souls, x, y, self.overlay_window.height
@@ -468,6 +479,10 @@ class SoulscapeApp:
                     }
                 )
 
+        def on_tray_open_mailbag() -> None:
+            # Issue #32: tray Mailbag item opens the answer surface.
+            self._open_mailbag_tab()
+
         def on_tray_exit() -> None:
             pyglet.clock.schedule_once(lambda dt: self.quit_app(), 0)
 
@@ -536,12 +551,13 @@ class SoulscapeApp:
             on_exit=on_tray_exit,
             get_souls=get_tray_souls,
             get_hub_status=lambda: "online" if self.viewport_mode else "local",
-            get_mailbag_count=lambda: 0,
+            get_mailbag_count=self._cached_mailbag_count,
             is_paused=lambda: self.sim_paused,
             on_pause_toggle=on_pause_toggle,
             is_work_mode=lambda: self.bubble_config.noise.work_mode,
             on_work_mode_toggle=on_work_mode_toggle,
             on_open_market=None,
+            on_open_mailbag=on_tray_open_mailbag,
             on_request_quip=self._request_quip,
             notify_bubble=notify_bubble,
         )
@@ -697,12 +713,54 @@ class SoulscapeApp:
                     kind = bop.get("kind") or "speech"
                     if kind not in BUBBLE_KINDS:
                         kind = "speech"
+                    payload = bop.get("payload")
                     self.bubble_manager.show_bubble(
                         bop["soul_id"],
                         bop.get("text", ""),
                         kind=kind,
                         solicited=bop.get("solicited", False),
+                        payload=payload if isinstance(payload, dict) else None,
                     )
+
+    def _soul_screen_positions(self) -> dict[str, tuple[float, float]]:
+        """Orb-center screen positions, shared by bubble layout and taps."""
+        height = self.overlay_window.height
+        return {
+            soul.biology.soul_id: (
+                soul.x + soul.width / 2,
+                height - soul.draw_y,
+            )
+            for soul in self.active_souls
+        }
+
+    def _on_bubble_tap(self, bubble: Bubble) -> None:
+        """BubbleManager tap callback (issue #32).
+
+        Tapping a mailbag bubble opens the mailbag answer surface; other
+        kinds have no tap action.
+        """
+        if bubble.kind == KIND_MAILBAG:
+            self._open_mailbag_tab()
+
+    def _open_mailbag_tab(self) -> None:
+        """Ask the GUI process to show the message board's Mailbag tab."""
+        if self.gui_command_queue:
+            self.gui_command_queue.put(
+                {
+                    "type": GuiCommand.SHOW_MESSAGE_BOARD,
+                    "tab": "mailbag",
+                }
+            )
+
+    def _cached_mailbag_count(self) -> int:
+        """Pending-question count for the tray badge, cached 30s so menu
+        rebuilds on the tray thread never block on network I/O."""
+        ts, val = self._mailbag_count_cache
+        if time.time() - ts < 30:
+            return val
+        val = self.mailbag_client.count()
+        self._mailbag_count_cache = (time.time(), val)
+        return val
 
     def _on_connect_sync(self, online_owners: list[str]) -> None:
         """Reconciles local state with Hub truth."""

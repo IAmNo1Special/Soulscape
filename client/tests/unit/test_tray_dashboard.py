@@ -123,13 +123,26 @@ class TestTrayDashboard(unittest.TestCase):
         ctrl = self._controller()
         texts = _menu_texts(ctrl._create_menu())
         for expected in (
-            "Status", "Wallet", "Mailbag (3) — not yet (#32)",
+            "Status", "Wallet", "Mailbag (3)",
             "Whereabouts", "Quips", "Add Soul", "Toggle All Auras",
             "Pause simulation", "Work mode", "Social / Message Board",
             "Market (no client surface yet)", "Settings...",
             "Exit Soulscape",
         ):
             self.assertIn(expected, texts)
+
+    def test_mailbag_item_enabled_and_click_opens_surface(self):
+        opened = []
+        ctrl = self._controller(on_open_mailbag=lambda: opened.append(True))
+        item = _find(ctrl._create_menu(), "Mailbag (3)")
+        self.assertTrue(item.enabled)
+        item.action(None, item)
+        self.assertEqual(opened, [True])
+
+    def test_mailbag_item_disabled_without_surface(self):
+        ctrl = self._controller()
+        item = _find(ctrl._create_menu(), "Mailbag (3)")
+        self.assertFalse(item.enabled)
 
     def test_whereabouts_shows_location_strings(self):
         ctrl = self._controller()

@@ -86,6 +86,8 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM weekly_digests")
     cursor.execute("DELETE FROM semantic_memories")
     cursor.execute("DELETE FROM pet_cooldowns")
+    cursor.execute("DELETE FROM mailbag")
+    cursor.execute("DELETE FROM recap_sources")
     # The journal is append-only in production, so recovery treats its seq
     # column as gapless. Reset the AUTOINCREMENT sequences too, or a test that
     # leaves journal/snapshot rows behind would hand the next test a journal

@@ -6,12 +6,14 @@ The seam every other system calls to put words above a soul's orb:
 
 ``kind`` is a closed set: ``speech`` (ambient chatter), ``quip``
 (tamer-requested personalized quip), ``system`` (wallet/Hub feedback),
-``greeting`` (unlock/hello reflexes). Unknown kinds raise ValueError.
+``greeting`` (unlock/hello reflexes), ``mailbag`` (issue #32: a soul's
+question for its tamer -- tapping it opens the mailbag answer surface).
+Unknown kinds raise ValueError.
 
 Bubbles are transient: each kind auto-dismisses after its documented
-duration (speech 6s, quip 8s, system 5s, greeting 5s). At most
-``max_visible_per_soul`` (default 1) bubbles render above one orb at a
-time; the rest queue (default depth 3, oldest queued dropped on
+duration (speech 6s, quip 8s, system 5s, greeting 5s, mailbag 10s). At
+most ``max_visible_per_soul`` (default 1) bubbles render above one orb
+at a time; the rest queue (default depth 3, oldest queued dropped on
 overflow) and promote as visible ones expire.
 
 Every show goes through the ``NoisePolicy``: unsolicited bubbles are
@@ -23,6 +25,11 @@ Server-driven bubbles arrive as viewport ``bubble`` ops; the app drains
 them from the ViewportConsumer into this manager. Local systems
 (#29's water-cooler reflexes, future mailbag taps) call
 ``show_bubble`` directly.
+
+Taps: ``set_tap_handler`` registers a callback invoked by ``tap_at``
+when a click lands on a visible bubble. The app wires it to open the
+mailbag answer surface for mailbag-kind bubbles. Bubbles may carry an
+opaque ``payload`` (e.g. the mailbag question_id) for the handler.
 
 Rendering is pyglet-free here on purpose: ``layout()`` turns visible
 bubbles into draw jobs ``(x, y, text)`` given soul screen positions,
@@ -48,11 +55,19 @@ KIND_SPEECH = "speech"
 KIND_QUIP = "quip"
 KIND_SYSTEM = "system"
 KIND_GREETING = "greeting"
+KIND_MAILBAG = "mailbag"
 
-BUBBLE_KINDS = frozenset({KIND_SPEECH, KIND_QUIP, KIND_SYSTEM, KIND_GREETING})
+BUBBLE_KINDS = frozenset(
+    {KIND_SPEECH, KIND_QUIP, KIND_SYSTEM, KIND_GREETING, KIND_MAILBAG}
+)
 
 #: Pixels above the orb center where the bubble baseline sits.
 BUBBLE_Y_OFFSET = 64.0
+
+#: Hit-test box for taps: half-width / half-height in pixels around the
+#: layout point (the bubble glyph is drawn centered-ish above the orb).
+BUBBLE_TAP_HALF_W = 90.0
+BUBBLE_TAP_HALF_H = 28.0
 
 
 @dataclass
@@ -63,6 +78,7 @@ class Bubble:
     solicited: bool
     created_at: float
     expires_at: float
+    payload: dict | None = None
 
 
 @dataclass
@@ -94,9 +110,41 @@ class BubbleManager:
         self.queue_depth = max(1, queue_depth)
         self._visible: dict[str, list[Bubble]] = {}
         self._queued: dict[str, deque[Bubble]] = {}
+        self._tap_handler: Callable[[Bubble], None] | None = None
 
     def _now(self, now: float | None) -> float:
         return self._clock() if now is None else now
+
+    def set_tap_handler(self, handler: Callable[[Bubble], None] | None) -> None:
+        """Register the tap callback (issue #32: tapping a mailbag
+        bubble opens the answer surface)."""
+        self._tap_handler = handler
+
+    def tap_at(
+        self, x: float, y: float, positions: dict[str, tuple[float, float]]
+    ) -> Bubble | None:
+        """Hit-test a click against visible bubbles.
+
+        Returns the topmost visible bubble whose tap box contains the
+        point (or None), and invokes the tap handler when one is set.
+        The handler is how the app opens the mailbag answer surface.
+        """
+        self.tick()
+        hit: Bubble | None = None
+        for bubble in self.visible_bubbles():
+            pos = positions.get(bubble.soul_id)
+            if pos is None:
+                continue
+            cx, cy = pos[0], pos[1] + BUBBLE_Y_OFFSET
+            if (
+                abs(x - cx) <= BUBBLE_TAP_HALF_W
+                and abs(y - cy) <= BUBBLE_TAP_HALF_H
+            ):
+                hit = bubble
+                break
+        if hit is not None and self._tap_handler is not None:
+            self._tap_handler(hit)
+        return hit
 
     def show_bubble(
         self,
@@ -105,11 +153,14 @@ class BubbleManager:
         kind: str = KIND_SPEECH,
         solicited: bool = False,
         now: float | None = None,
+        payload: dict | None = None,
     ) -> BubbleResult:
         """Show a transient bubble above a soul's orb.
 
         Returns a BubbleResult: accepted=False with the noise reason
         (muted / quiet_hours / work_mode / cap) when suppressed.
+        ``payload`` is opaque handler data (e.g. {"question_id": ...}
+        for mailbag bubbles); it rides along for tap_at's handler.
         """
         if kind not in BUBBLE_KINDS:
             raise ValueError(f"unknown bubble kind: {kind!r}")
@@ -128,6 +179,7 @@ class BubbleManager:
             solicited=solicited,
             created_at=moment,
             expires_at=moment + self.durations[kind],
+            payload=dict(payload) if payload else None,
         )
         visible = self._visible.setdefault(soul_id, [])
         if len(visible) < self.max_visible_per_soul:

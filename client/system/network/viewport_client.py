@@ -379,12 +379,16 @@ class ViewportConsumer:
             # Transient bubble ops (issue #30): queue for the app, never
             # touch the entity state model.
             if kind == "bubble":
+                op_payload = op.get("payload")
                 self._bubble_queue.append(
                     {
                         "soul_id": sid,
                         "text": str(op.get("text", ""))[:280],
                         "kind": str(op.get("kind", "speech")),
                         "solicited": bool(op.get("solicited", False)),
+                        "payload": dict(op_payload)
+                        if isinstance(op_payload, dict)
+                        else None,
                     }
                 )
                 continue

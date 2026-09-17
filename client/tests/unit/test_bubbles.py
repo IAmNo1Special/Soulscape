@@ -11,7 +11,10 @@ import unittest
 from client.system.noise import NoisePolicy, NoiseSettings
 from client.ui.bubbles import (
     BUBBLE_KINDS,
+    BUBBLE_TAP_HALF_H,
+    BUBBLE_TAP_HALF_W,
     BUBBLE_Y_OFFSET,
+    KIND_MAILBAG,
     BubbleManager,
 )
 
@@ -36,7 +39,7 @@ def _manager(clock=None, **kw) -> BubbleManager:
 class TestBubbleKinds(unittest.TestCase):
     def test_closed_kind_set(self):
         self.assertEqual(
-            BUBBLE_KINDS, {"speech", "quip", "system", "greeting"}
+            BUBBLE_KINDS, {"speech", "quip", "system", "greeting", "mailbag"}
         )
 
     def test_unknown_kind_raises(self):
@@ -129,6 +132,68 @@ class TestNoiseIntegration(unittest.TestCase):
         mgr.show_bubble("s1", "ambient")
         result = mgr.show_bubble("s1", "quip!", kind="quip", solicited=True)
         self.assertTrue(result.accepted)
+
+
+class TestTaps(unittest.TestCase):
+    """Issue #32: tapping a mailbag bubble routes to the tap handler."""
+
+    def _mailbag_at(self, mgr, x=100.0, y=200.0):
+        res = mgr.show_bubble(
+            "s1",
+            "Do you get lonely?",
+            kind=KIND_MAILBAG,
+            payload={"question_id": "q_1"},
+        )
+        self.assertTrue(res.accepted)
+        return (x, y + BUBBLE_Y_OFFSET)
+
+    def test_tap_hits_visible_bubble_and_invokes_handler(self):
+        mgr = _manager()
+        tapped = []
+        mgr.set_tap_handler(tapped.append)
+        cx, cy = self._mailbag_at(mgr)
+        hit = mgr.tap_at(cx, cy, {"s1": (100.0, 200.0)})
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.kind, KIND_MAILBAG)
+        self.assertEqual(hit.payload, {"question_id": "q_1"})
+        self.assertEqual(tapped, [hit])
+
+    def test_tap_miss_returns_none_and_skips_handler(self):
+        mgr = _manager()
+        tapped = []
+        mgr.set_tap_handler(tapped.append)
+        self._mailbag_at(mgr)
+        hit = mgr.tap_at(5.0, 5.0, {"s1": (100.0, 200.0)})
+        self.assertIsNone(hit)
+        self.assertEqual(tapped, [])
+
+    def test_tap_without_handler_still_returns_hit(self):
+        mgr = _manager()
+        cx, cy = self._mailbag_at(mgr)
+        hit = mgr.tap_at(cx, cy, {"s1": (100.0, 200.0)})
+        self.assertIsNotNone(hit)
+
+    def test_tap_box_edges(self):
+        mgr = _manager()
+        self._mailbag_at(mgr)
+        cx, cy = 100.0, 200.0 + BUBBLE_Y_OFFSET
+        inside = mgr.tap_at(
+            cx + BUBBLE_TAP_HALF_W, cy + BUBBLE_TAP_HALF_H,
+            {"s1": (100.0, 200.0)},
+        )
+        self.assertIsNotNone(inside)
+        outside = mgr.tap_at(
+            cx + BUBBLE_TAP_HALF_W + 1, cy, {"s1": (100.0, 200.0)}
+        )
+        self.assertIsNone(outside)
+
+    def test_tap_expired_bubble_misses(self):
+        clock = FakeClock()
+        mgr = _manager(clock)
+        cx, cy = self._mailbag_at(mgr)
+        clock.advance(11.0)  # mailbag duration is 10s
+        hit = mgr.tap_at(cx, cy, {"s1": (100.0, 200.0)})
+        self.assertIsNone(hit)
 
 
 if __name__ == "__main__":

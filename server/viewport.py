@@ -132,19 +132,27 @@ def _identity_op(
 
 
 def _bubble_op(
-    soul_id: str, text: str, kind: str, solicited: bool = False
+    soul_id: str, text: str, kind: str, solicited: bool = False, payload=None
 ) -> dict:
     """Transient speech-bubble op (issue #30): not part of the entity
     state model -- the client renders it above the soul's orb and drops
     it after the kind's auto-dismiss duration. Never diffed, never in
-    snapshots, never replayed on resume."""
-    return {
+    snapshots, never replayed on resume.
+
+    payload is opaque handler data (issue #32: {"question_id": ...} on
+    mailbag question bubbles, so the client's tap handler knows which
+    question was tapped).
+    """
+    op = {
         "op": "bubble",
         "soul_id": soul_id,
         "text": text,
         "kind": kind,
         "solicited": solicited,
     }
+    if isinstance(payload, dict):
+        op["payload"] = dict(payload)
+    return op
 
 
 def read_positions() -> dict[str, tuple[float, float]]:
@@ -561,6 +569,7 @@ class ViewportManager:
         text: str,
         kind: str = "speech",
         solicited: bool = False,
+        payload: dict | None = None,
     ) -> int:
         """Fan a transient speech-bubble op (issue #30) to an owner's
         sessions. Bubbles are fire-and-forget: never diffed, never in
@@ -568,7 +577,8 @@ class ViewportManager:
         count = 0
         for session in self.sessions_for_owner(owner_id):
             session.enqueue(
-                _bubble_op(soul_id, text, kind, solicited), _DOMAIN_PRIORITY
+                _bubble_op(soul_id, text, kind, solicited, payload),
+                _DOMAIN_PRIORITY,
             )
             count += 1
         return count

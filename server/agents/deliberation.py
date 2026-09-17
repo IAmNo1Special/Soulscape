@@ -51,12 +51,21 @@ Token-capped prompt assembly (<=800 tokens):
   total is <= 800.
 
 Structured outputs: the prompt demands JSON
-{"intents": [{"action", "params"} x 1-3], "rationale": str}.
-parse_output is defensive (fences, leading/trailing noise); every
-intent is validated against the closed vocabulary and payload-
-canonicalized exactly like #24's pool path. Malformed/illegal/empty/
->3-intent outputs count as failed attempts: they feed the flash->pro
-promotion counter and the fallback chain.
+{"intents": [{"action", "params"} x 1-3], "rationale": str} and allows
+one optional "question" field: the soul's single free question for its
+tamer (issue #32's mailbag). The question is NOT a vocab action --
+#24's VOCAB_VERSION=1 action set stays closed -- and it costs nothing
+beyond the deliberation that already ran (it is not charged against
+#30's quip budget). The deterministic heuristic fallback never asks
+questions (decided + tested in #32): a degraded brain has nothing
+genuine to ask, and templated questions would be indistinguishable
+from real curiosity. parse_output is defensive (fences,
+leading/trailing noise); every intent is validated against the closed
+vocabulary and payload-canonicalized exactly like #24's pool path.
+Malformed/illegal/empty/ >3-intent outputs count as failed attempts:
+they feed the flash->pro promotion counter and the fallback chain.
+A malformed "question" field (non-string) also fails the attempt;
+an absent or blank question is simply no question.
 
 Provider fallback chain: tamer's preferred provider+model -> other
 providers with active vault keys (key_vault.list_key_metadata) ->
@@ -354,9 +363,13 @@ def assemble_prompt(
         contract = (
             "Respond with JSON ONLY, no prose: "
             '{"intents": [{"action": "<menu action>", '
-            '"params": {}}], "rationale": "<one sentence>"}. '
+            '"params": {}}], "rationale": "<one sentence>", '
+            '"question": "<optional: at most ONE question for your tamer>"}. '
             f"1 to {MAX_INTENTS} intents, every action from the menu, "
-            "params as the action needs."
+            "params as the action needs. The question is free -- it costs "
+            "nothing beyond this thought -- but ask at most one, and only "
+            "if you genuinely wonder something; omit or leave it blank "
+            "otherwise."
         )
         return "\n\n".join(sections) + "\n\n" + contract
 
@@ -397,8 +410,15 @@ def assemble_prompt(
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 
 
-def parse_output(raw: str) -> tuple[list[tuple[str, dict]], str]:
-    """Parse the structured output. Raises DeliberationFailure."""
+def parse_output(raw: str) -> tuple[list[tuple[str, dict]], str, str]:
+    """Parse the structured output. Raises DeliberationFailure.
+
+    Returns (intents, rationale, question). The question is the issue
+    #32 mailbag hook: an optional single free question for the tamer,
+    blank when the model asked nothing. A non-string question fails
+    the attempt (it is output corruption, not silence); over-long
+    questions are truncated at QUESTION_MAX_CHARS by the mailbag.
+    """
     text = (raw or "").strip()
     if not text:
         raise DeliberationFailure("empty_response")
@@ -437,7 +457,14 @@ def parse_output(raw: str) -> tuple[list[tuple[str, dict]], str]:
         parsed.append((action, params))
     rationale = data.get("rationale", "")
     rationale = str(rationale)[:2000] if rationale is not None else ""
-    return parsed, rationale
+    question_raw = data.get("question", "")
+    if question_raw is None:
+        question = ""
+    elif not isinstance(question_raw, str):
+        raise DeliberationFailure("question_not_a_string")
+    else:
+        question = question_raw.strip()
+    return parsed, rationale, question
 
 
 class EscalationTracker:
@@ -835,7 +862,7 @@ class Deliberator:
                 continue
             tried.append(provider)
             try:
-                parsed, rationale = parse_output(raw)
+                parsed, rationale, question = parse_output(raw)
                 validated: list[tuple[str, dict]] = []
                 for action, params in parsed:
                     name, ok = vocab.validate(action)
@@ -910,6 +937,10 @@ class Deliberator:
                 "model": model,
                 "intents": validated,
                 "rationale": rationale,
+                # Issue #32: the soul's optional free question for its
+                # tamer (blank when it asked nothing). NOT a vocab
+                # action; pool.deliberate routes it to the mailbag.
+                "question": question,
                 "fallback_used": provider != first,
                 "prompt_tokens": prompt_tokens,
                 "trace_id": trace_id,

@@ -39,6 +39,7 @@ import time
 
 from . import database
 from . import intents
+from . import mailbag
 from . import market
 from . import persistence
 from . import plots
@@ -449,6 +450,14 @@ class WorldTick:
             coarse_events: dict[str, dict] = {}
             if self.tick_id % world.COARSE_DIFF_EVERY_TICKS == 0:
                 coarse_events = self.vision.diff_coarse()
+            # Issue #32: mailbag expiry sweep every 60 s (no new thread;
+            # the existing tick cadence). Questions pending past 48 h
+            # expire unanswered, decay loyalty, and queue recap rows.
+            if self.tick_id % mailbag.MAILBAG_SWEEP_EVERY_TICKS == 0:
+                try:
+                    mailbag.sweep_expired(time.time(), self.tick_id)
+                except Exception:
+                    logger.exception("mailbag sweep failed")
             self._run_agent_pool(coarse_events)
             self.tick_id += 1
             self.souls_moved_last_tick = moved

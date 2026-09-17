@@ -5,9 +5,8 @@ Issue #30 grows the original menu into a dashboard:
 - Status submenu: soul count + Hub connection state (dynamic labels).
 - Wallet submenu: per-soul essence streamed from the Hub viewport
   (economy ops / snapshot wallets).
-- Mailbag: badge slot showing the count. #32 (mailbag) is not done, so
-  the count is 0 and the item is labeled "not yet" -- the slot exists,
-  the count wires up in #32.
+- Mailbag: badge slot showing the pending-question count (#32):
+  "Mailbag (N)", enabled, opens the mailbag answer surface on click.
 - Whereabouts submenu: per-soul location string (plot label from Hub
   world coords, "traveling..." for traveling souls, "home" when no
   position is known). Richer abroad strings arrive with #35.
@@ -57,6 +56,7 @@ class TrayController:
         is_work_mode: Callable[[], bool] | None = None,
         on_work_mode_toggle: Callable[[], None] | None = None,
         on_open_market: Callable[[], None] | None = None,
+        on_open_mailbag: Callable[[], None] | None = None,
         on_request_quip: Callable[[str], dict[str, Any]] | None = None,
         notify_bubble: Callable[[str, str], None] | None = None,
     ) -> None:
@@ -70,7 +70,11 @@ class TrayController:
             on_exit: Callback when "Exit" is clicked.
             get_souls: Returns [{soul_id, name, essence, location, state}].
             get_hub_status: Returns "online"/"offline"/etc.
-            get_mailbag_count: Returns the unread mailbag count (0 until #32).
+            get_mailbag_count: Returns the pending mailbag question count;
+                the mailbag tray item shows "Mailbag (N)" and opens the
+                mailbag answer surface when clicked.
+            on_open_mailbag: Opens the mailbag answer surface; None
+                disables the mailbag item (no client mailbag surface).
             is_paused / on_pause_toggle: pause-simulation state + toggle.
             is_work_mode / on_work_mode_toggle: work-mode state + toggle.
             on_open_market: Opens the market window; None disables the item
@@ -93,6 +97,7 @@ class TrayController:
         self.is_work_mode = is_work_mode or (lambda: False)
         self.on_work_mode_toggle = on_work_mode_toggle
         self.on_open_market = on_open_market
+        self.on_open_mailbag = on_open_mailbag
         self.on_request_quip = on_request_quip
         self.notify_bubble = notify_bubble
         self.icon: pystray.Icon | None = None
@@ -200,9 +205,9 @@ class TrayController:
             Item("Status", self._status_menu()),
             Item("Wallet", self._wallet_menu()),
             Item(
-                f"Mailbag ({mailbag_count}) — not yet (#32)",
-                None,
-                enabled=False,
+                f"Mailbag ({mailbag_count})",
+                self._on_open_mailbag,
+                enabled=self.on_open_mailbag is not None,
             ),
             Item("Whereabouts", self._whereabouts_menu()),
             Item("Quips", self._quips_menu()),
@@ -289,6 +294,11 @@ class TrayController:
         """Handle Market menu click."""
         if self.on_open_market:
             self.on_open_market()
+
+    def _on_open_mailbag(self, icon: Any, item: Any) -> None:
+        """Handle Mailbag menu click (issue #32): open the answer surface."""
+        if self.on_open_mailbag:
+            self.on_open_mailbag()
 
     def _on_pause_toggle(self, icon: Any, item: Any) -> None:
         """Handle Pause simulation toggle."""
