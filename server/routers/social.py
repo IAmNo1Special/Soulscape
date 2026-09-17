@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import database
 from ..models import MessageDelete, SocialEdit, SocialPost, SocialPostResponse
+from ..rate_limit import read_limit, social_write_limit
 from ..security import UserIdentity, get_api_key
 
 logger = logging.getLogger("soulscape_hub")
@@ -35,7 +36,9 @@ router = APIRouter(
 )
 
 
-@router.get("", response_model=List[SocialPostResponse])
+@router.get(
+    "", response_model=List[SocialPostResponse], dependencies=[Depends(read_limit)]
+)
 def get_social():
     try:
         with database.get_db() as conn:
@@ -68,7 +71,7 @@ def get_social():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/post")
+@router.post("/post", dependencies=[Depends(social_write_limit)])
 def create_post(post: SocialPost, identity: UserIdentity = Depends(get_api_key)):
     post_id = post.message_id or str(uuid.uuid4())[:12]
     post_data = post.model_dump()
@@ -115,7 +118,7 @@ def create_post(post: SocialPost, identity: UserIdentity = Depends(get_api_key))
     }
 
 
-@router.post("/reply")
+@router.post("/reply", dependencies=[Depends(social_write_limit)])
 def reply_to_post(
     reply_data: Dict[str, Any], identity: UserIdentity = Depends(get_api_key)
 ):
@@ -182,7 +185,7 @@ def reply_to_post(
     }
 
 
-@router.post("/edit/{message_id}")
+@router.post("/edit/{message_id}", dependencies=[Depends(social_write_limit)])
 def edit_message(
     message_id: str,
     edit: SocialEdit,
@@ -221,7 +224,7 @@ def edit_message(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/delete/{message_id}")
+@router.post("/delete/{message_id}", dependencies=[Depends(social_write_limit)])
 def delete_message(
     message_id: str,
     payload: MessageDelete,
@@ -251,8 +254,11 @@ def delete_message(
             # If not deleted, try as operator (system admin)
             if rows_affected == 0 and identity.is_operator:
                 database.log_audit(
-                    cursor, identity.id, "social_delete_as_operator",
-                    target_type="message", target_id=message_id,
+                    cursor,
+                    identity.id,
+                    "social_delete_as_operator",
+                    target_type="message",
+                    target_id=message_id,
                 )
                 cursor.execute(
                     "DELETE FROM social_posts WHERE message_id = ?",

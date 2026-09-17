@@ -3,6 +3,7 @@ Database configuration, initialization, and shared utility functions for Soulsca
 Uses SQLite with WAL mode enabled for better concurrency.
 """
 
+import hashlib
 import logging
 import os
 import sqlite3
@@ -140,6 +141,14 @@ def delete_ws_session(session_id: str) -> None:
         conn.commit()
 
 
+def delete_ws_sessions_for_owner(owner_id: str) -> int:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ws_sessions WHERE owner_id = ?", (owner_id,))
+        conn.commit()
+        return cursor.rowcount
+
+
 def cleanup_expired_ws_sessions() -> int:
     """Remove expired WebSocket sessions. Returns count deleted."""
     now = time.time()
@@ -233,6 +242,56 @@ def delete_expired_tamer_sessions() -> int:
         cursor.execute("DELETE FROM tamer_sessions WHERE expires_at <= ?", (now,))
         conn.commit()
         return cursor.rowcount
+
+
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def create_ws_ticket(
+    custodian_id: str,
+    role: str,
+    soul_id: str | None = None,
+    ttl_seconds: int = 60,
+) -> str:
+    import secrets as pysecrets
+
+    ticket = "wst_" + pysecrets.token_urlsafe(32)
+    now = time.time()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO ws_tickets
+               (ticket_hash, custodian_id, soul_id, role, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                _sha256_hex(ticket),
+                custodian_id,
+                soul_id,
+                role,
+                now,
+                now + ttl_seconds,
+            ),
+        )
+        conn.commit()
+    return ticket
+
+
+def redeem_ws_ticket(ticket: str) -> dict | None:
+    digest = _sha256_hex(ticket)
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT ticket_hash, custodian_id, soul_id, role, expires_at "
+            "FROM ws_tickets WHERE ticket_hash = ?",
+            (digest,),
+        )
+        row = cursor.fetchone()
+        cursor.execute("DELETE FROM ws_tickets WHERE ticket_hash = ?", (digest,))
+        conn.commit()
+    if row is None or row["expires_at"] <= now:
+        return None
+    return dict(row)
 
 
 # Token Bucket Rate Limiting (per owner_id)
@@ -644,6 +703,16 @@ def init_db():
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tamer_sessions_hash
                 ON tamer_sessions(session_hash)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ws_tickets (
+                    ticket_hash TEXT PRIMARY KEY,
+                    custodian_id TEXT NOT NULL,
+                    soul_id TEXT,
+                    role TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                )
             """)
             _migrate_souls(cursor)
     except Exception as e:

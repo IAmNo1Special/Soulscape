@@ -8,7 +8,7 @@ import re
 import secrets
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Security, status
 
 from .. import database
 from ..models import (
@@ -17,6 +17,7 @@ from ..models import (
     TamerResponse,
     TamerSessionResponse,
 )
+from ..rate_limit import check_login_limit
 from ..security import (
     UserIdentity,
     api_key_header_scheme,
@@ -66,9 +67,12 @@ def register_tamer(payload: TamerRegister) -> TamerResponse:
 
 
 @router.post("/login", response_model=TamerSessionResponse)
-def login_tamer(payload: TamerLogin) -> TamerSessionResponse:
+def login_tamer(payload: TamerLogin, request: Request) -> TamerSessionResponse:
     """Verify credentials and issue an opaque revocable session token."""
-    tamer = database.get_tamer_by_username(payload.username.strip())
+    username = payload.username.strip()
+    ip = request.client.host if request.client else "unknown"
+    check_login_limit(username, ip)
+    tamer = database.get_tamer_by_username(username)
     if tamer is None or not verify_password(payload.password, tamer["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -10,6 +10,7 @@ import secrets as pysecrets
 
 from fastapi import (
     APIRouter,
+    Depends,
     Header,
     Query,
     WebSocket,
@@ -19,11 +20,39 @@ from fastapi import (
 
 from .. import database
 from ..managers import manager
-from ..security import verify_ws_token
+from ..models import WsTicketResponse
+from ..security import (
+    UserIdentity,
+    require_scoped,
+    verify_ws_token,
+    WS_TICKET_TTL_SECONDS,
+)
 
 logger = logging.getLogger("soulscape_hub")
 
 router = APIRouter()
+
+
+@router.post("/ws/ticket", response_model=WsTicketResponse)
+def mint_ws_ticket(identity: UserIdentity = Depends(require_scoped)):
+    if identity.is_operator:
+        ticket = database.create_ws_ticket(
+            "", "operator", ttl_seconds=WS_TICKET_TTL_SECONDS
+        )
+    elif identity.is_tamer:
+        ticket = database.create_ws_ticket(
+            identity.custodian_id or "",
+            "tamer",
+            ttl_seconds=WS_TICKET_TTL_SECONDS,
+        )
+    else:
+        ticket = database.create_ws_ticket(
+            identity.custodian_id or "",
+            "user",
+            soul_id=identity.id,
+            ttl_seconds=WS_TICKET_TTL_SECONDS,
+        )
+    return WsTicketResponse(ticket=ticket, expires_in=WS_TICKET_TTL_SECONDS)
 
 
 def _verify_hmac(hmac_key: str, payload: str, signature: str) -> bool:

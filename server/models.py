@@ -141,3 +141,8 @@ class TamerSessionResponse(BaseModel):
     tamer_id: str
     username: str
     expires_at: float
+
+
+class WsTicketResponse(BaseModel):
+    ticket: str
+    expires_in: int

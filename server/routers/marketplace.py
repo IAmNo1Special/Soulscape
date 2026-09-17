@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import database
 from ..models import BuyRequest, MarketListing
+from ..rate_limit import market_write_limit, read_limit
 from ..security import UserIdentity, get_api_key
 
 logger = logging.getLogger("soulscape_hub")
@@ -50,7 +51,7 @@ def _validate_depth(obj, depth: int = 0):
             _validate_depth(v, depth + 1)
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(read_limit)])
 def get_marketplace():
     now = time.time()
     if _marketplace_cache["data"] is not None:
@@ -78,7 +79,7 @@ def get_marketplace():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/list")
+@router.post("/list", dependencies=[Depends(market_write_limit)])
 def add_listing(listing: MarketListing, identity: UserIdentity = Depends(get_api_key)):
     listing_id = listing.listing_id or str(uuid.uuid4())[:8]
     if listing.price <= 0:
@@ -109,14 +110,20 @@ def add_listing(listing: MarketListing, identity: UserIdentity = Depends(get_api
             )
             if identity.is_operator and identity.id != seller_id:
                 database.log_audit(
-                    cursor, identity.id, "marketplace_list_override",
-                    target_type="listing", target_id=listing_id,
+                    cursor,
+                    identity.id,
+                    "marketplace_list_override",
+                    target_type="listing",
+                    target_id=listing_id,
                     details=f"seller_id={seller_id}",
                 )
             if identity.is_operator and listing.seller_id:
                 database.log_audit(
-                    cursor, identity.id, "add_listing_as_operator",
-                    target_type="listing", target_id=listing_id,
+                    cursor,
+                    identity.id,
+                    "add_listing_as_operator",
+                    target_type="listing",
+                    target_id=listing_id,
                 )
             conn.commit()
             _marketplace_cache["timestamp"] = 0.0
@@ -126,7 +133,7 @@ def add_listing(listing: MarketListing, identity: UserIdentity = Depends(get_api
     return {"status": "success", "listing_id": listing_id}
 
 
-@router.post("/buy/{listing_id}")
+@router.post("/buy/{listing_id}", dependencies=[Depends(market_write_limit)])
 def buy_item(
     listing_id: str,
     buyer_data: BuyRequest,

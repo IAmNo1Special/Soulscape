@@ -23,6 +23,9 @@ TOKEN_LIFETIME_SECONDS = 30 * 24 * 3600
 TAMER_SESSION_PREFIX = "tms_"
 TAMER_SESSION_TTL_SECONDS = 7 * 24 * 3600
 
+WS_TICKET_PREFIX = "wst_"
+WS_TICKET_TTL_SECONDS = 60
+
 
 def hash_password(password: str) -> str:
     return database.hash_secret(password)
@@ -199,30 +202,36 @@ async def verify_ws_token(
         if tamer_identity is not None:
             return tamer_identity
 
-        # Check for individual Soul secret (hashed lookup)
-        prefix = database.hash_secret(received_token)[:16]
-        with database.get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT soul_id, owner_id, custodian_id, token_expiry, "
-                "is_revoked, secret_hash "
-                "FROM souls WHERE secret_prefix = ?",
-                (prefix,),
-            )
-            for row in cursor.fetchall():
-                if database.verify_secret_hash(received_token, row["secret_hash"]):
-                    if row["is_revoked"]:
-                        return None
-                    if row["token_expiry"] and row["token_expiry"] < time.time():
-                        return None
-                    return UserIdentity(
-                        id=row["soul_id"],
-                        owner_id=row["owner_id"],
-                        custodian_id=row["custodian_id"] or row["owner_id"],
-                        role="user",
-                    )
+        # Check for short-lived WS ticket (single-use, 60 s TTL)
+        ticket_identity = _ws_ticket_identity(received_token)
+        if ticket_identity is not None:
+            return ticket_identity
 
     return None
+
+
+def _ws_ticket_identity(token: str) -> UserIdentity | None:
+    if not token.startswith(WS_TICKET_PREFIX):
+        return None
+    redeemed = database.redeem_ws_ticket(token)
+    if redeemed is None:
+        return None
+    custodian_id = redeemed["custodian_id"]
+    if redeemed["role"] == "operator":
+        return UserIdentity(id=OPERATOR_ID, role="operator")
+    if redeemed["role"] == "tamer":
+        return UserIdentity(
+            id=custodian_id,
+            owner_id=custodian_id,
+            custodian_id=custodian_id,
+            role="tamer",
+        )
+    return UserIdentity(
+        id=redeemed["soul_id"] or custodian_id,
+        owner_id=custodian_id,
+        custodian_id=custodian_id,
+        role="user",
+    )
 
 
 async def require_scoped(

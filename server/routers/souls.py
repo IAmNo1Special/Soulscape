@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import database
 from ..models import SoulResponse, SoulUpdate
+from ..rate_limit import read_limit
 from ..security import (
     UserIdentity,
     assert_custody,
@@ -187,7 +188,7 @@ def _validate_inventory_items(inventory: Any) -> list[dict]:
     return clean
 
 
-@router.get("", response_model=list[SoulResponse])
+@router.get("", response_model=list[SoulResponse], dependencies=[Depends(read_limit)])
 def get_souls(
     owner_id: str | None = Query(default=None),
     custodian_id: str | None = Query(default=None),
@@ -403,6 +404,11 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_s
                         validate_secret(secret)
                         secret_hash, secret_prefix = make_secret_record(secret)
                         token_expiry = generate_token_expiry()
+                        if existing_hash:
+                            cursor.execute(
+                                "DELETE FROM ws_sessions WHERE owner_id = ?",
+                                (custodian_id,),
+                            )
                 essence = (
                     stored.get("essence")
                     if stored and stored.get("essence") is not None
