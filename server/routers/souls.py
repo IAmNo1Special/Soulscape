@@ -122,8 +122,11 @@ def _validate_soul_state(
         stored_xp = max(0.0, _to_float(stored.get("xp"), 0.0))
         if level < stored_level:
             return {}, f"level decreased {stored_level} -> {level}"
-        if xp < stored_xp:
-            return {}, f"xp decreased {stored_xp} -> {xp}"
+        # Issue #34: the hub also awards XP server-side (gather/eat/drink/
+        # sales), so the stored value can legitimately exceed what the
+        # client last saw. Merge server-wins instead of rejecting the
+        # client's stale-but-honest report.
+        xp = max(xp, stored_xp)
         elapsed_hours = max(
             (now - _to_float(stored.get("updated_at"), now)) / 3600.0, 1.0 / 3600.0
         )
@@ -620,8 +623,8 @@ def feed_soul(
         # identity.id is a tamer ID, not a soul ID).
         feeder_id = identity.id
     soul_id = feeder_id
-    custodian_id = None if identity.is_operator else (
-        identity.custodian_id or identity.owner_id
+    custodian_id = (
+        None if identity.is_operator else (identity.custodian_id or identity.owner_id)
     )
     payload = {
         "feeder_soul_id": feeder_id,
@@ -638,7 +641,11 @@ def feed_soul(
     )
     try:
         record, _created = biology.enqueue_feed_soul(
-            session_id, nonce, custodian_id, soul_id, biology.KIND_FEED_SOUL,
+            session_id,
+            nonce,
+            custodian_id,
+            soul_id,
+            biology.KIND_FEED_SOUL,
             validated,
         )
     except biology.BiologyRefusal as refusal:

@@ -252,7 +252,7 @@ def test_reflex_starving_seeks_food():
     assert intent["payload"]["target_ref"]["kind"] == "food"
 
 
-def test_reflex_at_food_emits_eat():
+def test_reflex_at_food_emits_gather():
     provider = reflex.StubProvider(food=[(104.0, 100.0)])
     out = reflex.evaluate(
         "s1",
@@ -266,8 +266,44 @@ def test_reflex_at_food_emits_eat():
         random.Random(1),
         0.0,
     )
+    assert out["intents"][0]["action"] == "gather"
+    assert out["intents"][0]["payload"]["node_id"].startswith("stub:food:")
+
+
+def test_reflex_eats_from_inventory_when_stocked():
+    provider = reflex.StubProvider(food=[(104.0, 100.0)])
+    out = reflex.evaluate(
+        "s1",
+        100.0,
+        100.0,
+        10.0,
+        90.0,
+        _drive_vec(10.0, 90.0),
+        [],
+        provider,
+        random.Random(1),
+        0.0,
+        inventory={"food": 2},
+    )
     assert out["intents"][0]["action"] == "eat"
-    assert out["intents"][0]["payload"]["food"] == [104.0, 100.0]
+
+
+def test_reflex_drinks_from_inventory_when_stocked():
+    provider = reflex.StubProvider(water=[(200.0, 200.0)])
+    out = reflex.evaluate(
+        "s1",
+        100.0,
+        100.0,
+        90.0,
+        10.0,
+        _drive_vec(90.0, 10.0),
+        [],
+        provider,
+        random.Random(1),
+        0.0,
+        inventory={"water": 1},
+    )
+    assert out["intents"][0]["action"] == "drink"
 
 
 def test_reflex_no_food_degrades_gracefully():
@@ -364,13 +400,29 @@ def _think_pool():
     return pool.AgentPool(think_scheduler=scheduler.ThinkScheduler(seed=9))
 
 
-def test_starving_soul_seeks_food_then_eats(db_conn):
-    _insert_soul(db_conn, "s1", x=100.0, y=100.0, satiety=10.0)
+def _insert_node(db_conn, node_id, kind, x, y, amount=10):
+    from .. import resources
+
+    resources.ensure_schema(db_conn)
+    db_conn.execute(
+        "INSERT INTO resource_nodes "
+        "(node_id, plot_id, kind, x, y, amount, capacity, "
+        "respawns_at, state, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'ready', ?)",
+        (node_id, "0:0", kind, x, y, amount, resources.NODE_CAPACITY, time.time()),
+    )
+    db_conn.commit()
+
+
+def test_starving_soul_seeks_food_then_gathers_then_eats(db_conn):
+    from .. import resources
     from .. import world as world_mod
 
+    _insert_soul(db_conn, "s1", x=100.0, y=100.0, satiety=10.0)
+    _insert_node(db_conn, "node:food:t1", "food", 500.0, 500.0)
     vision = world_mod.WorldVision()
     vision.rebuild()
-    provider = reflex.StubProvider(food=[(500.0, 500.0)])
+    provider = resources.node_provider()
     p = _think_pool()
     now = time.time()
 
@@ -391,14 +443,27 @@ def test_starving_soul_seeks_food_then_eats(db_conn):
     result = asyncio.run(p.think("s1", vision, provider, 0, now + 1.0))
     assert result["status"] == "thought"
     kinds = [i["kind"] for i in intents.pending_intents()]
-    assert "eat" in kinds
+    assert "gather" in kinds
 
     tick = WorldTick()
-    eat_intent = next(i for i in intents.pending_intents() if i["kind"] == "eat")
-    consume.adjudicate_consume(tick, eat_intent, provider)
-    row = db_conn.execute("SELECT satiety FROM souls WHERE soul_id = 's1'").fetchone()
+    tick.pump_intents()
+    inv = db_conn.execute(
+        "SELECT quantity FROM soul_inventory "
+        "WHERE soul_id = 's1' AND item_name = 'food'"
+    ).fetchone()
+    assert int(inv["quantity"]) == 1
+
+    result = asyncio.run(p.think("s1", vision, provider, 0, now + 2.0))
+    assert result["status"] == "thought"
+    kinds = [i["kind"] for i in intents.pending_intents()]
+    assert "eat" in kinds
+    tick.pump_intents()
+    row = db_conn.execute(
+        "SELECT satiety, xp FROM souls WHERE soul_id = 's1'"
+    ).fetchone()
     assert float(row["satiety"]) > 10.0
     assert float(row["satiety"]) <= 100.0
+    assert int(row["xp"]) == resources.XP_GATHER + resources.XP_EAT
 
 
 def test_starving_no_food_sensation_no_crash(db_conn):
@@ -540,20 +605,46 @@ def test_think_batch_bounded(db_conn):
 # ---------------------------------------------------------------- consume
 
 
-def test_consume_rejects_gone_food(db_conn):
+def test_consume_eats_from_inventory(db_conn):
+    from .. import resources
+
     _insert_soul(db_conn, "s1", satiety=10.0)
-    provider = reflex.StubProvider(food=[(500.0, 500.0)])
-    record = intents.enqueue_intent(
-        "test", "n1", None, "s1", "eat", {"food": [500.0, 500.0]}
+    db_conn.execute(
+        "INSERT INTO soul_inventory (soul_id, item_name, quantity, metadata) "
+        "VALUES ('s1', 'food', 2, NULL)"
     )
-    provider.remove_food(500.0, 500.0)
+    db_conn.commit()
+    record = intents.enqueue_intent("test", "n1", None, "s1", "eat", {})
     tick = WorldTick()
-    consume.adjudicate_consume(tick, record, provider)
+    consume.adjudicate_consume(tick, record)
     row = db_conn.execute(
         "SELECT status FROM intents WHERE intent_id = ?",
         (record["intent_id"],),
     ).fetchone()
+    assert row["status"] == "adjudicated"
+    soul = db_conn.execute(
+        "SELECT satiety, xp FROM souls WHERE soul_id = 's1'"
+    ).fetchone()
+    assert float(soul["satiety"]) == pytest.approx(50.0)
+    assert int(soul["xp"]) == resources.XP_EAT
+    qty = db_conn.execute(
+        "SELECT quantity FROM soul_inventory "
+        "WHERE soul_id = 's1' AND item_name = 'food'"
+    ).fetchone()
+    assert int(qty["quantity"]) == 1
+
+
+def test_consume_rejects_empty_inventory(db_conn):
+    _insert_soul(db_conn, "s1", satiety=10.0)
+    record = intents.enqueue_intent("test", "n1", None, "s1", "eat", {})
+    tick = WorldTick()
+    consume.adjudicate_consume(tick, record)
+    row = db_conn.execute(
+        "SELECT status, result FROM intents WHERE intent_id = ?",
+        (record["intent_id"],),
+    ).fetchone()
     assert row["status"] == "rejected"
+    assert json.loads(row["result"])["reason"] == "no_food"
     types = _journal_types(db_conn)
     assert persistence.EVENT_INTENT_REJECTED in types
 
@@ -561,13 +652,12 @@ def test_consume_rejects_gone_food(db_conn):
 def test_consume_rejects_collapsed_and_dormant(db_conn):
     _insert_soul(db_conn, "c1", state="collapsed")
     _insert_soul(db_conn, "d1", essence=0.0)
-    provider = reflex.StubProvider(food=[(1.0, 1.0)])
     tick = WorldTick()
     for sid, nonce in (("c1", "n1"), ("d1", "n2")):
         record = intents.enqueue_intent(
             "test", nonce, None, sid, "eat", {"food": [1.0, 1.0]}
         )
-        consume.adjudicate_consume(tick, record, provider)
+        consume.adjudicate_consume(tick, record)
         row = db_conn.execute(
             "SELECT status, result FROM intents WHERE intent_id = ?",
             (record["intent_id"],),

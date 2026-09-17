@@ -1090,6 +1090,10 @@ def init_db():
             from . import plots as plots_module
 
             plots_module.seed_plots(conn)
+            from . import resources as resources_module
+
+            resources_module.ensure_schema(conn)
+            resources_module.seed_resource_nodes(conn)
             _migrate_souls(cursor)
         _migrate_social(conn)
     except Exception as e:
@@ -1130,6 +1134,9 @@ def _migrate_souls(cursor) -> None:
     cursor.execute("UPDATE souls SET loyalty = 0.5 WHERE loyalty IS NULL")
     cursor.execute("UPDATE souls SET state = 'normal' WHERE state IS NULL")
     cursor.execute("UPDATE souls SET fed_flag = 0 WHERE fed_flag IS NULL")
+    # Issue #34: XP telemetry column; legacy rows may carry NULL.
+    _add_column_if_missing(cursor, "souls", "xp INTEGER DEFAULT 0")
+    cursor.execute("UPDATE souls SET xp = 0 WHERE xp IS NULL")
     # Legacy rows may carry NULL biology fields; the server default for a
     # new soul is full (100), matching the REST layer's defaults. Add the
     # columns first for ultra-legacy tables that predate them entirely.

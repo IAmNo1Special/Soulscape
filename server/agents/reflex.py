@@ -10,11 +10,13 @@ Thresholds on the drive vector produce intents:
 - emote: every EMOTE_MIN_S..EMOTE_MAX_S jittered, pick from drive
   state. Sets soul state only; #30 renders bubbles later.
 
-Food/water do not exist in v0 (#34 builds resource nodes), so reflexes
-run against a FoodWaterProvider interface. The production provider
-returns none until #34; the reflex then degrades gracefully: a starving
-soul with no known food records the sensation "no food in sight" and
-emits nothing (no crash, no intent).
+Food/water come from #34's resource nodes: the production provider is
+resources.NodeProvider. The reflex forages autonomously: a starving soul
+with food in its inventory eats from the pack; otherwise it seeks the
+nearest ready node -- moving toward it, or gathering when in reach.
+Gather yields inventory (server-adjudicated); eat/drink consume
+inventory. A needy soul with no known nodes records the "no food/water
+in sight" sensation and emits nothing (no crash, no intent).
 
 Firing timestamps per soul are kept in-memory so #25's escalation
 hook can read the reflex-firing rate (>=3/min triggers deliberation).
@@ -66,10 +68,15 @@ class FoodWaterProvider(Protocol):
     def find_water(self, x: float, y: float) -> list[tuple[float, float]]: ...
     def is_food_at(self, x: float, y: float, tol: float = 4.0) -> bool: ...
     def is_water_at(self, x: float, y: float, tol: float = 4.0) -> bool: ...
+    def nearest_food_node(self, x: float, y: float) -> dict | None: ...
+    def nearest_water_node(self, x: float, y: float) -> dict | None: ...
+    def node_by_id(self, node_id: str) -> dict | None: ...
 
 
 class NullProvider:
-    """Production provider until #34: no resource nodes exist yet."""
+    """Provider with no resource nodes: the pre-#34 graceful degradation.
+
+    Kept for tests/scenarios; production uses resources.NodeProvider."""
 
     def find_food(self, x: float, y: float) -> list[tuple[float, float]]:
         return []
@@ -82,6 +89,29 @@ class NullProvider:
 
     def is_water_at(self, x: float, y: float, tol: float = 4.0) -> bool:
         return False
+
+    def nearest_food_node(self, x: float, y: float) -> dict | None:
+        return None
+
+    def nearest_water_node(self, x: float, y: float) -> dict | None:
+        return None
+
+    def node_by_id(self, node_id: str) -> dict | None:
+        return None
+
+
+def _stub_node_id(kind: str, x: float, y: float) -> str:
+    return f"stub:{kind}:{x}:{y}"
+
+
+def _parse_stub_node_id(node_id: str) -> tuple[str, float, float] | None:
+    parts = node_id.split(":")
+    if len(parts) != 4 or parts[0] != "stub":
+        return None
+    try:
+        return parts[1], float(parts[2]), float(parts[3])
+    except ValueError:
+        return None
 
 
 class StubProvider:
@@ -111,6 +141,42 @@ class StubProvider:
 
     def is_water_at(self, x: float, y: float, tol: float = 4.0) -> bool:
         return any(math.hypot(wx - x, wy - y) <= tol for wx, wy in self.water)
+
+    def nearest_food_node(self, x: float, y: float) -> dict | None:
+        pts = self._nearest(self.food, x, y)
+        if not pts:
+            return None
+        fx, fy = pts[0]
+        return {
+            "node_id": _stub_node_id("food", fx, fy),
+            "kind": "food",
+            "x": fx,
+            "y": fy,
+            "amount": 10,
+        }
+
+    def nearest_water_node(self, x: float, y: float) -> dict | None:
+        pts = self._nearest(self.water, x, y)
+        if not pts:
+            return None
+        wx, wy = pts[0]
+        return {
+            "node_id": _stub_node_id("water", wx, wy),
+            "kind": "water",
+            "x": wx,
+            "y": wy,
+            "amount": 10,
+        }
+
+    def node_by_id(self, node_id: str) -> dict | None:
+        parsed = _parse_stub_node_id(node_id)
+        if parsed is None:
+            return None
+        kind, x, y = parsed
+        pts = self.food if kind == "food" else self.water if kind == "water" else []
+        if not any(px == x and py == y for px, py in pts):
+            return None
+        return {"node_id": node_id, "kind": kind, "x": x, "y": y, "amount": 10}
 
     def remove_food(self, x: float, y: float, tol: float = 4.0) -> None:
         self.food = [
@@ -196,6 +262,30 @@ def _move_to(x: float, y: float, target_kind: str, at: tuple[float, float]) -> d
     }
 
 
+def _seek_or_consume(
+    soul_id: str,
+    x: float,
+    y: float,
+    node: dict | None,
+    node_kind: str,
+    no_sensation: str,
+    cause: str,
+    intents: list[dict],
+    sensations: list[dict],
+    now: float,
+) -> None:
+    """One need branch: forage the nearest node (gather in reach, else move)."""
+    if node is None:
+        sensations.append({"text": no_sensation, "cause": cause})
+        return
+    nx, ny = float(node["x"]), float(node["y"])
+    if math.hypot(nx - x, ny - y) <= CONSUME_REACH_WU:
+        intents.append({"action": "gather", "payload": {"node_id": node["node_id"]}})
+    else:
+        intents.append(_move_to(nx, ny, node_kind, (nx, ny)))
+    note_firing(soul_id, now)
+
+
 def evaluate(
     soul_id: str,
     x: float,
@@ -207,38 +297,56 @@ def evaluate(
     provider: FoodWaterProvider,
     rng,
     now: float,
+    inventory: dict[str, int] | None = None,
 ) -> dict:
     """Run the reflex layer. Returns {"intents", "sensations", "emote"}.
 
     Pure except for the in-memory firing/emote bookkeeping. Emitted
     intents are UNVALIDATED action requests: pool.py validates them
     against the vocabulary before anything is enqueued.
+
+    `inventory` maps item -> qty carried; a starving soul with food eats
+    from the pack, otherwise it forages (gather at a node in reach,
+    move_to toward it otherwise).
     """
     intents: list[dict] = []
     sensations: list[dict] = []
+    inventory = inventory or {}
 
     if satiety < SATIETY_STARVE:
-        foods = provider.find_food(x, y)
-        if not foods:
-            sensations.append({"text": NO_FOOD_SENSATION, "cause": "eat_reflex"})
-        else:
-            fx, fy = foods[0]
-            if math.hypot(fx - x, fy - y) <= CONSUME_REACH_WU:
-                intents.append({"action": "eat", "payload": {"food": [fx, fy]}})
-            else:
-                intents.append(_move_to(fx, fy, "food", (fx, fy)))
+        if int(inventory.get("food", 0)) > 0:
+            intents.append({"action": "eat", "payload": {}})
             note_firing(soul_id, now)
+        else:
+            _seek_or_consume(
+                soul_id,
+                x,
+                y,
+                provider.nearest_food_node(x, y),
+                "food",
+                NO_FOOD_SENSATION,
+                "eat_reflex",
+                intents,
+                sensations,
+                now,
+            )
     elif hydration < HYDRATION_THIRST:
-        waters = provider.find_water(x, y)
-        if not waters:
-            sensations.append({"text": NO_WATER_SENSATION, "cause": "drink_reflex"})
-        else:
-            wx, wy = waters[0]
-            if math.hypot(wx - x, wy - y) <= CONSUME_REACH_WU:
-                intents.append({"action": "drink", "payload": {"water": [wx, wy]}})
-            else:
-                intents.append(_move_to(wx, wy, "water", (wx, wy)))
+        if int(inventory.get("water", 0)) > 0:
+            intents.append({"action": "drink", "payload": {}})
             note_firing(soul_id, now)
+        else:
+            _seek_or_consume(
+                soul_id,
+                x,
+                y,
+                provider.nearest_water_node(x, y),
+                "water",
+                NO_WATER_SENSATION,
+                "drink_reflex",
+                intents,
+                sensations,
+                now,
+            )
     elif drive_vec.get("fear", 0.0) > FLEE_FEAR:
         threats = [
             o for o in observations if str(o.get("kind", "")) in drives._THREAT_WEIGHTS

@@ -34,6 +34,7 @@ import secrets
 import time
 
 from .. import biology, database, dormancy, intents, mailbag, persistence, presence
+from .. import resources
 from . import drives, memory, metering, reflex, scheduler, sensations, vocab
 
 logger = logging.getLogger("soulscape_hub")
@@ -106,10 +107,21 @@ def validate_agent_payload(action: str, payload: dict) -> dict | None:
                 "at": [float(ref["at"][0]), float(ref["at"][1])],
             }
         return out
+    if action == "gather":
+        node_id = payload.get("node_id")
+        if isinstance(node_id, str) and node_id:
+            return {"node_id": node_id}
+        return None
     if action == "eat":
+        # Eating is from inventory: no target needed. A legacy food pair
+        # is accepted and ignored (kept for trace compatibility).
+        if "food" not in payload:
+            return {}
         pair = _as_pair(payload.get("food"))
         return {"food": [pair[0], pair[1]]} if pair else None
     if action == "drink":
+        if "water" not in payload:
+            return {}
         pair = _as_pair(payload.get("water"))
         return {"water": [pair[0], pair[1]]} if pair else None
     if action in ("look", "rest", "wait"):
@@ -141,6 +153,18 @@ def record_illegal(soul_id: str, action: str, tick_id: int = 0) -> dict:
     return sensation
 
 
+def _parse_position_pair(raw: object) -> tuple[float, float]:
+    """Parse a stored [x, y] position pair; (0.0, 0.0) when missing."""
+    if raw is None:
+        return (0.0, 0.0)
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    x, y = float(raw[0]), float(raw[1])
+    if not math.isfinite(x) or not math.isfinite(y):
+        raise ValueError("non-finite pair")
+    return (x, y)
+
+
 def execution_revalidate(
     row: dict,
     action: str,
@@ -157,6 +181,20 @@ def execution_revalidate(
     canonical = validate_agent_payload(action, payload)
     if canonical is None:
         return False, "bad_payload"
+    if action == "gather":
+        node = provider.node_by_id(canonical.get("node_id") or "")
+        if node is None or int(node.get("amount") or 0) <= 0:
+            return False, "target_gone"
+        try:
+            sx, sy = _parse_position_pair(row.get("position"))
+        except (ValueError, TypeError, IndexError):
+            return False, "bad_position"
+        if (
+            math.hypot(float(node["x"]) - sx, float(node["y"]) - sy)
+            > resources.GATHER_REACH_WU
+        ):
+            return False, "too_far"
+        return True, ""
     ref = canonical.get("target_ref") if action == "move_to" else None
     if ref is not None:
         kind, (ax, ay) = ref["kind"], ref["at"]
@@ -207,15 +245,8 @@ class AgentPool:
             return dict(row) if row else None
 
     @staticmethod
-    def _parse_pair(raw) -> tuple[float, float]:
-        if raw is None:
-            return (0.0, 0.0)
-        if isinstance(raw, str):
-            raw = json.loads(raw)
-        x, y = float(raw[0]), float(raw[1])
-        if not math.isfinite(x) or not math.isfinite(y):
-            raise ValueError("non-finite pair")
-        return (x, y)
+    def _parse_pair(raw):
+        return _parse_position_pair(raw)
 
     def _enqueue(self, row: dict, action: str, payload: dict) -> dict:
         custodian = row.get("custodian_id") or row.get("owner_id")
@@ -296,6 +327,8 @@ class AgentPool:
             observations,
             row.get("loyalty"),
         )
+        with database.get_db() as conn:
+            pack = resources.inventory_for(conn, soul_id)
         observation = {
             "soul_id": soul_id,
             "position": [x, y],
@@ -325,6 +358,7 @@ class AgentPool:
             provider,
             self._rng,
             now,
+            inventory=pack,
         )
         with database.get_db() as conn:
             for s in result["sensations"]:
@@ -473,9 +507,7 @@ class AgentPool:
         mailbag_result: dict | None = None
         if question:
             try:
-                mailbag_result = mailbag.ask_question(
-                    soul_id, question, now, tick_id
-                )
+                mailbag_result = mailbag.ask_question(soul_id, question, now, tick_id)
             except Exception:
                 logger.exception("mailbag ask failed for %s", soul_id)
         # #27: join the deliberation's trace to the intents it produced.

@@ -38,6 +38,7 @@ from typing import Any
 from . import database
 from . import dormancy
 from . import persistence
+from . import resources
 from .intents import _row_to_dict as _intent_row_to_dict
 
 logger = logging.getLogger("soulscape_hub")
@@ -139,8 +140,7 @@ def _hold_escrow(
     price = round(float(row["price"]), 2)
     essence_before = dormancy.cached_essence(conn, buyer_soul_id)
     cursor = conn.execute(
-        "UPDATE souls SET essence = essence - ? "
-        "WHERE soul_id = ? AND essence >= ?",
+        "UPDATE souls SET essence = essence - ? WHERE soul_id = ? AND essence >= ?",
         (price, buyer_soul_id, price),
     )
     if cursor.rowcount == 0:
@@ -160,8 +160,13 @@ def _hold_escrow(
         "INSERT INTO escrows "
         "(escrow_id, intent_id, soul_id, amount, status, created_at) "
         "VALUES (?, ?, ?, ?, 'held', ?)",
-        ("esc_" + secrets.token_urlsafe(12), intent_id, buyer_soul_id, price,
-         time.time()),
+        (
+            "esc_" + secrets.token_urlsafe(12),
+            intent_id,
+            buyer_soul_id,
+            price,
+            time.time(),
+        ),
     )
     return price
 
@@ -171,8 +176,7 @@ def _release_escrow(conn: sqlite3.Connection, intent_id: str) -> bool:
     was released. A refund is a funding refresh: it can wake a dormant
     soul (soul_woke journaled)."""
     row = conn.execute(
-        "SELECT soul_id, amount FROM escrows "
-        "WHERE intent_id = ? AND status = 'held'",
+        "SELECT soul_id, amount FROM escrows WHERE intent_id = ? AND status = 'held'",
         (intent_id,),
     ).fetchone()
     if row is None:
@@ -333,8 +337,10 @@ def _write_ledger(
         "INSERT INTO ledger "
         "(tick_id, intent_id, entry_type, soul_id, amount, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        [(tick_id, intent_id, entry_type, soul_id, amount, now)
-         for entry_type, soul_id, amount in rows],
+        [
+            (tick_id, intent_id, entry_type, soul_id, amount, now)
+            for entry_type, soul_id, amount in rows
+        ],
     )
 
 
@@ -343,9 +349,10 @@ def _apply_list(
 ) -> dict[str, Any]:
     payload = intent["payload"] or {}
     seller_soul_id = payload["seller_soul_id"]
-    if intent["custodian_id"] is not None and payload.get("seller_soul_id") != intent[
-        "soul_id"
-    ]:
+    if (
+        intent["custodian_id"] is not None
+        and payload.get("seller_soul_id") != intent["soul_id"]
+    ):
         raise MarketRefusal("custody", "seller does not match intent soul")
     seller = conn.execute(
         "SELECT 1 FROM souls WHERE soul_id = ?", (seller_soul_id,)
@@ -353,6 +360,16 @@ def _apply_list(
     if seller is None:
         raise MarketRefusal("seller_not_found", "Seller soul not found")
     listing_id = payload.get("listing_id") or "lst_" + secrets.token_urlsafe(6)
+    # Issue #34: a resource listing escrows the items out of the
+    # seller's inventory at list time (the qty rides in the item JSON).
+    listed = resources.resource_listing(payload.get("item"))
+    if listed is not None:
+        item_name, qty = listed
+        if not resources.remove_item(conn, seller_soul_id, item_name, qty):
+            raise MarketRefusal(
+                "insufficient_inventory",
+                f"Seller holds less than {qty} {item_name}",
+            )
     conn.execute(
         "INSERT INTO marketplace "
         "(listing_id, seller_id, seller_name, item, price, timestamp) "
@@ -393,9 +410,7 @@ def _apply_buy(
     price = round(float(row["price"]), 2)
     seller_id = row["seller_id"]
     item_raw = row["item"]
-    cursor = conn.execute(
-        "DELETE FROM marketplace WHERE listing_id = ?", (listing_id,)
-    )
+    cursor = conn.execute("DELETE FROM marketplace WHERE listing_id = ?", (listing_id,))
     if cursor.rowcount == 0:
         _release_escrow(conn, intent_id)
         raise MarketRefusal("listing_gone", "Listing already sold or removed")
@@ -414,13 +429,19 @@ def _apply_buy(
     # listing wakes the seller (issue #22 -- soul_woke journaled).
     seller_before = dormancy.cached_essence(conn, seller_id)
     seller_row = conn.execute(
-        "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
-        (seller_net, seller_id),
+        "UPDATE souls SET essence = essence + ?, "
+        "xp = COALESCE(xp, 0) + ? WHERE soul_id = ?",
+        (seller_net, resources.XP_SELL, seller_id),
     )
+    # Issue #34: a completed resource sale moves the escrowed items
+    # into the buyer's inventory. The XP_SELL award above is silent
+    # telemetry (no ledger row, no UI).
+    sold = resources.resource_listing(json.loads(item_raw))
+    if sold is not None:
+        item_name, qty = sold
+        resources.add_item(conn, buyer_soul_id, item_name, qty)
     if seller_row.rowcount:
-        dormancy.note_essence_change(
-            conn, seller_id, seller_before or 0.0, tick_id
-        )
+        dormancy.note_essence_change(conn, seller_id, seller_before or 0.0, tick_id)
     if seller_row.rowcount == 0:
         logger.warning(
             "buy %s: seller soul %s gone; credit kept in ledger only",
@@ -431,8 +452,7 @@ def _apply_buy(
         "UPDATE globals SET value = value + ? WHERE key = 'essence_fund'", (tax,)
     )
     conn.execute(
-        "UPDATE escrows SET status = 'applied' WHERE intent_id = ? "
-        "AND status = 'held'",
+        "UPDATE escrows SET status = 'applied' WHERE intent_id = ? AND status = 'held'",
         (intent_id,),
     )
     _write_ledger(
@@ -461,17 +481,23 @@ def _apply_cancel(
     payload = intent["payload"] or {}
     listing_id = payload["listing_id"]
     row = conn.execute(
-        "SELECT seller_id FROM marketplace WHERE listing_id = ?", (listing_id,)
+        "SELECT seller_id, item FROM marketplace WHERE listing_id = ?",
+        (listing_id,),
     ).fetchone()
     if row is None:
         raise MarketRefusal("listing_not_found", "Listing not found")
-    _check_cancel_custody(conn, intent["custodian_id"], intent["soul_id"],
-                          row["seller_id"])
-    cursor = conn.execute(
-        "DELETE FROM marketplace WHERE listing_id = ?", (listing_id,)
+    _check_cancel_custody(
+        conn, intent["custodian_id"], intent["soul_id"], row["seller_id"]
     )
+    cursor = conn.execute("DELETE FROM marketplace WHERE listing_id = ?", (listing_id,))
     if cursor.rowcount == 0:
         raise MarketRefusal("listing_not_found", "Listing not found")
+    # Issue #34: a cancelled resource listing returns the escrowed
+    # items to the seller's inventory.
+    cancelled = resources.resource_listing(json.loads(row["item"]))
+    if cancelled is not None:
+        item_name, qty = cancelled
+        resources.add_item(conn, row["seller_id"], item_name, qty)
     _write_ledger(
         conn, tick_id, intent["intent_id"], [(LEDGER_MEMO, intent["soul_id"], 0.0)]
     )
@@ -522,9 +548,7 @@ def _settle_once(tick: Any, intent: dict[str, Any]) -> None:
                 "soul_id": intent["soul_id"],
             }
             if status == "adjudicated":
-                payload["result"] = {
-                    k: v for k, v in result.items() if k != "item"
-                }
+                payload["result"] = {k: v for k, v in result.items() if k != "item"}
             else:
                 payload["reason"] = result["reason"]
             persistence.append_event(conn, tick.tick_id, event, payload)
@@ -583,9 +607,7 @@ def adjudicate_market_intent(tick: Any, intent: dict[str, Any]) -> None:
     try:
         _settle_once(tick, intent)
     except Exception:
-        logger.exception(
-            "market adjudication failed: %s", intent["intent_id"]
-        )
+        logger.exception("market adjudication failed: %s", intent["intent_id"])
         _compensate_reject(tick, intent)
 
 
@@ -593,9 +615,7 @@ def _baseline_key(soul_id: str) -> str:
     return f"ledger_base:{soul_id}"
 
 
-def verify_balances(
-    conn: sqlite3.Connection, repair: bool = False
-) -> dict[str, Any]:
+def verify_balances(conn: sqlite3.Connection, repair: bool = False) -> dict[str, Any]:
     """Recompute cached balances from the ledger and compare.
 
     souls.essence and the essence_fund global are caches; the ledger is

@@ -51,6 +51,7 @@ from . import biology
 from . import dormancy
 from . import affection
 from . import agents
+from . import resources
 from .agents import metering
 
 logger = logging.getLogger("soulscape_hub")
@@ -185,8 +186,10 @@ class WorldTick:
                     metering.adjudicate_metering_intent(self, intent)
                 elif intent["kind"] in agents.consume.CONSUME_KINDS:
                     agents.consume.adjudicate_consume(
-                        self, intent, agents.reflex.NullProvider()
+                        self, intent, resources.node_provider()
                     )
+                elif intent["kind"] in resources.RESOURCE_KINDS:
+                    resources.adjudicate_gather(self, intent)
                 elif intent["kind"] == presence_module.KIND_TAMER_PRESENCE:
                     presence_module.adjudicate_presence_intent(self, intent)
                 elif intent["kind"] in affection.AFFECTION_KINDS:
@@ -449,6 +452,14 @@ class WorldTick:
                     moved += 1
             self.vision.rebuild()
             coarse_events: dict[str, dict] = {}
+            # Issue #34: resource-node respawn sweep every 100 ticks
+            # (0.05 Hz). Silent unless nodes regrow; never raises out.
+            if self.tick_id % resources.RESPAWN_SWEEP_EVERY_TICKS == 0:
+                try:
+                    with database.get_db() as conn:
+                        resources.respawn_sweep(conn, time.time())
+                except Exception:
+                    logger.exception("resource respawn sweep failed")
             if self.tick_id % world.COARSE_DIFF_EVERY_TICKS == 0:
                 coarse_events = self.vision.diff_coarse()
             # Issue #32: mailbag expiry sweep every 60 s (no new thread;
@@ -539,7 +550,7 @@ class WorldTick:
             self.agent_pool.run_thinks(
                 reflex_ids,
                 self.vision,
-                agents.reflex.NullProvider(),
+                resources.node_provider(),
                 self.tick_id,
                 now,
                 deliberate_ids=set(escalations),

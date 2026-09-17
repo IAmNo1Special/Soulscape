@@ -131,9 +131,7 @@ def plot_at(
     return gx, gy
 
 
-def ring_of(
-    grid_x: int, grid_y: int, bounds: tuple[float, float] | None = None
-) -> int:
+def ring_of(grid_x: int, grid_y: int, bounds: tuple[float, float] | None = None) -> int:
     ox, oy = origin_plot(bounds)
     return max(abs(grid_x - ox), abs(grid_y - oy))
 
@@ -142,9 +140,7 @@ def is_road_ring(ring: int) -> bool:
     return ring > 0 and ring % 3 == 0
 
 
-def kind_of(
-    grid_x: int, grid_y: int, bounds: tuple[float, float] | None = None
-) -> str:
+def kind_of(grid_x: int, grid_y: int, bounds: tuple[float, float] | None = None) -> str:
     ring = ring_of(grid_x, grid_y, bounds)
     if ring == 0:
         return KIND_COMMONS
@@ -184,9 +180,7 @@ def allocation_order(
     return order
 
 
-def plot_for_claim_seq(
-    n: int, bounds: tuple[float, float] | None = None
-) -> str | None:
+def plot_for_claim_seq(n: int, bounds: tuple[float, float] | None = None) -> str | None:
     """Pure allocation formula: the plot the nth claim takes. None when
     n is out of range (no plots left)."""
     if n < 1:
@@ -225,9 +219,7 @@ def seed_plots(conn: sqlite3.Connection) -> int:
 
 
 def get_plot(conn: sqlite3.Connection, plot_id: str) -> dict[str, Any] | None:
-    row = conn.execute(
-        "SELECT * FROM plots WHERE plot_id = ?", (plot_id,)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM plots WHERE plot_id = ?", (plot_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -252,8 +244,7 @@ def can_enter_plot(
     only their owner and the operator."""
     gx, gy = plot_at(x, y)
     row = conn.execute(
-        "SELECT kind, owner_type, owner_id, access_policy FROM plots "
-        "WHERE plot_id = ?",
+        "SELECT kind, owner_type, owner_id, access_policy FROM plots WHERE plot_id = ?",
         (plot_id_for(gx, gy),),
     ).fetchone()
     if row is None:
@@ -371,8 +362,7 @@ def _release_escrow(conn: sqlite3.Connection, intent_id: str) -> bool:
     """Refund a held claim escrow. A refund is a funding refresh: it can
     wake a dormant soul (soul_woke journaled)."""
     row = conn.execute(
-        "SELECT soul_id, amount FROM escrows "
-        "WHERE intent_id = ? AND status = 'held'",
+        "SELECT soul_id, amount FROM escrows WHERE intent_id = ? AND status = 'held'",
         (intent_id,),
     ).fetchone()
     if row is None:
@@ -474,8 +464,7 @@ def _apply_claim(
     intent_id = intent["intent_id"]
     claimant_soul_id = payload["claimant_soul_id"]
     access_policy = payload.get("access_policy", ACCESS_OPEN)
-    _check_claimant(conn, intent["custodian_id"], intent["soul_id"],
-                    claimant_soul_id)
+    _check_claimant(conn, intent["custodian_id"], intent["soul_id"], claimant_soul_id)
     claimant = conn.execute(
         "SELECT 1 FROM souls WHERE soul_id = ?", (claimant_soul_id,)
     ).fetchone()
@@ -493,8 +482,7 @@ def _apply_claim(
         extra = round(fee - held, 2)
         essence_before = dormancy.cached_essence(conn, claimant_soul_id)
         cursor = conn.execute(
-            "UPDATE souls SET essence = essence - ? "
-            "WHERE soul_id = ? AND essence >= ?",
+            "UPDATE souls SET essence = essence - ? WHERE soul_id = ? AND essence >= ?",
             (extra, claimant_soul_id, extra),
         )
         if cursor.rowcount == 0:
@@ -520,9 +508,11 @@ def _apply_claim(
     conn.execute(
         "UPDATE globals SET value = ? WHERE key = ?", (float(seq), SEQ_GLOBAL_KEY)
     )
+    # Issue #34: claimed private plots are excluded from resource-node
+    # generation; nodes already on the plot are removed at claim time.
+    conn.execute("DELETE FROM resource_nodes WHERE plot_id = ?", (plot_id,))
     conn.execute(
-        "UPDATE escrows SET status = 'applied' "
-        "WHERE intent_id = ? AND status = 'held'",
+        "UPDATE escrows SET status = 'applied' WHERE intent_id = ? AND status = 'held'",
         (intent_id,),
     )
     conn.execute(

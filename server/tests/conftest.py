@@ -76,6 +76,7 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM escrows")
     cursor.execute("DELETE FROM ledger")
     cursor.execute("DELETE FROM plots")
+    cursor.execute("DELETE FROM resource_nodes")
     cursor.execute("DELETE FROM llm_keys")
     cursor.execute("DELETE FROM llm_usage")
     cursor.execute("DELETE FROM quip_budgets")
