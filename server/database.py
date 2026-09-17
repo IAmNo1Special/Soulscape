@@ -46,9 +46,12 @@ def verify_secret_hash(secret: str, secret_hash: str) -> bool:
         return False
 
 
-def create_ws_session(owner_id: str, soul_id: str, hmac_key: str, ttl_seconds: int = 86400) -> str:
+def create_ws_session(
+    owner_id: str, soul_id: str, hmac_key: str, ttl_seconds: int = 86400
+) -> str:
     """Create a new WebSocket session with HMAC key. Returns session_id."""
     import secrets as pysecrets
+
     session_id = pysecrets.token_urlsafe(32)
     now = time.time()
     with get_db() as conn:
@@ -56,7 +59,16 @@ def create_ws_session(owner_id: str, soul_id: str, hmac_key: str, ttl_seconds: i
         cursor.execute(
             """INSERT INTO ws_sessions (session_id, owner_id, soul_id, hmac_key, created_at, last_used_at, expires_at, used_nonces)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, owner_id, soul_id, hmac_key, now, now, now + ttl_seconds, "[]"),
+            (
+                session_id,
+                owner_id,
+                soul_id,
+                hmac_key,
+                now,
+                now,
+                now + ttl_seconds,
+                "[]",
+            ),
         )
         conn.commit()
     return session_id
@@ -83,12 +95,15 @@ def get_ws_session(session_id: str) -> dict | None:
     return None
 
 
-def validate_and_store_nonce(session_id: str, nonce: str, max_age_seconds: int = 300) -> bool:
+def validate_and_store_nonce(
+    session_id: str, nonce: str, max_age_seconds: int = 300
+) -> bool:
     """
     Validate a nonce hasn't been used recently and store it.
     Returns True if nonce is new, False if replay detected.
     """
     import json
+
     now = time.time()
     cutoff = now - max_age_seconds
     with get_db() as conn:
@@ -131,6 +146,91 @@ def cleanup_expired_ws_sessions() -> int:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM ws_sessions WHERE expires_at <= ?", (now,))
+        conn.commit()
+        return cursor.rowcount
+
+
+def create_tamer(tamer_id: str, username: str, password_hash: str) -> None:
+    """Insert a new tamer. Raises sqlite3.IntegrityError on duplicate."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO tamers (tamer_id, username, password_hash, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (tamer_id, username, password_hash, time.time()),
+        )
+        conn.commit()
+
+
+def get_tamer_by_username(username: str) -> dict | None:
+    """Fetch a tamer row by username, or None."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tamer_id, username, password_hash, created_at "
+            "FROM tamers WHERE username = ?",
+            (username,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def create_tamer_session(tamer_id: str, session_hash: str, expires_at: float) -> str:
+    """Store a hashed tamer session. Returns session_id."""
+    import secrets as pysecrets
+
+    session_id = pysecrets.token_urlsafe(32)
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO tamer_sessions
+               (session_id, tamer_id, session_hash, created_at, expires_at,
+                revoked)
+               VALUES (?, ?, ?, ?, ?, 0)""",
+            (session_id, tamer_id, session_hash, now, expires_at),
+        )
+        conn.commit()
+    return session_id
+
+
+def get_tamer_session(session_hash: str) -> dict | None:
+    """Fetch a live tamer session by token hash. None if missing,
+    expired, or revoked."""
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT s.session_id, s.tamer_id, t.username, s.expires_at
+               FROM tamer_sessions s
+               JOIN tamers t ON t.tamer_id = s.tamer_id
+               WHERE s.session_hash = ? AND s.revoked = 0
+                 AND s.expires_at > ?""",
+            (session_hash, now),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def revoke_tamer_session(session_hash: str) -> bool:
+    """Revoke a tamer session by token hash. True if one was revoked."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE tamer_sessions SET revoked = 1 "
+            "WHERE session_hash = ? AND revoked = 0",
+            (session_hash,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_expired_tamer_sessions() -> int:
+    """Remove expired tamer sessions. Returns count deleted."""
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tamer_sessions WHERE expires_at <= ?", (now,))
         conn.commit()
         return cursor.rowcount
 
@@ -201,7 +301,10 @@ def get_rate_limit_status(owner_id: str) -> dict:
         )
         row = cursor.fetchone()
         if row:
-            tokens = min(row["max_tokens"], row["tokens"] + (now - row["last_refill"]) * row["refill_rate"])
+            tokens = min(
+                row["max_tokens"],
+                row["tokens"] + (now - row["last_refill"]) * row["refill_rate"],
+            )
             return {
                 "tokens": tokens,
                 "max_tokens": row["max_tokens"],
@@ -216,7 +319,7 @@ def get_rate_limit_status(owner_id: str) -> dict:
 
 # Movement validation constants
 MAX_BASE_SPEED = 300.0  # pixels per second base
-SPEED_PER_DEX = 5.0     # additional pixels per second per SPE stat point
+SPEED_PER_DEX = 5.0  # additional pixels per second per SPE stat point
 MAX_TELEPORT_DISTANCE = 50.0  # max allowed position jump between updates (pixels)
 SCREEN_BOUNDS = (1920, 1080)  # default, can be overridden
 
@@ -234,7 +337,7 @@ def validate_soul_movement(
 ) -> tuple[float, float]:
     """
     Validate and clamp soul movement server-side.
-    
+
     Returns (clamped_x, clamped_y) - the validated position.
     Raises ValueError if movement is invalid.
     """
@@ -265,13 +368,6 @@ def validate_soul_movement(
         )
 
     return new_x, new_y
-    """Creates a new SQLite connection with common pragmas."""
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
 
 
 @contextmanager
@@ -520,6 +616,35 @@ def init_db():
                     refill_rate REAL NOT NULL DEFAULT 50.0
                 )
             """)
+            # Tamer accounts (issue #8)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tamers (
+                    tamer_id TEXT PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tamer_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    tamer_id TEXT NOT NULL,
+                    session_hash TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (tamer_id) REFERENCES tamers (tamer_id)
+                        ON DELETE CASCADE
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tamers_username
+                ON tamers(username)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tamer_sessions_hash
+                ON tamer_sessions(session_hash)
+            """)
             _migrate_souls(cursor)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
@@ -542,6 +667,15 @@ def _migrate_souls(cursor) -> None:
     _add_column_if_missing(cursor, "souls", "secret_prefix TEXT")
     _add_column_if_missing(cursor, "souls", "updated_at REAL")
     _add_column_if_missing(cursor, "souls", "velocity TEXT")
+    _add_column_if_missing(cursor, "souls", "custodian_id TEXT")
+    cursor.execute(
+        "UPDATE souls SET custodian_id = owner_id "
+        "WHERE custodian_id IS NULL AND owner_id IS NOT NULL"
+    )
+    if cursor.rowcount:
+        logger.info(
+            f"Migration: backfilled souls.custodian_id on {cursor.rowcount} rows"
+        )
     cursor.execute("PRAGMA table_info(souls)")
     cols = {row["name"] for row in cursor.fetchall()}
     if "secret" in cols:
@@ -553,8 +687,7 @@ def _migrate_souls(cursor) -> None:
         for row in cursor.fetchall():
             secret_hash = hash_secret(row["secret"])
             cursor.execute(
-                "UPDATE souls SET secret_hash = ?, secret_prefix = ? "
-                "WHERE soul_id = ?",
+                "UPDATE souls SET secret_hash = ?, secret_prefix = ? WHERE soul_id = ?",
                 (secret_hash, secret_hash[:16], row["soul_id"]),
             )
             migrated += 1

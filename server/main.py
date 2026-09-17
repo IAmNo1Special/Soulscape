@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .database import init_db
-from .routers import marketplace, social, souls, websockets
+from .routers import marketplace, social, souls, tamers, websockets
 from .security import UserIdentity, get_api_key
 from .world_tick import TICK_HZ, WorldTick, hub_authoritative_enabled
 
@@ -122,6 +122,7 @@ async def debug_tick(identity: UserIdentity = Depends(get_api_key)):
 app.include_router(marketplace.router)
 app.include_router(social.router)
 app.include_router(souls.router)
+app.include_router(tamers.router)
 app.include_router(websockets.router)
 
 

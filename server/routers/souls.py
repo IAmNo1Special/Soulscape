@@ -12,7 +12,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import database
 from ..models import SoulResponse, SoulUpdate
-from ..security import UserIdentity, get_api_key, make_secret_record, generate_token_expiry, validate_secret
+from ..security import (
+    UserIdentity,
+    assert_custody,
+    get_api_key,
+    make_secret_record,
+    generate_token_expiry,
+    require_scoped,
+    validate_secret,
+)
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -75,6 +83,12 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(value, hi))
 
 
+def _lineage_id(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _validate_soul_state(
     s: dict, stored: dict | None, now: float
 ) -> tuple[dict, str | None]:
@@ -95,7 +109,9 @@ def _validate_soul_state(
             return {}, f"level decreased {stored_level} -> {level}"
         if xp < stored_xp:
             return {}, f"xp decreased {stored_xp} -> {xp}"
-        elapsed_hours = max((now - _to_float(stored.get("updated_at"), now)) / 3600.0, 1.0 / 3600.0)
+        elapsed_hours = max(
+            (now - _to_float(stored.get("updated_at"), now)) / 3600.0, 1.0 / 3600.0
+        )
         if (level - stored_level) / elapsed_hours > MAX_LEVEL_PER_HOUR:
             return {}, f"level gain too fast {stored_level} -> {level}"
         if (xp - stored_xp) / elapsed_hours > MAX_XP_PER_HOUR:
@@ -121,7 +137,10 @@ def _validate_soul_state(
             except (json.JSONDecodeError, TypeError, ValueError):
                 pass
         pos = stored_pos
-    out["position"] = [float(_clamp(pos[0], 0.0, MAX_POSITION)), float(_clamp(pos[1], 0.0, MAX_POSITION))]
+    out["position"] = [
+        float(_clamp(pos[0], 0.0, MAX_POSITION)),
+        float(_clamp(pos[1], 0.0, MAX_POSITION)),
+    ]
     vel = s.get("velocity", [0, 0])
     if (
         not isinstance(vel, (list, tuple))
@@ -160,7 +179,10 @@ def _validate_inventory_items(inventory: Any) -> list[dict]:
         except (TypeError, ValueError):
             continue
         clean.append(
-            {"name": name[:MAX_ITEM_NAME_LEN], "quantity": int(_clamp(quantity, 1, MAX_ITEM_QUANTITY))}
+            {
+                "name": name[:MAX_ITEM_NAME_LEN],
+                "quantity": int(_clamp(quantity, 1, MAX_ITEM_QUANTITY)),
+            }
         )
     return clean
 
@@ -168,59 +190,65 @@ def _validate_inventory_items(inventory: Any) -> list[dict]:
 @router.get("", response_model=list[SoulResponse])
 def get_souls(
     owner_id: str | None = Query(default=None),
-    identity: UserIdentity = Depends(get_api_key),
+    custodian_id: str | None = Query(default=None),
+    identity: UserIdentity = Depends(require_scoped),
 ):
-    """Returns soul states. Optionally filter by owner_id."""
-    # IDOR Mitigation: Users can only query their own ID
-    if identity.is_user:
-        if owner_id and owner_id != identity.owner_id:
+    """Returns soul states. Optionally filter by custodian_id
+    (legacy owner_id accepted during the migration window)."""
+    # IDOR Mitigation: non-operators are scoped to their own custody.
+    effective = custodian_id or owner_id
+    if not identity.is_operator:
+        if effective and effective != identity.custodian_id:
             raise HTTPException(
                 status_code=403,
-                detail="You can only access souls you own.",
+                detail="Cross-custody access denied",
             )
-        owner_id = identity.owner_id
+        effective = identity.custodian_id
 
     try:
         with database.get_db() as conn:
             cursor = conn.cursor()
-            if owner_id:
-                if identity.is_operator and owner_id != identity.owner_id:
+            if effective:
+                if identity.is_operator and effective != identity.owner_id:
                     database.audit_log(
-                        identity.id, "souls_view_other_owner",
-                        target_type="owner", target_id=owner_id,
+                        identity.id,
+                        "souls_view_other_custodian",
+                        target_type="custodian",
+                        target_id=effective,
                     )
                 cursor.execute(
-                    "SELECT soul_id, owner_id, name, first_name, family_name, "
-                    "species, gender, level, essence, hp, max_hp, satiety, "
-                    "hydration, xp, position, velocity, hometown, birth_date, activity, "
-                    "mother_id, father_id, orb_color, aura_color, aura_visible, "
-                    "stat_hp_base, stat_atk_base, stat_def_base, "
-                    "stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base, "
-                    "stat_hp_iv, stat_atk_iv, stat_def_iv, "
+                    "SELECT soul_id, owner_id, custodian_id, name, first_name, "
+                    "family_name, species, gender, level, essence, hp, max_hp, "
+                    "satiety, hydration, xp, position, velocity, hometown, "
+                    "birth_date, activity, mother_id, father_id, orb_color, "
+                    "aura_color, aura_visible, stat_hp_base, stat_atk_base, "
+                    "stat_def_base, stat_spa_base, stat_spd_base, stat_spe_base, "
+                    "stat_vis_base, stat_hp_iv, stat_atk_iv, stat_def_iv, "
                     "stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv, "
-                    "stat_hp_ev, stat_atk_ev, stat_def_ev, "
-                    "stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev, "
-                    "nature FROM souls WHERE owner_id = ?",
-                    (owner_id,),
+                    "stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, "
+                    "stat_spd_ev, stat_spe_ev, stat_vis_ev, nature "
+                    "FROM souls WHERE COALESCE(custodian_id, owner_id) = ?",
+                    (effective,),
                 )
             else:
                 if identity.is_operator:
                     database.audit_log(
-                        identity.id, "souls_view_all",
-                        target_type="souls", target_id="all",
+                        identity.id,
+                        "souls_view_all",
+                        target_type="souls",
+                        target_id="all",
                     )
                 cursor.execute(
-                    "SELECT soul_id, owner_id, name, first_name, family_name, "
-                    "species, gender, level, essence, hp, max_hp, satiety, "
-                    "hydration, xp, position, velocity, hometown, birth_date, activity, "
-                    "mother_id, father_id, orb_color, aura_color, aura_visible, "
-                    "stat_hp_base, stat_atk_base, stat_def_base, "
-                    "stat_spa_base, stat_spd_base, stat_spe_base, stat_vis_base, "
-                    "stat_hp_iv, stat_atk_iv, stat_def_iv, "
+                    "SELECT soul_id, owner_id, custodian_id, name, first_name, "
+                    "family_name, species, gender, level, essence, hp, max_hp, "
+                    "satiety, hydration, xp, position, velocity, hometown, "
+                    "birth_date, activity, mother_id, father_id, orb_color, "
+                    "aura_color, aura_visible, stat_hp_base, stat_atk_base, "
+                    "stat_def_base, stat_spa_base, stat_spd_base, stat_spe_base, "
+                    "stat_vis_base, stat_hp_iv, stat_atk_iv, stat_def_iv, "
                     "stat_spa_iv, stat_spd_iv, stat_spe_iv, stat_vis_iv, "
-                    "stat_hp_ev, stat_atk_ev, stat_def_ev, "
-                    "stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev, "
-                    "nature FROM souls"
+                    "stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, "
+                    "stat_spd_ev, stat_spe_ev, stat_vis_ev, nature FROM souls"
                 )
             souls = []
             for row in cursor.fetchall():
@@ -248,7 +276,13 @@ def get_souls(
 
             for s in souls:
                 s["inventory"] = inv_map.get(s["soul_id"], {})
-                for key in ["orb_color", "aura_color", "hometown", "position", "velocity"]:
+                for key in [
+                    "orb_color",
+                    "aura_color",
+                    "hometown",
+                    "position",
+                    "velocity",
+                ]:
                     if (
                         s.get(key)
                         and isinstance(s[key], str)
@@ -265,17 +299,19 @@ def get_souls(
 
 
 @router.post("")
-def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_key)):
-    """Updates souls for a specific owner. Expects {owner_id: str, souls: [...]}."""
-    # IDOR Mitigation: Derive owner_id from identity
-    owner_id = payload.owner_id
-    if identity.is_user:
-        owner_id = identity.owner_id
+def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(require_scoped)):
+    """Updates souls for a custodian. Expects {custodian_id: str, souls: [...]}.
+    Legacy owner_id is accepted during the migration window."""
+    # IDOR Mitigation: non-operators are scoped to their own custody.
+    custodian_id = payload.custodian_id or payload.owner_id
+    if not custodian_id:
+        raise HTTPException(
+            status_code=400,
+            detail="custodian_id (or legacy owner_id) is required",
+        )
+    assert_custody(identity, custodian_id)
 
     souls = payload.souls
-
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="owner_id is required")
 
     try:
         now = time.time()
@@ -285,19 +321,25 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
             cursor.execute(
                 "SELECT soul_id, secret_hash, secret_prefix, token_expiry, "
                 "essence, xp, level, position, velocity, updated_at "
-                "FROM souls WHERE owner_id = ?",
-                (owner_id,),
+                "FROM souls WHERE COALESCE(custodian_id, owner_id) = ?",
+                (custodian_id,),
             )
-            stored_rows = {
-                row["soul_id"]: dict(row) for row in cursor.fetchall()
-            }
+            stored_rows = {row["soul_id"]: dict(row) for row in cursor.fetchall()}
 
-            # IDOR/Takeover Fix: Verify that all provided souls are either new or owned by this owner
+            # IDOR/Takeover Fix: Verify that all provided souls are either new or owned by this custodian
             for s in souls:
                 sid = s.get("soul_id")
-                cursor.execute("SELECT owner_id FROM souls WHERE soul_id = ?", (sid,))
+                cursor.execute(
+                    "SELECT custodian_id, owner_id FROM souls WHERE soul_id = ?",
+                    (sid,),
+                )
                 existing = cursor.fetchone()
-                if existing and existing["owner_id"] != owner_id:
+                existing_custodian = None
+                if existing:
+                    existing_custodian = (
+                        existing["custodian_id"] or existing["owner_id"]
+                    )
+                if existing and existing_custodian != custodian_id:
                     raise HTTPException(
                         status_code=403,
                         detail=f"Soul {sid} is owned by another user.",
@@ -324,8 +366,9 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                     valid_ids,
                 )
                 cursor.execute(
-                    f"DELETE FROM souls WHERE owner_id = ? AND soul_id IN ({placeholders})",
-                    [owner_id, *valid_ids],
+                    f"DELETE FROM souls WHERE COALESCE(custodian_id, owner_id) = ? "
+                    f"AND soul_id IN ({placeholders})",
+                    [custodian_id, *valid_ids],
                 )
             seen_ids = {s.get("soul_id") for s, _ in validated_souls}
             seen_ids |= {
@@ -339,8 +382,9 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                     stale_ids,
                 )
                 cursor.execute(
-                    f"DELETE FROM souls WHERE owner_id = ? AND soul_id IN ({placeholders})",
-                    [owner_id, *stale_ids],
+                    f"DELETE FROM souls WHERE COALESCE(custodian_id, owner_id) = ? "
+                    f"AND soul_id IN ({placeholders})",
+                    [custodian_id, *stale_ids],
                 )
             for s, validated in validated_souls:
                 soul_id = s.get("soul_id")
@@ -371,7 +415,7 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO souls (
-                        soul_id, owner_id, name, first_name, family_name, species, gender,
+                        soul_id, owner_id, custodian_id, name, first_name, family_name, species, gender,
                         level, xp, mother_id, father_id, hp, max_hp, satiety, hydration,
                         essence, position, velocity, hometown, birth_date, activity,
                         orb_color, aura_color, aura_visible,
@@ -380,20 +424,20 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         stat_hp_ev, stat_atk_ev, stat_def_ev, stat_spa_ev, stat_spd_ev, stat_spe_ev, stat_vis_ev,
                         nature, secret_hash, secret_prefix, updated_at, token_expiry, is_revoked
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?
+                        ?, ?, ?, ?, ?, ?
                     )
                 """,
                     (
                         soul_id,
-                        owner_id,
+                        custodian_id,
+                        custodian_id,
                         s.get("name"),
                         s.get("first_name"),
                         s.get("family_name"),
@@ -401,8 +445,8 @@ def update_souls(payload: SoulUpdate, identity: UserIdentity = Depends(get_api_k
                         s.get("gender"),
                         validated["level"],
                         validated["xp"],
-                        s.get("mother_id"),
-                        s.get("father_id"),
+                        _lineage_id(s.get("mother_id")),
+                        _lineage_id(s.get("father_id")),
                         validated["hp"],
                         validated["max_hp"],
                         validated["satiety"],

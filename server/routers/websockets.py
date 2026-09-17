@@ -28,9 +28,7 @@ router = APIRouter()
 
 def _verify_hmac(hmac_key: str, payload: str, signature: str) -> bool:
     """Verify HMAC-SHA256 signature."""
-    expected = hmac.new(
-        hmac_key.encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()
+    expected = hmac.new(hmac_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
@@ -52,7 +50,10 @@ async def websocket_presence(
 
     # Verify authorization
     is_authorized = (
-        identity.is_operator or identity.owner_id == owner_id or identity.id == owner_id
+        identity.is_operator
+        or identity.owner_id == owner_id
+        or identity.id == owner_id
+        or (identity.custodian_id is not None and identity.custodian_id == owner_id)
     )
 
     if not is_authorized:
@@ -68,13 +69,13 @@ async def websocket_presence(
         )
         return
 
-    # Fetch owned souls for session creation and validation
+    # Fetch custodied souls for session creation and validation
     owned_soul_ids: set = set()
     if identity.is_user:
         with database.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT soul_id FROM souls WHERE owner_id = ?",
+                "SELECT soul_id FROM souls WHERE COALESCE(custodian_id, owner_id) = ?",
                 (owner_id,),
             )
             owned_soul_ids = {row["soul_id"] for row in cursor.fetchall()}
@@ -111,13 +112,17 @@ async def websocket_presence(
                     continue
 
                 # Rate limit check (skip for operators)
-                if identity.is_user and not database.check_rate_limit(owner_id, cost=1.0):
+                if identity.is_user and not database.check_rate_limit(
+                    owner_id, cost=1.0
+                ):
                     logger.warning(f"Rate limit exceeded for {owner_id}")
-                    await websocket.send_json({
-                        "type": "error",
-                        "code": "RATE_LIMITED",
-                        "message": "Too many requests",
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "code": "RATE_LIMITED",
+                            "message": "Too many requests",
+                        }
+                    )
                     continue
 
                 message = json.loads(data)
@@ -129,7 +134,9 @@ async def websocket_presence(
                     session_id_recv = message.get("session_id")
                     nonce = message.get("nonce")
                     if not received_sig or not session_id_recv or not nonce:
-                        logger.warning(f"Missing HMAC signature/session_id/nonce from {owner_id}")
+                        logger.warning(
+                            f"Missing HMAC signature/session_id/nonce from {owner_id}"
+                        )
                         await websocket.close(
                             code=status.WS_1008_POLICY_VIOLATION,
                             reason="Missing signature/session/nonce",
@@ -138,7 +145,9 @@ async def websocket_presence(
 
                     session = database.get_ws_session(session_id_recv)
                     if not session or session["owner_id"] != owner_id:
-                        logger.warning(f"Invalid session from {owner_id}: {session_id_recv}")
+                        logger.warning(
+                            f"Invalid session from {owner_id}: {session_id_recv}"
+                        )
                         await websocket.close(
                             code=status.WS_1008_POLICY_VIOLATION,
                             reason="Invalid session",
@@ -147,7 +156,9 @@ async def websocket_presence(
 
                     # Verify nonce (replay protection)
                     if not database.validate_and_store_nonce(session_id_recv, nonce):
-                        logger.warning(f"Replay attack detected from {owner_id}: nonce={nonce}")
+                        logger.warning(
+                            f"Replay attack detected from {owner_id}: nonce={nonce}"
+                        )
                         await websocket.close(
                             code=status.WS_1008_POLICY_VIOLATION,
                             reason="Replay detected",
@@ -155,8 +166,12 @@ async def websocket_presence(
                         return
 
                     # Verify HMAC over the souls payload
-                    souls_payload = json.dumps(message.get("souls", []), separators=(",", ":"))
-                    if not _verify_hmac(session["hmac_key"], souls_payload, received_sig):
+                    souls_payload = json.dumps(
+                        message.get("souls", []), separators=(",", ":")
+                    )
+                    if not _verify_hmac(
+                        session["hmac_key"], souls_payload, received_sig
+                    ):
                         logger.warning(f"HMAC verification failed from {owner_id}")
                         await websocket.close(
                             code=status.WS_1008_POLICY_VIOLATION,
@@ -195,19 +210,37 @@ async def websocket_presence(
                                 row = cursor.fetchone()
                                 if row:
                                     import json as _json
-                                    prev_pos = _json.loads(row["position"]) if row["position"] else [0, 0]
+
+                                    prev_pos = (
+                                        _json.loads(row["position"])
+                                        if row["position"]
+                                        else [0, 0]
+                                    )
                                     spe_stat = row["stat_spe_base"] or 0
-                                    prev_x, prev_y = float(prev_pos[0]), float(prev_pos[1])
+                                    prev_x, prev_y = (
+                                        float(prev_pos[0]),
+                                        float(prev_pos[1]),
+                                    )
                                     # Use a reasonable dt estimate (client sends ~30Hz)
                                     dt = 1.0 / 30.0
                                     try:
-                                        clamped_x, clamped_y = database.validate_soul_movement(
-                                            sid, prev_x, prev_y, float(new_x), float(new_y), dt, spe_stat
+                                        clamped_x, clamped_y = (
+                                            database.validate_soul_movement(
+                                                sid,
+                                                prev_x,
+                                                prev_y,
+                                                float(new_x),
+                                                float(new_y),
+                                                dt,
+                                                spe_stat,
+                                            )
                                         )
                                         soul["x"] = clamped_x
                                         soul["y"] = clamped_y
                                     except ValueError as e:
-                                        logger.warning(f"Movement validation failed for {sid}: {e}")
+                                        logger.warning(
+                                            f"Movement validation failed for {sid}: {e}"
+                                        )
                                         continue
                         validated_souls.append(soul)
 

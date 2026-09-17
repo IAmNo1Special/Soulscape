@@ -65,13 +65,15 @@ class MessageDelete(BaseModel):
 
 
 class SoulUpdate(BaseModel):
-    owner_id: str
+    owner_id: Optional[str] = None
+    custodian_id: Optional[str] = None
     souls: List[Dict[str, Any]]
 
 
 class SoulResponse(BaseModel):
     soul_id: str
     owner_id: str
+    custodian_id: Optional[str] = None
     name: Optional[str] = None
     first_name: Optional[str] = None
     family_name: Optional[str] = None
@@ -117,3 +119,25 @@ class SoulResponse(BaseModel):
     inventory: Dict[str, int] = {}
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TamerRegister(BaseModel):
+    username: str
+    password: str
+
+
+class TamerLogin(BaseModel):
+    username: str
+    password: str
+
+
+class TamerResponse(BaseModel):
+    tamer_id: str
+    username: str
+
+
+class TamerSessionResponse(BaseModel):
+    token: str
+    tamer_id: str
+    username: str
+    expires_at: float

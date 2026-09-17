@@ -71,9 +71,9 @@ def test_get_souls_json_decode_error(client: TestClient):
 
 
 def test_update_souls_missing_owner(client: TestClient):
-    # Test line 561: owner_id is required
+    # owner_id/custodian_id is required: 400 when neither is provided
     response = client.post("/souls", json={"souls": []})
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_operator_delete_reply(client: TestClient, register_soul):
