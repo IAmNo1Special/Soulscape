@@ -42,6 +42,7 @@ import time
 
 from . import database
 from . import dormancy
+from . import inventory
 from . import persistence
 
 logger = logging.getLogger("soulscape_hub")
@@ -364,61 +365,19 @@ def inventory_for(conn: sqlite3.Connection, soul_id: str) -> dict[str, int]:
 
 def inventory_qty(conn: sqlite3.Connection, soul_id: str, item: str) -> int:
     _check_item(item)
-    row = conn.execute(
-        "SELECT quantity FROM soul_inventory WHERE soul_id = ? AND item_name = ?",
-        (soul_id, item),
-    ).fetchone()
-    return int(row["quantity"]) if row else 0
+    return inventory.qty(conn, database.ACTOR_SOUL, soul_id, item)
 
 
 def add_item(conn: sqlite3.Connection, soul_id: str, item: str, qty: int) -> int:
     """Add qty units; returns the new total. qty must be positive."""
     _check_item(item)
-    if qty <= 0:
-        raise ValueError("qty must be positive")
-    row = conn.execute(
-        "SELECT quantity FROM soul_inventory WHERE soul_id = ? AND item_name = ?",
-        (soul_id, item),
-    ).fetchone()
-    if row is None:
-        conn.execute(
-            "INSERT INTO soul_inventory (soul_id, item_name, quantity, metadata) "
-            "VALUES (?, ?, ?, NULL)",
-            (soul_id, item, qty),
-        )
-        return qty
-    total = int(row["quantity"]) + qty
-    conn.execute(
-        "UPDATE soul_inventory SET quantity = ? WHERE soul_id = ? AND item_name = ?",
-        (total, soul_id, item),
-    )
-    return total
+    return inventory.add(conn, database.ACTOR_SOUL, soul_id, item, qty)
 
 
 def remove_item(conn: sqlite3.Connection, soul_id: str, item: str, qty: int) -> bool:
     """Remove qty units; False (no write) when the balance is short."""
     _check_item(item)
-    if qty <= 0:
-        raise ValueError("qty must be positive")
-    row = conn.execute(
-        "SELECT quantity FROM soul_inventory WHERE soul_id = ? AND item_name = ?",
-        (soul_id, item),
-    ).fetchone()
-    if row is None or int(row["quantity"]) < qty:
-        return False
-    total = int(row["quantity"]) - qty
-    if total == 0:
-        conn.execute(
-            "DELETE FROM soul_inventory WHERE soul_id = ? AND item_name = ?",
-            (soul_id, item),
-        )
-    else:
-        conn.execute(
-            "UPDATE soul_inventory SET quantity = ? "
-            "WHERE soul_id = ? AND item_name = ?",
-            (total, soul_id, item),
-        )
-    return True
+    return inventory.remove(conn, database.ACTOR_SOUL, soul_id, item, qty)
 
 
 # ---------------------------------------------------------------------------

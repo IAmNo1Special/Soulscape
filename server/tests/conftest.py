@@ -69,6 +69,7 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM messages")
     cursor.execute("DELETE FROM souls")
     cursor.execute("DELETE FROM soul_inventory")
+    cursor.execute("DELETE FROM tamer_inventory")
     cursor.execute("DELETE FROM ws_sessions")
     cursor.execute("DELETE FROM tamer_sessions")
     cursor.execute("DELETE FROM tamers")

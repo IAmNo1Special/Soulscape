@@ -47,6 +47,11 @@ def rl_tamer():
             "UPDATE souls SET essence = 100000 WHERE soul_id = ?",
             (tamer_id,),
         )
+        conn.executemany(
+            "INSERT INTO soul_inventory (soul_id, item_name, quantity) "
+            "VALUES (?, ?, 1)",
+            [(tamer_id, f"item{i}") for i in range(30)],
+        )
         conn.commit()
     return {"tamer_id": tamer_id, "token": token, "client": tc}
 

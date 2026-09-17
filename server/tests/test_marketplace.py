@@ -1,5 +1,17 @@
 from fastapi.testclient import TestClient
 
+from .. import database
+
+
+def _seed_inventory(soul_id, item_name, qty=10):
+    with database.get_db() as conn:
+        conn.execute(
+            "INSERT INTO soul_inventory (soul_id, item_name, quantity) "
+            "VALUES (?, ?, ?)",
+            (soul_id, item_name, qty),
+        )
+        conn.commit()
+
 
 def test_get_marketplace_empty(client: TestClient):
     response = client.get("/marketplace")
@@ -11,6 +23,7 @@ def test_get_marketplace_empty(client: TestClient):
 
 def test_add_listing(client: TestClient, register_soul):
     register_soul("123", name="Test Seller")
+    _seed_inventory("123", "Magic Orb")
     listing_payload = {
         "seller_id": "123",
         "seller_name": "Test Seller",
@@ -35,6 +48,7 @@ def test_buy_item(client: TestClient, register_soul):
     # Add a listing first
     register_soul("123", name="Test Seller")
     register_soul("456", essence=500.0, name="Test Buyer")
+    _seed_inventory("123", "Old Boot")
 
     listing_payload = {
         "seller_id": "123",

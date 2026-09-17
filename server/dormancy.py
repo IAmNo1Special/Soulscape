@@ -240,19 +240,35 @@ def note_essence_change(
     return now_dormant, True
 
 
-def mint_starter_grant(conn: sqlite3.Connection, tick_id: int, soul_id: str) -> float:
-    """Write the newborn `mint` ledger entry for a soul's starter grant.
+def mint_starter_grant(
+    conn: sqlite3.Connection,
+    tick_id: int,
+    actor_type: str,
+    actor_id: str,
+    *,
+    intent_id: str | None = None,
+) -> float:
+    """Write the `mint` ledger entry for a starter grant.
 
-    Called at birth (POST /souls) for truly-new souls only, in the same
-    transaction as the soul INSERT. The cached souls.essence is set to
+    Called at birth for truly-new souls (POST /souls) and at account
+    creation for new tamers (POST /tamers/register), in the same
+    transaction as the wallet INSERT. The cached wallet is set to
     STARTER_GRANT by the INSERT; this row is the ledger truth behind
     it, so conservation accounting stays exact.
     """
     now = time.time()
     conn.execute(
         "INSERT INTO ledger "
-        "(tick_id, intent_id, entry_type, soul_id, amount, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (tick_id, f"birth:{soul_id}", LEDGER_MINT, soul_id, STARTER_GRANT, now),
+        "(tick_id, intent_id, entry_type, actor_type, soul_id, amount, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            tick_id,
+            intent_id if intent_id is not None else f"birth:{actor_id}",
+            LEDGER_MINT,
+            actor_type,
+            actor_id,
+            STARTER_GRANT,
+            now,
+        ),
     )
     return STARTER_GRANT

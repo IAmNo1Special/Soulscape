@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from shared import protocol
 
+from .. import database
 from .. import viewport as vp
 
 
@@ -356,6 +357,13 @@ def test_economy_op_flows_through_marketplace_buy(
 ):
     register_soul("buyer1", essence=1000.0)
     register_soul("seller1", essence=100.0)
+    with database.get_db() as conn:
+        conn.execute(
+            "INSERT INTO soul_inventory (soul_id, item_name, quantity) "
+            "VALUES (?, ?, ?)",
+            ("seller1", "orb", 1),
+        )
+        conn.commit()
     listing = client.post(
         "/marketplace/list",
         json={

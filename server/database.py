@@ -15,6 +15,12 @@ from fastapi import HTTPException
 
 logger = logging.getLogger("soulscape_hub")
 
+#: Actor types for wallet-bearing entities (issue #40). Souls and tamers
+#: each hold an essence wallet and an inventory; ledger, escrow, and
+#: marketplace rows record which kind of actor a row belongs to.
+ACTOR_SOUL = "soul"
+ACTOR_TAMER = "tamer"
+
 # Argon2 hasher for soul secrets
 _hasher = PasswordHasher()
 
@@ -162,24 +168,12 @@ def cleanup_expired_ws_sessions() -> int:
         return cursor.rowcount
 
 
-def create_tamer(tamer_id: str, username: str, password_hash: str) -> None:
-    """Insert a new tamer. Raises sqlite3.IntegrityError on duplicate."""
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO tamers (tamer_id, username, password_hash, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (tamer_id, username, password_hash, time.time()),
-        )
-        conn.commit()
-
-
 def get_tamer_by_username(username: str) -> dict | None:
     """Fetch a tamer row by username, or None."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT tamer_id, username, password_hash, created_at "
+            "SELECT tamer_id, username, password_hash, created_at, essence "
             "FROM tamers WHERE username = ?",
             (username,),
         )
@@ -507,6 +501,7 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS marketplace (
                     listing_id TEXT PRIMARY KEY,
                     seller_id TEXT,
+                    seller_type TEXT NOT NULL DEFAULT 'soul',
                     seller_name TEXT,
                     item TEXT,
                     price REAL,
@@ -616,6 +611,20 @@ def init_db():
                     FOREIGN KEY (soul_id) REFERENCES souls (soul_id) ON DELETE CASCADE
                 )
                 """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tamer_inventory (
+                    inventory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tamer_id TEXT,
+                    item_name TEXT,
+                    quantity INTEGER,
+                    metadata TEXT,
+                    FOREIGN KEY (tamer_id) REFERENCES tamers (tamer_id) ON DELETE CASCADE
+                )
+                """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tamer_inventory_tamer_id
+                ON tamer_inventory(tamer_id)
+                """)
             # Globals Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS globals (
@@ -694,7 +703,8 @@ def init_db():
                     tamer_id TEXT PRIMARY KEY,
                     username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL,
+                    essence REAL NOT NULL DEFAULT 0.0
                 )
             """)
             cursor.execute("""
@@ -942,6 +952,7 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS escrows (
                     escrow_id TEXT PRIMARY KEY,
                     intent_id TEXT UNIQUE NOT NULL,
+                    actor_type TEXT NOT NULL DEFAULT 'soul',
                     soul_id TEXT NOT NULL,
                     amount REAL NOT NULL,
                     status TEXT NOT NULL DEFAULT 'held',
@@ -961,6 +972,7 @@ def init_db():
                     tick_id INTEGER NOT NULL,
                     intent_id TEXT NOT NULL,
                     entry_type TEXT NOT NULL,
+                    actor_type TEXT NOT NULL DEFAULT 'soul',
                     soul_id TEXT,
                     amount REAL NOT NULL,
                     created_at REAL NOT NULL
@@ -1145,6 +1157,7 @@ def init_db():
 
             expeditions_module.ensure_schema(conn)
             _migrate_souls(cursor)
+            _migrate_wallets(cursor)
         _migrate_social(conn)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
@@ -1160,6 +1173,15 @@ def _add_column_if_missing(cursor, table: str, column_def: str) -> None:
     if col_name not in existing:
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
         logger.info(f"Migration: added {table}.{col_name}")
+
+
+def _migrate_wallets(cursor) -> None:
+    _add_column_if_missing(cursor, "tamers", "essence REAL NOT NULL DEFAULT 0.0")
+    _add_column_if_missing(cursor, "ledger", "actor_type TEXT NOT NULL DEFAULT 'soul'")
+    _add_column_if_missing(cursor, "escrows", "actor_type TEXT NOT NULL DEFAULT 'soul'")
+    _add_column_if_missing(
+        cursor, "marketplace", "seller_type TEXT NOT NULL DEFAULT 'soul'"
+    )
 
 
 def _migrate_souls(cursor) -> None:

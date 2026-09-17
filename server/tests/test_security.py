@@ -51,6 +51,10 @@ def setup_data():
         )
         cursor.execute(
             "INSERT INTO soul_inventory (soul_id, item_name, quantity) VALUES (?, ?, ?)",
+            ("soul_1", "Fake Item", 5),
+        )
+        cursor.execute(
+            "INSERT INTO soul_inventory (soul_id, item_name, quantity) VALUES (?, ?, ?)",
             ("soul_2", "Herb", 3),
         )
 

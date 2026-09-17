@@ -837,7 +837,7 @@ def reconcile_escrows(conn: sqlite3.Connection) -> int:
         logger.info("reconcile_escrows: no escrows table yet")
         return 0
     rows = conn.execute(
-        "SELECT e.escrow_id, e.intent_id, e.soul_id, e.amount, "
+        "SELECT e.escrow_id, e.intent_id, e.actor_type, e.soul_id, e.amount, "
         "i.status AS intent_status "
         "FROM escrows e LEFT JOIN intents i "
         "ON i.intent_id = e.intent_id "
@@ -862,8 +862,14 @@ def reconcile_escrows(conn: sqlite3.Connection) -> int:
                     row["escrow_id"],
                 )
             else:
+                actor_type = row["actor_type"] or database.ACTOR_SOUL
+                if actor_type == database.ACTOR_TAMER:
+                    wallet_table, wallet_id_col = "tamers", "tamer_id"
+                else:
+                    wallet_table, wallet_id_col = "souls", "soul_id"
                 conn.execute(
-                    "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
+                    f"UPDATE {wallet_table} SET essence = essence + ? "
+                    f"WHERE {wallet_id_col} = ?",
                     (float(row["amount"]), row["soul_id"]),
                 )
                 conn.execute(

@@ -25,6 +25,7 @@ from ..models import SocialMessageNode
 from ..rate_limit import read_limit, social_write_limit
 from ..security import UserIdentity, get_api_key
 from ..sim_gateway import SimError, SimRefusal, SimUnreachable, gateway_for
+from .actor import rest_actor
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -50,35 +51,6 @@ def _refusal_http(refusal: social_lib.SocialRefusal) -> HTTPException:
         status_code=_REFUSAL_STATUS.get(refusal.reason, 400),
         detail=refusal.detail,
     )
-
-
-def _rest_actor(
-    identity: UserIdentity,
-    author_type: str | None = None,
-    author_id: str | None = None,
-) -> tuple[str, str, str | None]:
-    """Return (author_type, author_id, custodian_id) for a REST call.
-
-    Soul identities always author as themselves. Tamer identities
-    author as themselves, or as a soul they hold custody of (custody
-    is verified at enqueue/adjudication). Operators name the author
-    (defaulting to a soul author); the operator identity itself has
-    no essence wallet, so the named authoring soul always pays.
-    """
-    if identity.is_operator:
-        if not author_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Operator must specify author_id",
-            )
-        if author_type not in (None, "soul", "tamer"):
-            raise HTTPException(status_code=400, detail="Bad author_type")
-        return author_type or "soul", author_id, None
-    if identity.is_tamer:
-        if author_type == "soul" and author_id:
-            return "soul", author_id, identity.custodian_id
-        return "tamer", identity.id, identity.custodian_id
-    return "soul", identity.id, identity.custodian_id or identity.owner_id
 
 
 def _sim_503() -> HTTPException:
@@ -182,8 +154,11 @@ def create_post(
     identity: UserIdentity = Depends(get_api_key),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    author_type, author_id, custodian_id = _rest_actor(
-        identity, post.get("author_type"), post.get("author_id")
+    author_type, author_id, custodian_id = rest_actor(
+        identity,
+        post.get("author_type"),
+        post.get("author_id"),
+        operator_must_name=True,
     )
     payload = {
         "title": post.get("title", ""),
@@ -228,8 +203,11 @@ def reply_to_post(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     parent_id = reply_data.get("message_id")
-    author_type, author_id, custodian_id = _rest_actor(
-        identity, reply_data.get("author_type"), reply_data.get("author_id")
+    author_type, author_id, custodian_id = rest_actor(
+        identity,
+        reply_data.get("author_type"),
+        reply_data.get("author_id"),
+        operator_must_name=True,
     )
     payload = {
         "parent_id": parent_id,
@@ -274,10 +252,7 @@ def edit_message(
     identity: UserIdentity = Depends(get_api_key),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    if identity.is_operator:
-        author_type, author_id, custodian_id = "soul", identity.id, None
-    else:
-        author_type, author_id, custodian_id = _rest_actor(identity)
+    author_type, author_id, custodian_id = rest_actor(identity)
     payload = {"message_id": message_id, "body": edit.get("content", "")}
     try:
         record = _enqueue_and_settle(
@@ -311,10 +286,7 @@ def delete_message(
     identity: UserIdentity = Depends(get_api_key),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    if identity.is_operator:
-        author_type, author_id, custodian_id = "soul", identity.id, None
-    else:
-        author_type, author_id, custodian_id = _rest_actor(identity)
+    author_type, author_id, custodian_id = rest_actor(identity)
     payload = {"message_id": message_id}
     try:
         record = _enqueue_and_settle(

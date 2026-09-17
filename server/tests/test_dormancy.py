@@ -39,6 +39,15 @@ def _journal_types() -> list[str]:
         ]
 
 
+def _seed_inventory(soul_id, item_name, qty=10):
+    with database.get_db() as conn:
+        conn.execute(
+            "INSERT INTO soul_inventory (soul_id, item_name, quantity) "
+            "VALUES (?, ?, ?)",
+            (soul_id, item_name, qty),
+        )
+        conn.commit()
+
 def _drain_to_zero(soul_id: str) -> None:
     """Drain a soul to 0 through the same journaled path escrow code uses."""
     with database.get_db() as conn:
@@ -383,6 +392,7 @@ def test_update_does_not_remint(client: TestClient):
 def test_conservation_with_mint(client: TestClient, register_soul):
     register_soul("mint_seller", essence=100.0)
     register_soul("mint_buyer", essence=500.0)
+    _seed_inventory("mint_seller", "Orb")
     res = client.post(
         "/marketplace/list",
         json={"seller_id": "mint_seller", "seller_name": "S",
@@ -408,6 +418,8 @@ def test_dormant_seller_listing_stays_buyable_and_wakes(
 ):
     register_soul("dozy", essence=100.0)
     register_soul("shopper", essence=500.0)
+    _seed_inventory("dozy", "Relic")
+    _seed_inventory("dozy", "Other")
     res = client.post(
         "/marketplace/list",
         json={"seller_id": "dozy", "seller_name": "Dozy",
@@ -450,6 +462,7 @@ def test_dormant_seller_listing_stays_buyable_and_wakes(
 def test_dormant_buyer_rejected(client: TestClient, register_soul):
     register_soul("live_seller", essence=100.0)
     register_soul("flat_buyer", essence=500.0)
+    _seed_inventory("live_seller", "Orb")
     res = client.post(
         "/marketplace/list",
         json={"seller_id": "live_seller", "seller_name": "S",

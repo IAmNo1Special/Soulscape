@@ -29,6 +29,7 @@ from ..models import BuyRequest, MarketListing
 from ..rate_limit import market_write_limit, read_limit
 from ..security import UserIdentity, get_api_key
 from ..sim_gateway import SimError, SimRefusal, SimUnreachable, gateway_for
+from .actor import rest_actor
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -75,6 +76,8 @@ _REFUSAL_STATUS = {
     "buyer_not_found": 404,
     "seller_not_found": 400,
     "insufficient_funds": 400,
+    "insufficient_inventory": 400,
+    "item_unnamed": 400,
     "item_too_large": 400,
     "item_too_deep": 400,
     "custody": 403,
@@ -88,13 +91,11 @@ def _refusal_http(refusal: MarketRefusal) -> HTTPException:
     )
 
 
-def _rest_actor(
-    identity: UserIdentity, explicit_soul_id: str | None = None
-) -> tuple[str, str | None]:
-    """Return (intent soul_id, custodian_id) for a REST market call."""
-    if identity.is_operator:
-        return explicit_soul_id or identity.id, None
-    return identity.id, identity.custodian_id or identity.owner_id
+def _validate_actor_type(value: str | None, field: str) -> str:
+    actor_type = value or database.ACTOR_SOUL
+    if actor_type not in (database.ACTOR_SOUL, database.ACTOR_TAMER):
+        raise HTTPException(status_code=400, detail=f"Bad {field}")
+    return actor_type
 
 
 def _sim_503() -> HTTPException:
@@ -202,29 +203,39 @@ def add_listing(
 ):
     if listing.price <= 0:
         raise HTTPException(status_code=400, detail="Price must be greater than zero")
+    seller_type = _validate_actor_type(listing.seller_type, "seller_type")
+    # IDOR Mitigation: strictly derive the seller from the identity;
+    # operators may name any soul or tamer explicitly.
+    actor_type, actor_id, custodian_id = rest_actor(
+        identity, seller_type, listing.seller_id
+    )
+    if (
+        identity.is_tamer
+        and seller_type == database.ACTOR_SOUL
+        and not listing.seller_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="seller_id is required when seller_type is 'soul'",
+        )
 
     listing_data = listing.model_dump()
-    # IDOR Mitigation: Strictly derive seller_id from identity
-    seller_id = identity.id
-    if identity.is_operator and listing.seller_id:
-        seller_id = listing.seller_id
-
     payload = {
         "item": listing_data["item"],
         "price": listing_data["price"],
-        "seller_soul_id": seller_id,
+        "seller_type": actor_type,
+        "seller_soul_id": actor_id,
         "seller_name": listing_data["seller_name"],
     }
     if listing.listing_id:
         payload["listing_id"] = listing.listing_id
 
-    soul_id, custodian_id = _rest_actor(identity, seller_id)
     try:
         record = _enqueue_and_settle(
             request,
             identity,
             market.KIND_MARKET_LIST,
-            soul_id,
+            actor_id,
             custodian_id,
             payload,
             idempotency_key,
@@ -236,13 +247,13 @@ def add_listing(
         raise HTTPException(status_code=500, detail=str(e))
 
     if record["status"] == "adjudicated":
-        if identity.is_operator and identity.id != seller_id:
+        if identity.is_operator and identity.id != actor_id:
             database.audit_log(
                 identity.id,
                 "marketplace_list_override",
                 target_type="listing",
                 target_id=record["result"]["listing_id"],
-                details=f"seller_id={seller_id}",
+                details=f"seller_id={actor_id}",
             )
         _invalidate_cache()
         return {"status": "success", "listing_id": record["result"]["listing_id"]}
@@ -263,19 +274,33 @@ def buy_item(
     identity: UserIdentity = Depends(get_api_key),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    # IDOR Mitigation: Derive buyer_id from identity
-    buyer_id = buyer_data.buyer_id
-    if identity.is_user:
-        buyer_id = identity.id
+    # IDOR Mitigation: derive the buyer from the identity; operators
+    # may name any soul or tamer explicitly.
+    buyer_type = _validate_actor_type(buyer_data.buyer_type, "buyer_type")
+    actor_type, actor_id, custodian_id = rest_actor(
+        identity, buyer_type, buyer_data.buyer_id
+    )
+    if (
+        identity.is_tamer
+        and buyer_type == database.ACTOR_SOUL
+        and not buyer_data.buyer_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="buyer_id is required when buyer_type is 'soul'",
+        )
 
-    payload = {"listing_id": listing_id, "buyer_soul_id": buyer_id}
-    soul_id, custodian_id = _rest_actor(identity, buyer_id)
+    payload = {
+        "listing_id": listing_id,
+        "buyer_type": actor_type,
+        "buyer_soul_id": actor_id,
+    }
     try:
         record = _enqueue_and_settle(
             request,
             identity,
             market.KIND_MARKET_BUY,
-            soul_id,
+            actor_id,
             custodian_id,
             payload,
             idempotency_key,
@@ -289,8 +314,11 @@ def buy_item(
     if record["status"] == "adjudicated":
         result = record["result"]
         _invalidate_cache()
-        viewport.viewport.notify_economy_soul(buyer_id)
-        viewport.viewport.notify_economy_soul(result["seller_id"])
+        if actor_type == database.ACTOR_SOUL:
+            viewport.viewport.notify_economy_soul(actor_id)
+        seller_type = result.get("seller_type", database.ACTOR_SOUL)
+        if seller_type == database.ACTOR_SOUL:
+            viewport.viewport.notify_economy_soul(result["seller_id"])
         return {
             "status": "success",
             "item": result["item"],
@@ -311,13 +339,14 @@ def cancel_listing(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     payload = {"listing_id": listing_id}
-    soul_id, custodian_id = _rest_actor(identity)
+    actor_type, actor_id, custodian_id = rest_actor(identity)
+    payload["actor_type"] = actor_type
     try:
         record = _enqueue_and_settle(
             request,
             identity,
             market.KIND_MARKET_CANCEL,
-            soul_id,
+            actor_id,
             custodian_id,
             payload,
             idempotency_key,

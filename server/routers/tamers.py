@@ -7,11 +7,17 @@ import logging
 import re
 import secrets
 import sqlite3
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Security, status
 
 from .. import database
+from .. import dormancy
+from .. import market
+from .. import persistence
+from .. import wallets
 from ..models import (
+    FundSoulRequest,
     TamerLogin,
     TamerRegister,
     TamerResponse,
@@ -55,8 +61,34 @@ def register_tamer(payload: TamerRegister) -> TamerResponse:
             ),
         )
     tamer_id = "tmr_" + secrets.token_urlsafe(16)
+    now = time.time()
     try:
-        database.create_tamer(tamer_id, username, hash_password(payload.password))
+        with database.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "INSERT INTO tamers "
+                    "(tamer_id, username, password_hash, created_at, essence) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        tamer_id,
+                        username,
+                        hash_password(payload.password),
+                        now,
+                        dormancy.STARTER_GRANT,
+                    ),
+                )
+                dormancy.mint_starter_grant(
+                    conn,
+                    persistence.last_tick_meta(conn)[1],
+                    database.ACTOR_TAMER,
+                    tamer_id,
+                    intent_id=f"register:{tamer_id}",
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
     except sqlite3.IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -100,3 +132,110 @@ def logout_tamer(
         )
     revoke_tamer_session(api_key)
     return {"status": "ok"}
+
+
+@router.post("/fund-soul")
+def fund_soul(
+    payload: FundSoulRequest,
+    identity: UserIdentity = Depends(get_api_key),
+) -> dict:
+    """Gift essence from the tamer's own wallet to a custodied soul.
+
+    One-way: the tamer wallet is debited, the soul wallet credited,
+    and both movements are journaled as ledger rows so conservation
+    accounting stays exact. The soul's funding refresh is journaled
+    for dormancy like any other credit.
+    """
+    if not identity.is_tamer:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tamer session required",
+        )
+    amount = payload.amount
+    if not isinstance(amount, (int, float)) or not amount > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Amount must be positive",
+        )
+    amount = float(amount)
+    now = time.time()
+    with database.get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            soul = conn.execute(
+                "SELECT custodian_id, owner_id, "
+                "COALESCE(essence, 0.0) AS essence "
+                "FROM souls WHERE soul_id = ?",
+                (payload.soul_id,),
+            ).fetchone()
+            if soul is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Soul not found",
+                )
+            custodian = soul["custodian_id"] or soul["owner_id"]
+            if custodian != identity.custodian_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No custody of this soul",
+                )
+            tamer_before = wallets.cached_balance(
+                conn, database.ACTOR_TAMER, identity.id
+            )
+            if tamer_before is None or not wallets.debit(
+                conn, database.ACTOR_TAMER, identity.id, amount
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Insufficient tamer essence",
+                )
+            soul_before = float(soul["essence"])
+            wallets.credit(conn, database.ACTOR_SOUL, payload.soul_id, amount)
+            tick_id = persistence.last_tick_meta(conn)[1]
+            intent_id = f"fund-soul:{identity.id}:{payload.soul_id}:{now:.6f}"
+            conn.execute(
+                "INSERT INTO ledger "
+                "(tick_id, intent_id, entry_type, actor_type, soul_id, amount, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    tick_id,
+                    intent_id,
+                    market.LEDGER_DEBIT,
+                    database.ACTOR_TAMER,
+                    identity.id,
+                    amount,
+                    now,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO ledger "
+                "(tick_id, intent_id, entry_type, actor_type, soul_id, amount, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    tick_id,
+                    intent_id,
+                    market.LEDGER_CREDIT,
+                    database.ACTOR_SOUL,
+                    payload.soul_id,
+                    amount,
+                    now,
+                ),
+            )
+            dormancy.note_essence_change(
+                conn, payload.soul_id, soul_before, tick_id, now=now
+            )
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+    return {
+        "status": "success",
+        "tamer_id": identity.id,
+        "soul_id": payload.soul_id,
+        "amount": amount,
+        "tamer_essence": tamer_before - amount,
+        "soul_essence": soul_before + amount,
+    }

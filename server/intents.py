@@ -35,6 +35,13 @@ def _validate_move_to(
     return {"x": x, "y": y}, None
 
 
+def _validate_actor_type(message: dict[str, Any], key: str) -> str | None:
+    actor_type = message.get(key, database.ACTOR_SOUL)
+    if actor_type not in (database.ACTOR_SOUL, database.ACTOR_TAMER):
+        return None
+    return actor_type
+
+
 def _validate_market_list(
     message: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -52,10 +59,14 @@ def _validate_market_list(
         or price <= 0
     ):
         return None, "BAD_PAYLOAD"
+    seller_type = _validate_actor_type(message, "seller_type")
+    if seller_type is None:
+        return None, "BAD_PAYLOAD"
     payload: dict[str, Any] = {
         "item": item,
         "price": price,
         "seller_soul_id": seller_soul_id,
+        "seller_type": seller_type,
     }
     if message.get("listing_id") is not None:
         if not isinstance(message["listing_id"], str) or not message["listing_id"]:
@@ -80,7 +91,14 @@ def _validate_market_buy(
         or not buyer_soul_id
     ):
         return None, "BAD_PAYLOAD"
-    return {"listing_id": listing_id, "buyer_soul_id": buyer_soul_id}, None
+    buyer_type = _validate_actor_type(message, "buyer_type")
+    if buyer_type is None:
+        return None, "BAD_PAYLOAD"
+    return {
+        "listing_id": listing_id,
+        "buyer_soul_id": buyer_soul_id,
+        "buyer_type": buyer_type,
+    }, None
 
 
 def _validate_market_cancel(
@@ -89,7 +107,10 @@ def _validate_market_cancel(
     listing_id = message.get("listing_id")
     if not isinstance(listing_id, str) or not listing_id:
         return None, "BAD_PAYLOAD"
-    return {"listing_id": listing_id}, None
+    actor_type = _validate_actor_type(message, "actor_type")
+    if actor_type is None:
+        return None, "BAD_PAYLOAD"
+    return {"listing_id": listing_id, "actor_type": actor_type}, None
 
 
 def _validate_social_author(

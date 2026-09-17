@@ -77,13 +77,26 @@ def _journal_types():
         ]
 
 
+def _seed_inventory(soul_id, item, qty=10):
+    name = item["item"] if item.get("type") == "resource" else item["name"]
+    with database.get_db() as conn:
+        conn.execute(
+            "INSERT INTO soul_inventory (soul_id, item_name, quantity) "
+            "VALUES (?, ?, ?)",
+            (soul_id, name, qty),
+        )
+        conn.commit()
+
+
 def _list_via_rest(client, seller_id, price, item=None):
+    item = item or {"name": "Orb"}
+    _seed_inventory(seller_id, item)
     res = client.post(
         "/marketplace/list",
         json={
             "seller_id": seller_id,
             "seller_name": "Seller",
-            "item": item or {"name": "Orb"},
+            "item": item,
             "price": price,
         },
     )

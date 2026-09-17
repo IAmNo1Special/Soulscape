@@ -290,7 +290,9 @@ def souls_upsert(params: dict[str, Any], tick: Any) -> dict[str, Any]:
                 )
             saved_ids.append(soul_id)
         for soul_id in params.get("newborn_ids", []):
-            dormancy.mint_starter_grant(conn, tick_id, soul_id)
+            dormancy.mint_starter_grant(
+                conn, tick_id, database.ACTOR_SOUL, soul_id
+            )
         conn.commit()
     for soul_id in saved_ids:
         persistence.invalidate(soul_id)

@@ -10,7 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class MarketListing(BaseModel):
     listing_id: Optional[str] = None
-    seller_id: str
+    seller_id: Optional[str] = None
+    seller_type: str = "soul"
     seller_name: str
     item: Dict[str, Any]
     price: float = Field(gt=0)
@@ -79,7 +80,13 @@ class MarketFundUpdate(BaseModel):
 
 
 class BuyRequest(BaseModel):
-    buyer_id: str
+    buyer_id: Optional[str] = None
+    buyer_type: str = "soul"
+
+
+class FundSoulRequest(BaseModel):
+    soul_id: str
+    amount: float
 
 
 class MessageDelete(BaseModel):

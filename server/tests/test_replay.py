@@ -88,6 +88,11 @@ def _record_scenario(sleep_escape=False):
                 time.time(),
             ),
         )
+        conn.execute(
+            "INSERT INTO soul_inventory (soul_id, item_name, quantity) "
+            "VALUES (?, ?, ?)",
+            ("S_SELLER", "Test Widget", 1),
+        )
         conn.commit()
         snap_id = persistence.take_snapshot(conn, 0, scenario_seed=SEED)
 
