@@ -283,3 +283,63 @@ class SceneRenderer:
             )
             label.draw()
         glEnable(GL_DEPTH_TEST)
+
+    def render_nameplate(self, x: float, y: float, text: str) -> None:
+        """Hover nameplate (issue #31): `name -- species . Lvl N` above the
+        orb, read from viewport identity state."""
+        glDisable(GL_DEPTH_TEST)
+        label = pyglet.text.Label(
+            text,
+            x=x,
+            y=y,
+            anchor_x="center",
+            anchor_y="bottom",
+            font_size=11,
+            color=(255, 255, 255, 235),
+        )
+        label.draw()
+        glEnable(GL_DEPTH_TEST)
+
+    def render_info_card(
+        self,
+        x: float,
+        y: float,
+        lines: list[str],
+        window_width: float,
+        window_height: float,
+    ) -> None:
+        """Right-click info card (issue #31): bordered panel with the
+        soul's needs / activity / essence / whereabouts / presence."""
+        if not lines:
+            return
+        font_size = 12
+        pad = 10
+        line_h = 20
+        char_w = 7
+        card_w = max(len(line) for line in lines) * char_w + pad * 2
+        card_h = len(lines) * line_h + pad * 2
+        # Anchor above the cursor; clamp inside the window.
+        cx = min(max(x - card_w / 2, 4), max(window_width - card_w - 4, 4))
+        cy = min(y + 12, max(window_height - card_h - 4, 4))
+        glDisable(GL_DEPTH_TEST)
+        pyglet.shapes.BorderedRectangle(
+            cx,
+            cy,
+            card_w,
+            card_h,
+            border=2,
+            color=(18, 22, 30),
+            border_color=(120, 160, 220),
+        ).draw()
+        for i, line in enumerate(lines):
+            pyglet.text.Label(
+                line,
+                x=cx + pad,
+                y=cy + card_h - pad - (i + 0.8) * line_h,
+                anchor_x="left",
+                anchor_y="center",
+                font_size=font_size,
+                bold=(i == 0),
+                color=(235, 245, 255, 235),
+            ).draw()
+        glEnable(GL_DEPTH_TEST)

@@ -601,7 +601,8 @@ def init_db():
                     state TEXT DEFAULT 'normal'
                         CHECK (state IN ('normal','traveling','collapsed')),
                     fed_flag INTEGER DEFAULT 0,
-                    rest_started_at REAL
+                    rest_started_at REAL,
+                    loyalty REAL DEFAULT 0.5
                 )
             """)
             # Inventory Table
@@ -1007,6 +1008,18 @@ def init_db():
                 "INSERT OR IGNORE INTO globals (key, value) "
                 "VALUES ('plot_claim_seq', 0.0)"
             )
+            # Issue #31: petting cooldowns -- one petting per soul per
+            # tamer per PET_COOLDOWN_S, enforced server-side in the
+            # adjudication transaction (durable so restarts can't
+            # bypass the cooldown).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pet_cooldowns (
+                    soul_id TEXT NOT NULL,
+                    tamer_id TEXT NOT NULL,
+                    last_pet_at REAL NOT NULL,
+                    PRIMARY KEY (soul_id, tamer_id)
+                )
+            """)
             # Issue #28: tamer presence (privacy-gated redacted reports).
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tamer_presence (
@@ -1058,6 +1071,10 @@ def _migrate_souls(cursor) -> None:
     )
     _add_column_if_missing(cursor, "souls", "fed_flag INTEGER DEFAULT 0")
     _add_column_if_missing(cursor, "souls", "rest_started_at REAL")
+    # Issue #31: learned loyalty scalar (petting nudges toward 1.0;
+    # drift toward the nature baseline is #24's drive concern).
+    _add_column_if_missing(cursor, "souls", "loyalty REAL DEFAULT 0.5")
+    cursor.execute("UPDATE souls SET loyalty = 0.5 WHERE loyalty IS NULL")
     cursor.execute("UPDATE souls SET state = 'normal' WHERE state IS NULL")
     cursor.execute("UPDATE souls SET fed_flag = 0 WHERE fed_flag IS NULL")
     # Legacy rows may carry NULL biology fields; the server default for a

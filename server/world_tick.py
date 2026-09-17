@@ -47,6 +47,7 @@ from . import social
 from . import world
 from . import biology
 from . import dormancy
+from . import affection
 from . import agents
 from .agents import metering
 
@@ -186,6 +187,8 @@ class WorldTick:
                     )
                 elif intent["kind"] == presence_module.KIND_TAMER_PRESENCE:
                     presence_module.adjudicate_presence_intent(self, intent)
+                elif intent["kind"] in affection.AFFECTION_KINDS:
+                    affection.adjudicate_affection_intent(self, intent)
                 else:
                     with database.get_db() as conn:
                         self._reject(conn, intent, "unknown_kind")
@@ -266,6 +269,11 @@ class WorldTick:
             # early but REST/unknown paths may not.
             if dormancy.is_dormant(row["essence"]):
                 self._reject(conn, intent, "soul_dormant")
+                return
+            # Carry (issue #31): while a soul is being carried, its
+            # normal movement intents are suspended.
+            if soul_id in affection.carried_souls():
+                self._reject(conn, intent, "carried")
                 return
             custodian = row["custodian_id"] or row["owner_id"]
             if intent["custodian_id"] is not None and (
@@ -380,6 +388,9 @@ class WorldTick:
                     )
             moved = 0
             bounds = database.SCREEN_BOUNDS
+            # Carry (issue #31): snapshot once per tick; a carried soul's
+            # position is owned by the tamer's drag stream.
+            carried = affection.carried_souls()
             with database.get_db() as conn:
                 rows = conn.execute(
                     "SELECT soul_id, position, velocity, move_target, "
@@ -393,6 +404,10 @@ class WorldTick:
                     # Their move_target is left intact (frozen mid-stride);
                     # motion resumes on wake.
                     if dormancy.is_dormant(row["essence"]):
+                        continue
+                    # Carry (issue #31): normal integration is suspended
+                    # for the carry duration.
+                    if soul_id in carried:
                         continue
                     try:
                         x, y = _parse_pair(row["position"])

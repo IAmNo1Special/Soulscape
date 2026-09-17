@@ -199,6 +199,7 @@ class AgentPool:
                 "COALESCE(hydration, 100.0) AS hydration, "
                 "COALESCE(hp, 100.0) AS hp, "
                 "COALESCE(max_hp, 100.0) AS max_hp, "
+                "COALESCE(loyalty, 0.5) AS loyalty, "
                 "custodian_id, owner_id "
                 "FROM souls WHERE soul_id = ?",
                 (soul_id,),
@@ -293,6 +294,7 @@ class AgentPool:
             row.get("hp"),
             row.get("max_hp"),
             observations,
+            row.get("loyalty"),
         )
         observation = {
             "soul_id": soul_id,

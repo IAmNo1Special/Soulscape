@@ -108,6 +108,12 @@ class ThinkScheduler:
         """Tamer-order pull-forward. Unwired in v1: no order ingress yet."""
         return self.pull_forward(soul_id, now)
 
+    def note_attention(self, soul_id: str, now: float) -> float | None:
+        """Attention pull-forward (issue #31): a tamer's chirp is an
+        attention event the brain notices -- the next think moves
+        earlier (never later), honoring the minimum gap."""
+        return self.pull_forward(soul_id, now)
+
     def due(
         self,
         now: float,

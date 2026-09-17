@@ -36,6 +36,16 @@ from .system.network.viewport_client import (
     is_statue,
     viewport_mode_enabled,
 )
+from .core.interactions.pet_gestures import (
+    CARRY_BEGIN,
+    CARRY_END,
+    CARRY_MOVE,
+    CHIRP,
+    PET,
+    PetGestureDetector,
+    gesture_intent,
+)
+from .core.interactions.pet_card import build_info_card, presence_status
 from .system.network_service import NetworkService
 from .system.noise import NoisePolicy
 from .system.bubble_config import load_bubble_config, save_bubble_config
@@ -122,6 +132,12 @@ class SoulscapeApp:
         self.viewport_mode: bool = viewport_mode_enabled()
         self.viewport_consumer = ViewportConsumer() if self.viewport_mode else None
         self.viewport_mapper = ViewportMapper() if self.viewport_mode else None
+        # Pet grammar (issue #31): gesture detector + press/card state.
+        # Viewport input is affection/attention only -- no move_to.
+        self._pet_gestures = PetGestureDetector() if self.viewport_mode else None
+        self._pet_press_soul_id: str | None = None
+        self._info_card_soul_id: str | None = None
+        self._info_card_xy: tuple[float, float] | None = None
         self.network_service = NetworkService(
             owner_id=self.instance_id, viewport_consumer=self.viewport_consumer
         )
@@ -237,6 +253,8 @@ class SoulscapeApp:
             jobs = self.bubble_manager.layout(positions)
             if jobs:
                 self.scene_renderer.render_bubbles(jobs)
+            if self.viewport_mode and self.viewport_consumer is not None:
+                self._draw_viewport_pet_overlays()
 
         @self.overlay_window.event
         def on_key_press(symbol, modifiers) -> None:
@@ -258,8 +276,22 @@ class SoulscapeApp:
 
             if target_soul:
                 if self.viewport_mode:
+                    # Pet grammar (issue #31): left press starts gesture
+                    # tracking; right press toggles the info card. No
+                    # direct commands -- move_to is gone from viewport.
+                    soul_id = target_soul.biology.soul_id
                     if button == pyglet.window.mouse.LEFT:
-                        self.input_router.dragged_soul = target_soul
+                        self._pet_press_soul_id = soul_id
+                        if self._pet_gestures is not None:
+                            self._pet_gestures.press(x, y)
+                    elif button == pyglet.window.mouse.RIGHT:
+                        if self._info_card_soul_id == soul_id:
+                            self._info_card_soul_id = None
+                            self._info_card_xy = None
+                        else:
+                            self._info_card_soul_id = soul_id
+                            self._info_card_xy = (x, y)
+                        self.dirty_tracker.mark_dirty()
                 else:
                     # Only allow interaction if we own this soul
                     if target_soul.owner_id != self.instance_id:
@@ -274,6 +306,12 @@ class SoulscapeApp:
                         self.input_router.dragged_soul = target_soul
             else:
                 # Clicked on empty space
+                if self.viewport_mode:
+                    # Dismiss the info card; legacy menu handling below.
+                    if self._info_card_soul_id is not None:
+                        self._info_card_soul_id = None
+                        self._info_card_xy = None
+                        self.dirty_tracker.mark_dirty()
                 # If we have an "on_click_empty" handler in router, use it
                 if self.input_router.on_click_empty:
                     self.input_router.on_click_empty(x, y)
@@ -284,6 +322,14 @@ class SoulscapeApp:
         ) -> None:
             """Pyglet event handler for mouse drag events."""
             if self.viewport_mode:
+                # Pet grammar (issue #31): drags past the start threshold
+                # become a carry; the detector rate-limits streamed moves.
+                if (
+                    self._pet_gestures is not None
+                    and self._pet_press_soul_id is not None
+                ):
+                    for event in self._pet_gestures.drag(x, y):
+                        self._handle_pet_gesture(event, self._pet_press_soul_id)
                 return
             if self.input_router.dragged_soul:
                 self.input_router.dragged_soul.on_mouse_drag(
@@ -293,17 +339,49 @@ class SoulscapeApp:
         @self.overlay_window.event
         def on_mouse_release(x: int, y: int, button: int, modifiers: int) -> None:
             """Pyglet event handler for mouse release events."""
+            if self.viewport_mode:
+                # Pet grammar (issue #31): release resolves the gesture --
+                # chirp, pet, or carry end. move_to is gone from viewport.
+                if button == pyglet.window.mouse.LEFT:
+                    soul_id = self._pet_press_soul_id
+                    self._pet_press_soul_id = None
+                    if soul_id is not None and self._pet_gestures is not None:
+                        for event in self._pet_gestures.release(x, y):
+                            self._handle_pet_gesture(event, soul_id)
+                return
             dragged = self.input_router.dragged_soul
             if dragged is None:
                 return
-            if self.viewport_mode:
-                if button == pyglet.window.mouse.LEFT:
-                    self.send_move_intent(dragged, x, y)
-            else:
-                dragged.on_mouse_release(
-                    x, y, button, modifiers, self.overlay_window.height
-                )
+            dragged.on_mouse_release(
+                x, y, button, modifiers, self.overlay_window.height
+            )
             self.input_router.dragged_soul = None
+
+    def _draw_viewport_pet_overlays(self) -> None:
+        """Hover nameplate + right-click info card (issue #31)."""
+        consumer = self.viewport_consumer
+        if consumer is None:
+            return
+        hovered = self.input_router.hovered_soul
+        if hovered is not None and hovered in self.active_souls:
+            soul_id = hovered.biology.soul_id
+            ident = consumer.soul_identity(soul_id)
+            plate = f"{ident['name']} -- {ident['species']} . Lvl {ident['level']}"
+            self.scene_renderer.render_nameplate(
+                hovered.x + hovered.width / 2,
+                self.overlay_window.height - hovered.draw_y + 10,
+                plate,
+            )
+        if self._info_card_soul_id is not None and self._info_card_xy is not None:
+            lines = self._info_card_lines(self._info_card_soul_id)
+            x, y = self._info_card_xy
+            self.scene_renderer.render_info_card(
+                x,
+                y,
+                lines,
+                self.overlay_window.width,
+                self.overlay_window.height,
+            )
 
     def _gate_draw_on_dirty(self) -> None:
         """Wrap the Pyglet window draw so GL work only happens when dirty.
@@ -338,6 +416,12 @@ class SoulscapeApp:
             self.active_souls, pos, self.overlay_window.height
         )
         self.window_manager.update_click_through(soul)
+        # Hover state for the viewport nameplate (issue #31): mark the
+        # scene dirty on change so the nameplate appears/disappears
+        # without waiting for unrelated redraws.
+        if self.input_router.hovered_soul is not soul:
+            self.input_router.hovered_soul = soul
+            self.dirty_tracker.mark_dirty()
 
     def _poll_fullscreen_parking(self) -> None:
         """Hide the overlay while an exclusive-fullscreen app is foreground."""
@@ -689,6 +773,14 @@ class SoulscapeApp:
             if not self.sim_paused:
                 self._update_visual_reflexes()
             self._poll_topmost()
+            # Pet grammar (issue #31): a hold becomes a pet as soon as
+            # the threshold passes, without waiting for release.
+            if (
+                self._pet_gestures is not None
+                and self._pet_press_soul_id is not None
+            ):
+                for event in self._pet_gestures.poll():
+                    self._handle_pet_gesture(event, self._pet_press_soul_id)
             return
 
         # 2. Update Simulation
@@ -890,22 +982,57 @@ class SoulscapeApp:
         self.persist_souls_state()
         return soul
 
-    def send_move_intent(self, soul: Soul, screen_x: float, screen_y: float) -> None:
-        if not self.viewport_mode or self.viewport_mapper is None:
-            return
-        display = pyglet.display.get_display().get_default_screen()
-        wx, wy = self.viewport_mapper.screen_to_world(
-            float(screen_x), float(screen_y), display.width, display.height
-        )
-        soul_id = soul.biology.soul_id
-        log.debug(f"Sending move_to intent for {soul_id} to ({wx:.1f}, {wy:.1f})")
-        self.network_service.send_intent("move_to", soul_id, x=wx, y=wy)
+    def _handle_pet_gesture(self, event, soul_id: str) -> None:
+        """Map a pet-grammar gesture to a signed intent (issue #31)."""
+        kind = event.kind
+        if kind == CHIRP:
+            # Light local pulse: immediate feedback while the signed
+            # chirp intent round-trips; the Hub's solicited "!" bubble
+            # arrives after adjudication.
+            self.bubble_manager.show_bubble(
+                soul_id, "!", kind="system", solicited=True
+            )
+            intent_kind, payload = gesture_intent(event, soul_id)
+            self.network_service.send_intent(intent_kind, soul_id, **payload)
+        elif kind == PET:
+            intent_kind, payload = gesture_intent(event, soul_id)
+            self.network_service.send_intent(intent_kind, soul_id, **payload)
+        elif kind in (CARRY_BEGIN, CARRY_MOVE, CARRY_END):
+            if self.viewport_mapper is None:
+                return
+            display = pyglet.display.get_display().get_default_screen()
+            wx, wy = self.viewport_mapper.screen_to_world(
+                float(event.x), float(event.y), display.width, display.height
+            )
+            intent_kind, payload = gesture_intent(event, soul_id, (wx, wy))
+            self.network_service.send_intent(intent_kind, soul_id, **payload)
+
+    def _info_card_lines(self, soul_id: str) -> list[str]:
+        """Build the right-click card lines from viewport state."""
+        consumer = self.viewport_consumer
+        if consumer is None:
+            return [soul_id[:8], "presence: offline"]
+        identity = consumer.soul_identity(soul_id)
+        biology = consumer.soul_biology(soul_id)
+        essence = consumer.wallets().get(soul_id)
+        tracked = soul_id in consumer.soul_ids()
+        state = consumer.soul_state(soul_id)
+        # Whereabouts from the Hub's authoritative world position, not
+        # the rendered sprite's screen pixels.
+        wpos = consumer.rendered_positions().get(soul_id)
+        bounds = None
+        region = consumer.region
+        if region is not None:
+            bounds = (region[2], region[3])
+        x = y = None
+        if wpos is not None:
+            x, y = wpos
+        where = whereabouts_label(state, x, y, bounds)
+        status = presence_status(tracked, consumer.is_stale(soul_id))
+        return build_info_card(soul_id, identity, biology, essence, where, status)
 
     def _on_soul_move_end(self, soul: Soul, x: float, y: float) -> None:
-        if self.viewport_mode:
-            self.send_move_intent(soul, x, y)
-        else:
-            self.persist_souls_state()
+        self.persist_souls_state()
 
     def handle_soul_right_click(self, soul: Soul, screen_x: int, screen_y: int) -> None:
         """Callback for soul right-click events."""

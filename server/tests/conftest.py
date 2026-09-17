@@ -85,6 +85,7 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM episodes")
     cursor.execute("DELETE FROM weekly_digests")
     cursor.execute("DELETE FROM semantic_memories")
+    cursor.execute("DELETE FROM pet_cooldowns")
     # The journal is append-only in production, so recovery treats its seq
     # column as gapless. Reset the AUTOINCREMENT sequences too, or a test that
     # leaves journal/snapshot rows behind would hand the next test a journal
@@ -121,6 +122,9 @@ def clear_db(db_conn):
 
     _marketplace_cache["timestamp"] = 0.0
     _marketplace_cache["data"] = None
+    from .. import affection as _affection
+
+    _affection.reset_carry_state()
 
 
 @pytest.fixture

@@ -230,8 +230,41 @@ def _validate_tamer_presence(
     return validated, None
 
 
+def _validate_chirp(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Chirp carries no payload: the attention is the message."""
+    return {}, None
+
+
+def _validate_affection_pet(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Petting carries no payload: custody + cooldown are server-side."""
+    return {}, None
+
+
+def _validate_carry_move(
+    message: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        x = float(message["x"])
+        y = float(message["y"])
+    except (KeyError, TypeError, ValueError):
+        return None, "BAD_PAYLOAD"
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None, "BAD_PAYLOAD"
+    phase = message.get("phase", "move")
+    if phase not in ("grab", "move", "release"):
+        return None, "BAD_PAYLOAD"
+    return {"x": x, "y": y, "phase": phase}, None
+
+
 _KIND_VALIDATORS = {
     "move_to": _validate_move_to,
+    "chirp": _validate_chirp,
+    "affection_pet": _validate_affection_pet,
+    "carry_move": _validate_carry_move,
     "feed_soul": _validate_feed_soul,
     "market_list": _validate_market_list,
     "market_buy": _validate_market_buy,

@@ -792,6 +792,7 @@ class Deliberator:
             row.get("hp"),
             row.get("max_hp"),
             observations,
+            row.get("loyalty"),
         )
         # #26: per-query semantic retrieval + once-per-boot restart
         # wake, composed into the LONG-TERM MEMORY prompt section.

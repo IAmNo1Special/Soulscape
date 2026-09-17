@@ -111,6 +111,26 @@ def _biology_op(
     }
 
 
+def _identity_op(
+    soul_id: str, name: str, species: str, level: int, activity: str
+) -> dict:
+    """Identity stream (issue #31): name/species/level/activity ride the
+    viewport as priority ops on their own domain so the hover nameplate
+    and info card track the Hub without waiting for a re-snapshot."""
+    return {
+        "op": protocol.EntityOpKind.UPSERT.value,
+        "soul_id": soul_id,
+        "domain": "identity",
+        "state": {
+            "soul_id": soul_id,
+            "name": name,
+            "species": species,
+            "level": level,
+            "activity": activity,
+        },
+    }
+
+
 def _bubble_op(
     soul_id: str, text: str, kind: str, solicited: bool = False
 ) -> dict:
@@ -179,6 +199,25 @@ def read_biology() -> dict[str, tuple[float, float, float, float]]:
             float(row["max_hp"]),
         )
     return bio
+
+
+def read_identities() -> dict[str, dict[str, object]]:
+    """Per-soul identity for the viewport stream (issue #31): name,
+    species, level, activity -- the hover nameplate and the info card
+    read these from viewport state, never from local guesses."""
+    identities: dict[str, dict[str, object]] = {}
+    with database.get_db() as conn:
+        rows = conn.execute(
+            "SELECT soul_id, name, species, level, activity FROM souls"
+        ).fetchall()
+    for row in rows:
+        identities[row["soul_id"]] = {
+            "name": row["name"] or row["soul_id"][:8],
+            "species": row["species"] or "Unknown",
+            "level": int(row["level"] or 1),
+            "activity": row["activity"] or "idle",
+        }
+    return identities
 
 
 def read_wallets() -> list[dict]:
@@ -261,6 +300,24 @@ def diff_biology(
             )
     return ops
 
+def diff_identities(
+    current: dict[str, tuple[str, str, int, str]],
+    committed: dict[str, tuple[str, str, int, str]],
+) -> list[tuple[dict, str]]:
+    """Diff per-soul identity (issue #31); changed name/species/level/
+    activity become priority ops on the identity domain so the
+    nameplate and info card track the Hub mid-session."""
+    ops: list[tuple[dict, str]] = []
+    for soul_id, vals in current.items():
+        if committed.get(soul_id) != vals:
+            name, species, level, activity = vals
+            ops.append(
+                (_identity_op(soul_id, name, species, level, activity), _DOMAIN_PRIORITY)
+            )
+    return ops
+
+
+
 
 class ViewportSession:
     def __init__(self, owner_id: str, ring_size: int = RING_BUFFER_SIZE) -> None:
@@ -272,6 +329,7 @@ class ViewportSession:
         self.committed_states: dict[str, str] = {}
         self.committed_dormancy: dict[str, bool] = {}
         self.committed_biology: dict[str, tuple[float, float, float, float]] = {}
+        self.committed_identities: dict[str, tuple[str, str, int, str]] = {}
         self.pending_moves: dict[str, dict] = {}
         self.pending_priority: list[dict] = []
         self.flush_interval = PUMP_INTERVAL_SECONDS
@@ -319,6 +377,7 @@ def build_snapshot(
     states = read_soul_states()
     dormant = read_dormancy()
     biology = read_biology()
+    identities = read_identities()
     souls = [
         {
             "soul_id": soul_id,
@@ -336,6 +395,12 @@ def build_snapshot(
             "hydration": biology.get(soul_id, (100.0, 100.0, 100.0, 100.0))[1],
             "hp": biology.get(soul_id, (100.0, 100.0, 100.0, 100.0))[2],
             "max_hp": biology.get(soul_id, (100.0, 100.0, 100.0, 100.0))[3],
+            # Identity (issue #31): the hover nameplate and info card
+            # read these from viewport state.
+            "name": identities.get(soul_id, {}).get("name", soul_id[:8]),
+            "species": identities.get(soul_id, {}).get("species", "Unknown"),
+            "level": identities.get(soul_id, {}).get("level", 1),
+            "activity": identities.get(soul_id, {}).get("activity", "idle"),
         }
         for soul_id, (x, y) in positions.items()
     ]
@@ -362,6 +427,15 @@ def build_snapshot(
     session.committed_biology = {
         sid: tuple(round(v, 1) for v in vals) for sid, vals in biology.items()
     }
+    session.committed_identities = {
+        sid: (
+            str(vals.get("name", sid[:8])),
+            str(vals.get("species", "Unknown")),
+            int(vals.get("level", 1)),
+            str(vals.get("activity", "idle")),
+        )
+        for sid, vals in identities.items()
+    }
     session.touch()
     return frame
 
@@ -374,6 +448,7 @@ async def flush(
     states: dict[str, str] | None = None,
     dormant: dict[str, bool] | None = None,
     biology: dict[str, tuple[float, float, float, float]] | None = None,
+    identities: dict[str, tuple[str, str, int, str]] | None = None,
 ) -> str:
     async with session._lock:
         if session.pending_count() == 0:
@@ -420,6 +495,8 @@ async def flush(
                 sid: tuple(round(v, 1) for v in vals)
                 for sid, vals in biology.items()
             }
+        if identities is not None:
+            session.committed_identities = dict(identities)
         session.slow_flushes = 0
         session.flush_interval = PUMP_INTERVAL_SECONDS
         session.touch()
@@ -537,6 +614,7 @@ class ViewportManager:
             session.committed_states = dict(old.committed_states)
             session.committed_dormancy = dict(old.committed_dormancy)
             session.committed_biology = dict(old.committed_biology)
+            session.committed_identities = dict(old.committed_identities)
             session.touch()
         if old is not session:
             self.drop(old.conn_id)

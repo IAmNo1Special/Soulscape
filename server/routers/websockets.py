@@ -311,6 +311,16 @@ async def _viewport_pump(
             states = viewport.read_soul_states()
             dormant = viewport.read_dormancy()
             biology = viewport.read_biology()
+            raw_identities = viewport.read_identities()
+            identities = {
+                sid: (
+                    str(vals.get("name", sid[:8])),
+                    str(vals.get("species", "Unknown")),
+                    int(vals.get("level", 1)),
+                    str(vals.get("activity", "idle")),
+                )
+                for sid, vals in raw_identities.items()
+            }
             tick_id = _current_tick_id(websocket)
             for op, domain in viewport.diff_positions(positions, session.committed):
                 session.enqueue(op, domain)
@@ -324,9 +334,14 @@ async def _viewport_pump(
                 biology, session.committed_biology
             ):
                 session.enqueue(op, domain)
+            for op, domain in viewport.diff_identities(
+                identities, session.committed_identities
+            ):
+                session.enqueue(op, domain)
             result = await viewport.flush(
                 session, positions, tick_id, websocket.send_json,
                 states=states, dormant=dormant, biology=biology,
+                identities=identities,
             )
             if result == "closed":
                 await websocket.close(

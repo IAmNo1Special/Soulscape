@@ -216,6 +216,10 @@ class ViewportConsumer:
         # Wallets (issue #30): per-soul essence for the tray dashboard.
         # Streams on the economy delta domain + the snapshot's wallets.
         self._wallets: dict[str, float] = {}
+        # Identities (issue #31): name/species/level/activity from the
+        # snapshot -- the hover nameplate and info card read viewport
+        # state, never local guesses.
+        self._identities: dict[str, dict] = {}
         # Transient bubble ops (issue #30): queued here, drained by the
         # app into the BubbleManager. Never part of the entity state.
         self._bubble_queue: collections.deque[dict] = collections.deque()
@@ -277,6 +281,20 @@ class ViewportConsumer:
         """Snapshot of per-soul essence for the tray dashboard."""
         return dict(self._wallets)
 
+    def soul_identity(self, soul_id: str) -> dict:
+        """Identity from viewport state (issue #31): name, species,
+        level, activity. Falls back to soul-id-derived placeholders
+        when the Hub has not streamed an identity yet."""
+        ident = self._identities.get(soul_id)
+        if ident is not None:
+            return dict(ident)
+        return {
+            "name": soul_id[:8],
+            "species": "Unknown",
+            "level": 1,
+            "activity": "idle",
+        }
+
     def drain_bubbles(self) -> list[dict]:
         """Take queued transient bubble ops (issue #30).
 
@@ -313,12 +331,21 @@ class ViewportConsumer:
             # Biology rides the snapshot (issue #30) so a fresh client
             # renders uniforms from authoritative values immediately.
             self._bio[sid] = _bio_from_entry(entry)
+            # Identity rides the snapshot (issue #31): hover nameplate
+            # and info card read viewport state, not local guesses.
+            self._identities[sid] = {
+                "name": entry.get("name") or sid[:8],
+                "species": entry.get("species") or "Unknown",
+                "level": int(entry.get("level") or 1),
+                "activity": entry.get("activity") or "idle",
+            }
         for sid in [key for key in self._tracks if key not in seen]:
             del self._tracks[sid]
             self._states.pop(sid, None)
             self._dormant.pop(sid, None)
             self._bio.pop(sid, None)
             self._wallets.pop(sid, None)
+            self._identities.pop(sid, None)
         for wallet in frame.get("wallets") or []:
             wid = wallet.get("soul_id")
             if wid:
@@ -347,6 +374,7 @@ class ViewportConsumer:
                 self._dormant.pop(sid, None)
                 self._bio.pop(sid, None)
                 self._wallets.pop(sid, None)
+                self._identities.pop(sid, None)
                 continue
             # Transient bubble ops (issue #30): queue for the app, never
             # touch the entity state model.
@@ -375,6 +403,16 @@ class ViewportConsumer:
             # shader uniforms, orthogonal to position/state.
             if op.get("domain") == "biology":
                 self._bio[sid] = _bio_from_entry(state)
+            # Identity ops (issue #31): name/species/level/activity track
+            # the Hub mid-session so the nameplate and info card never
+            # wait for a re-snapshot.
+            if op.get("domain") == "identity":
+                self._identities[sid] = {
+                    "name": state.get("name") or sid[:8],
+                    "species": state.get("species") or "Unknown",
+                    "level": int(state.get("level") or 1),
+                    "activity": state.get("activity") or "idle",
+                }
             # Economy ops carry the per-soul essence for the tray wallet.
             if op.get("domain") == "economy" and "essence" in state:
                 self._wallets[sid] = float(state["essence"])

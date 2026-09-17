@@ -103,6 +103,7 @@ EPISODE_KINDS = (
     "feed",
     "dormancy",
     "wake",
+    "affection",
 )
 
 #: Salience >= this: kept verbatim by the summarizer AND written to

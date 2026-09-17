@@ -6,8 +6,11 @@ arithmetic. They set the reflex layer's thresholds and will pre-rank
 
 There is no species-profile table in v1, so the non-survival drives
 come from nature baselines with documented v0 defaults. Loyalty's
-learned scalar (relationship memory, absence drift) is #25+ scope;
-here loyalty is the nature baseline, clamped to [0, 1].
+learned scalar (issue #31) is read from storage when provided:
+`souls.loyalty` (nudged +0.02 per petting toward 1.0, drifting toward
+the nature baseline during co-presence per the arch doc). Without a
+stored scalar, loyalty falls back to the nature baseline, clamped to
+[0, 1].
 
 Survival is the only drive fed by live state in v0:
     survival = 1 - min(satiety, hydration, hp_fraction * 100) / 100
@@ -109,11 +112,18 @@ def compute_drives(
     hp: float | None,
     max_hp: float | None,
     observations: list[dict] | None = None,
+    loyalty: float | None = None,
 ) -> dict[str, float]:
-    """Full drive vector for one Soul. Pure function of its inputs."""
+    """Full drive vector for one Soul. Pure function of its inputs.
+
+    loyalty: the stored souls.loyalty scalar (issue #31) when known;
+    None keeps the nature-baseline fallback.
+    """
     drives = {
         drive: nature_baseline(nature, drive) for drive in DRIVES if drive != "survival"
     }
     drives["survival"] = survival_drive(satiety, hydration, hp, max_hp)
+    if loyalty is not None:
+        drives["loyalty"] = min(1.0, max(0.0, float(loyalty)))
     drives["fear"] = fear_from_observations(observations or [])
     return drives
