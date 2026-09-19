@@ -7,26 +7,16 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: Sync workspace
-        run: uv sync --frozen
-      - name: Capture-library guard (issue #15)
-        run: >-
-          uv run --package client python -m pytest
-          client/tests/unit/test_capture_guard.py -q -p no:cacheprovider
-      - name: Client unit tests
-        run: >-
-          uv run --package client python -m pytest client/tests/unit
-          -q -p no:cacheprovider
-          --ignore=client/tests/unit/test_intent_e2e.py
-          --ignore=client/tests/unit/test_viewport_e2e.py
-          --ignore=client/tests/unit/test_pet_grammar_e2e.py
-      - name: Server tests
-        env:
-          HUB_SECRET_KEY: soulscape-secret-123
-        run: >-
-          uv run --package server python -m pytest server/tests/
-          -q -p no:cacheprovider
+    uses: IAmNo1Special/actions/.github/workflows/python-ci.yml@v1
+    with:
+      install-command: "uv sync --frozen"
+      run-lint: false
+      # Server tests read the hub secret from the environment; this is a
+      # hard-coded test value, not a real credential.
+      test-env-json: '{"HUB_SECRET_KEY": "soulscape-secret-123"}'
+      # Capture-library guard (issue #15) runs first, then the client unit
+      # suite (minus the e2e viewport/intent/pet-grammar tests), then the server suite.
+      test-commands: |
+        uv run --package client python -m pytest client/tests/unit/test_capture_guard.py -q -p no:cacheprovider
+        uv run --package client python -m pytest client/tests/unit -q -p no:cacheprovider --ignore=client/tests/unit/test_intent_e2e.py --ignore=client/tests/unit/test_viewport_e2e.py --ignore=client/tests/unit/test_pet_grammar_e2e.py
+        uv run --package server python -m pytest server/tests/ -q -p no:cacheprovider
