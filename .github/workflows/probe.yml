@@ -2,7 +2,7 @@ name: probe
 on: workflow_dispatch
 jobs:
   test:
-    uses: IAmNo1Special/actions/.github/workflows/python-ci.yml@v1
+    uses: IAmNo1Special/actions/.github/workflows/python-ci.yml@11004cdb4e514e4eed971147054b987b478bb171
     with:
       run-tests: false
       run-lint: false
