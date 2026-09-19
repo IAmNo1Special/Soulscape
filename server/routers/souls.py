@@ -516,7 +516,15 @@ def update_souls(
     except Exception as e:
         logger.error(f"Error in update_souls: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    return {"status": "success", "count": saved, "skipped": skipped}
+    return {
+        "status": "success",
+        "count": saved,
+        "skipped": skipped,
+        "souls": [
+            {"soul_id": s.get("soul_id"), "position": validated["position"]}
+            for s, validated in validated_souls
+        ],
+    }
 
 
 _FEED_REFUSAL_STATUS = {
