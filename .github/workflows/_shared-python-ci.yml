@@ -1,0 +1,138 @@
+# Reusable Python CI for uv-based repos.
+#
+# Shared skeleton: checkout -> setup-uv -> install Python -> install deps ->
+# lint -> test (-> optional coverage artifact upload). Callers override the
+# commands that differ per repo.
+#
+# Caller example:
+#   jobs:
+#     ci:
+#       uses: IAmNo1Special/actions/.github/workflows/python-ci.yml@v1
+#       with:
+#         python-version: "3.12"
+#         install-command: "uv sync --all-packages"
+
+name: Python CI
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version installed via `uv python install`"
+        required: false
+        default: "3.13"
+        type: string
+      working-directory:
+        description: "Directory the install/lint/test steps run in"
+        required: false
+        default: "."
+        type: string
+      pre-commands:
+        description: "Shell commands run after checkout, before install (e.g. git clone an extra repo)"
+        required: false
+        default: ""
+        type: string
+      install-command:
+        description: "Dependency install command"
+        required: false
+        default: "uv sync"
+        type: string
+      run-lint:
+        description: "Whether to run the lint step"
+        required: false
+        default: true
+        type: boolean
+      lint-commands:
+        description: "Lint/typecheck commands (multiline shell)"
+        required: false
+        default: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy .
+        type: string
+      run-tests:
+        description: "Whether to run the test step"
+        required: false
+        default: true
+        type: boolean
+      test-commands:
+        description: "Test commands (multiline shell)"
+        required: false
+        default: "uv run python -m pytest -q -p no:cacheprovider"
+        type: string
+      test-env-json:
+        description: "JSON object of env vars for the test step, e.g. '{\"FOO\": \"bar\"}'"
+        required: false
+        default: "{}"
+        type: string
+      coverage-artifact-name:
+        description: "When set, upload coverage data as an artifact with this name after tests"
+        required: false
+        default: ""
+        type: string
+      coverage-artifact-path:
+        description: "Files to upload as the coverage artifact (relative to repo root)"
+        required: false
+        default: ".coverage.*"
+        type: string
+      runs-on:
+        description: "Runner label"
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      timeout-minutes:
+        description: "Job timeout in minutes"
+        required: false
+        default: 20
+        type: number
+
+jobs:
+  ci:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ inputs.python-version }}
+        run: uv python install ${{ inputs.python-version }}
+
+      - name: Pre-install setup
+        if: inputs.pre-commands != ''
+        run: ${{ inputs.pre-commands }}
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.install-command }}
+
+      - name: Lint
+        if: inputs.run-lint
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.lint-commands }}
+
+      - name: Set test environment
+        if: inputs.run-tests && inputs.test-env-json != '{}'
+        shell: python
+        run: |
+          import json, os
+          d = json.loads(r'''${{ inputs.test-env-json }}''')
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              for k, v in d.items():
+                  f.write(f"{k}={v}\n")
+
+      - name: Test
+        if: inputs.run-tests
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.test-commands }}
+
+      - name: Upload coverage data
+        if: inputs.run-tests && inputs.coverage-artifact-name != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.coverage-artifact-name }}
+          path: ${{ inputs.coverage-artifact-path }}
+          include-hidden-files: true
+          if-no-files-found: error
