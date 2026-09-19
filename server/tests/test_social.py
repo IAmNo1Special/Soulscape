@@ -196,11 +196,11 @@ def test_delete_message(client: TestClient, register_soul):
     assert posts[0]["body"] == "[deleted]"
 
 
-def test_operator_delete(client: TestClient, register_soul):
+def test_operator_delete(client: TestClient, register_soul, hub_secret):
     register_soul("1", essence=100.0, name="Alice")
     message_id = _post(
         client,
-        "soulscape-secret-123",
+        hub_secret,
         author_id="1",
         content="To be deleted by Admin",
     )["message_id"]

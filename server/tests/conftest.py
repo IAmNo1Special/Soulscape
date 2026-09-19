@@ -55,6 +55,16 @@ def db_conn():
 
 
 @pytest.fixture
+def hub_secret():
+    """The operator hub secret the server under test validates against.
+
+    Derived from the environment so the suite passes with any
+    HUB_SECRET_KEY, not just the CI default.
+    """
+    return os.environ.get("HUB_SECRET_KEY", "soulscape-secret-123")
+
+
+@pytest.fixture
 def client():
     """Provides a FastAPI TestClient with authentication."""
     hub_secret = os.getenv("HUB_SECRET_KEY", "soulscape-secret-123")
