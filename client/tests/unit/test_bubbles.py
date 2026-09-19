@@ -6,6 +6,7 @@ the scene renderer consumes them.
 
 from __future__ import annotations
 
+import time
 import unittest
 
 from client.system.noise import NoisePolicy, NoiseSettings
@@ -30,9 +31,13 @@ class FakeClock:
         self.t += seconds
 
 
+def _midday_wall() -> float:
+    return time.mktime(time.strptime("2000-01-01 12:00", "%Y-%m-%d %H:%M"))
+
+
 def _manager(clock=None, **kw) -> BubbleManager:
     clock = clock or FakeClock()
-    policy = NoisePolicy(NoiseSettings(), clock=clock)
+    policy = NoisePolicy(NoiseSettings(), clock=clock, wall=_midday_wall)
     return BubbleManager(policy=policy, clock=clock, **kw)
 
 
@@ -150,7 +155,9 @@ class TestLifecycle(unittest.TestCase):
 class TestNoiseIntegration(unittest.TestCase):
     def test_cap_suppresses_fifth_bubble(self):
         clock = FakeClock()
-        policy = NoisePolicy(NoiseSettings(caps_per_hour=4), clock=clock)
+        policy = NoisePolicy(
+            NoiseSettings(caps_per_hour=4), clock=clock, wall=_midday_wall
+        )
         mgr = BubbleManager(policy=policy, clock=clock)
         for i in range(4):
             result = mgr.show_bubble("s1", f"msg {i}")
@@ -213,13 +220,12 @@ class TestTaps(unittest.TestCase):
         self._mailbag_at(mgr)
         cx, cy = 100.0, 200.0 + BUBBLE_Y_OFFSET
         inside = mgr.tap_at(
-            cx + BUBBLE_TAP_HALF_W, cy + BUBBLE_TAP_HALF_H,
+            cx + BUBBLE_TAP_HALF_W,
+            cy + BUBBLE_TAP_HALF_H,
             {"s1": (100.0, 200.0)},
         )
         self.assertIsNotNone(inside)
-        outside = mgr.tap_at(
-            cx + BUBBLE_TAP_HALF_W + 1, cy, {"s1": (100.0, 200.0)}
-        )
+        outside = mgr.tap_at(cx + BUBBLE_TAP_HALF_W + 1, cy, {"s1": (100.0, 200.0)})
         self.assertIsNone(outside)
 
     def test_tap_expired_bubble_misses(self):

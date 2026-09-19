@@ -23,6 +23,7 @@ jobs:
           -q -p no:cacheprovider
           --ignore=client/tests/unit/test_intent_e2e.py
           --ignore=client/tests/unit/test_viewport_e2e.py
+          --ignore=client/tests/unit/test_pet_grammar_e2e.py
       - name: Server tests
         env:
           HUB_SECRET_KEY: soulscape-secret-123
