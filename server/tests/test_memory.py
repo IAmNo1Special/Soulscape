@@ -251,9 +251,7 @@ def test_summarizer_shrinks_raw_rows_retains_salient_facts(db_conn):
 def test_summarizer_prunes_summarized_rows_past_7d(db_conn):
     now = time.time()
     ancient = now - 8 * 86400
-    memory.log_episode(
-        "s1", "reflex", {"summary": "old"}, salience=0.2, ts=ancient
-    )
+    memory.log_episode("s1", "reflex", {"summary": "old"}, salience=0.2, ts=ancient)
     memory.run_summarizer(now=now, min_age_s=3600)
     n = db_conn.execute("SELECT COUNT(*) AS c FROM episodes").fetchone()["c"]
     assert n == 0
@@ -264,7 +262,11 @@ def test_summarizer_prunes_summarized_rows_past_7d(db_conn):
 
 def test_restart_preserves_consistent_recall(db_conn):
     now = time.time()
-    base = memory._week_start(now) - 2 * 86400 + 3600
+    # Fixed 2-day offset: old enough to be summarized (min_age_s=3600),
+    # young enough to survive the 7-day raw-episode prune, on every
+    # weekday. The old _week_start(now) - 2d anchor crossed the prune
+    # cutoff on Saturday mornings UTC.
+    base = now - 2 * 86400
     sid = "restart-soul"
     memory.log_episode(
         sid,
@@ -342,8 +344,9 @@ def test_restart_preserves_consistent_recall(db_conn):
         p, tracker=deliberation.EscalationTracker(), call_provider=fake_call
     )
     result = asyncio.run(
-        p.deliberate(sid, _vision(), reflex.NullProvider(), 7, now, "idle",
-                     deliberator=d)
+        p.deliberate(
+            sid, _vision(), reflex.NullProvider(), 7, now, "idle", deliberator=d
+        )
     )
     assert result["status"] == "deliberated"
     assert "LONG-TERM MEMORY" in captured["prompt"]
@@ -353,8 +356,9 @@ def test_restart_preserves_consistent_recall(db_conn):
     # ...exactly once per process: the next deliberation has no wake
     captured.clear()
     result2 = asyncio.run(
-        p.deliberate(sid, _vision(), reflex.NullProvider(), 8, now + 1,
-                     "idle", deliberator=d)
+        p.deliberate(
+            sid, _vision(), reflex.NullProvider(), 8, now + 1, "idle", deliberator=d
+        )
     )
     assert result2["status"] == "deliberated"
     assert "restored after restart" not in captured["prompt"]
@@ -450,9 +454,7 @@ def _mrr(sid, queries, retrieve):
     total = 0.0
     for query, gold in queries:
         ranked = retrieve(sid, query, k=5)
-        rank = next(
-            (i + 1 for i, text in enumerate(ranked) if text == gold), None
-        )
+        rank = next((i + 1 for i, text in enumerate(ranked) if text == gold), None)
         total += 1.0 / rank if rank else 0.0
     return total / len(queries)
 
@@ -464,15 +466,16 @@ def test_metadata_first_beats_embedding_only_baseline():
     mrr_base = _mrr(sid, queries, memory.baseline_retrieve)
     print(f"\nMRR metadata-first: {mrr_meta:.3f} | baseline: {mrr_base:.3f}")
     assert mrr_meta > mrr_base, (
-        f"metadata-first ({mrr_meta:.3f}) did not beat baseline "
-        f"({mrr_base:.3f})"
+        f"metadata-first ({mrr_meta:.3f}) did not beat baseline ({mrr_base:.3f})"
     )
     assert mrr_meta >= 0.9
 
 
 def test_retrieve_semantic_delegates_from_deliberation_stub():
     memory.log_episode(
-        "s9", "deliberation", {"summary": "the heron fishes at dawn"},
+        "s9",
+        "deliberation",
+        {"summary": "the heron fishes at dawn"},
         salience=0.8,
     )
     got = deliberation.retrieve_semantic("s9", "heron fishes")
@@ -520,8 +523,11 @@ def test_think_logs_reflex_episode_and_working_memory(db_conn):
     p = pool.AgentPool(think_scheduler=scheduler.ThinkScheduler(seed=9))
     result = asyncio.run(
         p.think(
-            "s1", _vision(), reflex.StubProvider(food=[(500.0, 500.0)]),
-            0, time.time(),
+            "s1",
+            _vision(),
+            reflex.StubProvider(food=[(500.0, 500.0)]),
+            0,
+            time.time(),
         )
     )
     assert result["status"] == "thought"
@@ -548,9 +554,7 @@ def test_quiet_think_writes_no_episode(db_conn):
     n = db_conn.execute("SELECT COUNT(*) AS c FROM episodes").fetchone()["c"]
     assert n == 0
     # ...but the observation still joins working memory
-    assert any(
-        e["kind"] == "observation" for e in memory.working_context("s1")
-    )
+    assert any(e["kind"] == "observation" for e in memory.working_context("s1"))
 
 
 def test_deliberate_logs_episode_with_rationale(db_conn):
@@ -571,8 +575,9 @@ def test_deliberate_logs_episode_with_rationale(db_conn):
         p, tracker=deliberation.EscalationTracker(), call_provider=fake_call
     )
     result = asyncio.run(
-        p.deliberate(sid, _vision(), reflex.NullProvider(), 7, time.time(),
-                     "idle", deliberator=d)
+        p.deliberate(
+            sid, _vision(), reflex.NullProvider(), 7, time.time(), "idle", deliberator=d
+        )
     )
     assert result["status"] == "deliberated"
     row = db_conn.execute(
@@ -587,9 +592,10 @@ def test_deliberate_logs_episode_with_rationale(db_conn):
     notes = memory.working_notes(sid)
     assert any("RATIONALE-DELTA-3" in note for note in notes)
     # salience 0.8 >= 0.7: retrievable immediately, no nightly run
-    assert "RATIONALE-DELTA-3" in memory.retrieve_semantic(
-        sid, "resting conserves essence"
-    )[0]
+    assert (
+        "RATIONALE-DELTA-3"
+        in memory.retrieve_semantic(sid, "resting conserves essence")[0]
+    )
 
 
 def test_feed_soul_logs_episodes_for_both_souls(db_conn):
