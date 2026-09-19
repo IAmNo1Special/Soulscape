@@ -1,5 +1,0 @@
-name: probe
-on: workflow_dispatch
-jobs:
-  test:
-    uses: ./.github/workflows/_trivial.yml
