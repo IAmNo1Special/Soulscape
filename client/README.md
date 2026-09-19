@@ -35,20 +35,34 @@ A desktop-integrated overlay application featuring autonomous souls with LLM-dri
 
 ### Running the Client
 
-To start the overlay client:
+To start the overlay client, from the repo root run:
 
 ```bash
-uv run main.py
+uv run --package client python -m client
 ```
 
 The client will launch a transparent full-screen window overlaying your desktop. You can manage the application through the Windows system tray.
 
 ## Configuration
 
-The client uses environment variables for configuration. Create a `.env` file in the client directory:
+The client runs in one of two explicit modes, chosen by the `mode`
+setting in `settings.json` (stored under the app-data directory;
+see `client/system/persistence.py`). The mode is never inferred from
+environment variables:
+
+- `offline` (default) — the local game: souls live in `souls.json`,
+  which you can hand-edit. A missing or invalid `mode` falls back
+  here.
+- `online` — the client is a viewport over the Hub; it does not run
+  the local simulation.
+
+To go online, set `"mode": "online"` in `settings.json` and point the
+client at your Hub. `HUB_URL` (or the `hub_url` setting) only sets the
+Hub address — it does not switch modes. The client loads a `.env`
+file from the client directory:
 
 ```env
-# Hub connection settings
+# Hub connection settings (address only; mode comes from settings.json)
 HUB_URL=http://localhost:9785
 HUB_API_KEY=your_api_key_here
 
