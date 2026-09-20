@@ -987,9 +987,6 @@ wheels = [
 name = "soulscape"
 version = "0.1.0"
 source = { virtual = "." }
-dependencies = [
-    { name = "argon2-cffi" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -1002,7 +999,6 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "argon2-cffi", specifier = ">=25.1.0" }]
 
 [package.metadata.requires-dev]
 dev = [
