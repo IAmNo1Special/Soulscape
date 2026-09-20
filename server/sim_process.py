@@ -30,9 +30,9 @@ import signal
 import sys
 import threading
 
-from dotenv import load_dotenv
+from shared.env import load_app_env
 
-load_dotenv()
+load_app_env()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("soulscape_hub")

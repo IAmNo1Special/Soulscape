@@ -17,6 +17,7 @@ jobs:
       # Capture-library guard (issue #15) runs first, then the client unit
       # suite (minus the e2e viewport/intent/pet-grammar tests), then the server suite.
       test-commands: |
+        uv run --package shared python -m pytest shared/tests/ -q -p no:cacheprovider
         uv run --package client python -m pytest client/tests/unit/test_capture_guard.py -q -p no:cacheprovider
         uv run --package client python -m pytest client/tests/unit -q -p no:cacheprovider --ignore=client/tests/unit/test_intent_e2e.py --ignore=client/tests/unit/test_viewport_e2e.py --ignore=client/tests/unit/test_pet_grammar_e2e.py
         uv run --package server python -m pytest server/tests/ -q -p no:cacheprovider

@@ -38,3 +38,5 @@ HUB_INTEGRATION_UPDATE.md
 *.db
 *.db-*
 *.log
+# Local runtime state written by test/client runs
+.soulscape/

@@ -20,8 +20,9 @@ from typing import Any, Coroutine
 
 import httpx
 import pyglet
-from dotenv import load_dotenv
 from pyglet.window import key
+
+from shared.env import load_app_env
 
 from .constants import SOUL_HEIGHT, SOUL_WIDTH
 from .core import MessageBoard, Soul
@@ -79,9 +80,7 @@ from .system.mailbag_client import MailbagClient
 from .system.recap_client import RecapClient
 from .ui.gui.gui_service import GuiCommand, run_gui_service
 
-# Explicitly load dotenv
-env_path = Path.cwd() / ".env"
-load_dotenv(dotenv_path=env_path, override=True)
+load_app_env()
 
 
 # Set up logging using the project's utility

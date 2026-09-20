@@ -4,9 +4,10 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+
+from shared.env import load_app_env
 
 from . import persistence
 from .key_vault import install_redaction_filter
@@ -48,7 +49,7 @@ def _check_rate_limit(key: str) -> bool:
     return True
 
 
-load_dotenv()
+load_app_env()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("soulscape_hub")

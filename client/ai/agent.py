@@ -11,7 +11,6 @@ from pathlib import Path
 from types import MethodType
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.apps.app import App, ResumabilityConfig
 from google.adk.runners import Runner
@@ -21,6 +20,7 @@ from google.adk.utils.context_utils import Aclosing
 from google.genai import types
 from magetools import Grimorium
 from PIL import Image, ImageDraw
+from shared.env import load_app_env
 
 from ...system.logger import log
 from ...utils.security import sanitize_name
@@ -30,7 +30,7 @@ from ..interactions.social import MessageBoard
 if TYPE_CHECKING:
     from .soul import Soul
 
-load_dotenv()
+load_app_env()
 
 
 class SoulAgent(LlmAgent):

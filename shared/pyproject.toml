@@ -5,6 +5,7 @@ description = "Shared models and enums for Soulscape client and server"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
 ]
 
 [build-system]
