@@ -26,13 +26,13 @@ from client.system.network.presence import PresenceManager
 from server import database as server_db
 from server import intents as server_intents
 from server import main as server_main
+from server import persistence as server_persistence
 
 HUB_SECRET = "soulscape-secret-123"
 TAMER = "intent-e2e-tamer"
 OTHER_TAMER = "intent-e2e-other"
 SOUL_ID = "intent-e2e-soul"
 OTHER_SOUL_ID = "intent-e2e-other-soul"
-START_X, START_Y = 100.0, 100.0
 
 
 def _free_port() -> int:
@@ -89,6 +89,23 @@ def _intent_count(session_id: str, nonce: str) -> int:
     return int(row["n"])
 
 
+def _rt_position(soul_id: str) -> tuple[float, float]:
+    """Authoritative position: dirty write-behind overlaid on the DB.
+
+    The tick integrates into an in-memory dirty set flushed every few
+    seconds, so a raw DB read is stale mid-flight. This is the same
+    read-through path the viewport and REST readers use.
+    """
+    return server_persistence.read_positions_through()[soul_id]
+
+
+def _spawn_positions(resp: dict) -> dict[str, tuple[float, float]]:
+    return {
+        s["soul_id"]: (float(s["position"][0]), float(s["position"][1]))
+        for s in resp.get("souls", [])
+    }
+
+
 def _signed_frame(
     key: str, session_id: str, nonce: str, soul_id: str, **fields
 ) -> dict:
@@ -119,7 +136,10 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
 
         await self._start_hub()
 
-        await _arest(
+        # Newborn souls spawn at the Commons center (issue #41); the hub
+        # echoes the actual stored position, which the tests drive from
+        # instead of assuming the requested coordinates.
+        resp = await _arest(
             self.port,
             "POST",
             "/souls",
@@ -129,14 +149,14 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
                     {
                         "soul_id": SOUL_ID,
                         "name": "IntentE2E",
-                        "position": [START_X, START_Y],
+                        "position": [100.0, 100.0],
                         "velocity": [0.0, 0.0],
                         "owner_id": TAMER,
                     },
                 ],
             },
         )
-        await _arest(
+        resp2 = await _arest(
             self.port,
             "POST",
             "/souls",
@@ -153,6 +173,12 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
                 ],
             },
         )
+        self.spawn: dict[str, tuple[float, float]] = {
+            **_spawn_positions(resp),
+            **_spawn_positions(resp2),
+        }
+        self.assertIn(SOUL_ID, self.spawn, "hub did not echo spawn position")
+        self.assertIn(OTHER_SOUL_ID, self.spawn, "hub did not echo spawn position")
 
         async def _noop_online(owner_id: str) -> None:
             return None
@@ -249,7 +275,12 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.1)
 
     async def test_signed_intent_ack_adjudication_and_movement(self) -> None:
-        ack = await self.pm.send_intent("move_to", SOUL_ID, x=800.0, y=600.0)
+        sx, sy = self.spawn[SOUL_ID]
+        # Target 400 px away along x, staying in-bounds and well inside the
+        # 5 s intent horizon so adjudication does not clamp it.
+        tx = sx + 400.0 if sx + 400.0 <= 1870.0 else sx - 400.0
+        ty = sy
+        ack = await self.pm.send_intent("move_to", SOUL_ID, x=tx, y=ty)
         self.assertIsNotNone(ack, "no ACK received")
         assert ack is not None
         self.assertEqual(ack["type"], "intent_ack")
@@ -266,14 +297,23 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
         await self._wait_for(_adjudicated)
         soul = _soul_row(SOUL_ID)
         target = json.loads(soul["move_target"])
-        self.assertEqual(target, [800.0, 600.0])
+        self.assertEqual(target, [tx, ty])
+
+        start_dist = math.hypot(tx - sx, ty - sy)
 
         def _moved():
-            pos = json.loads(_soul_row(SOUL_ID)["position"])
-            return pos if pos[0] > START_X + 50.0 else None
+            pos = _rt_position(SOUL_ID)
+            return pos if math.hypot(pos[0] - sx, pos[1] - sy) > 50.0 else None
 
         pos = await self._wait_for(_moved)
-        self.assertLess(pos[0], 800.0)
+        # Mid-flight: nearer the target than at spawn, never past it.
+        self.assertLess(math.hypot(pos[0] - tx, pos[1] - ty), start_dist)
+
+        def _arrived():
+            pos = _rt_position(SOUL_ID)
+            return pos if math.hypot(pos[0] - tx, pos[1] - ty) <= 5.0 else None
+
+        await self._wait_for(_arrived)
 
         def _delta_seen():
             for frame in self.frames:
@@ -282,12 +322,18 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
                 for op in frame.get("ops", []):
                     if op.get("soul_id") == SOUL_ID:
                         state = op.get("state", {})
-                        if state.get("x", 0.0) > START_X:
+                        if (
+                            math.hypot(
+                                state.get("x", sx) - sx,
+                                state.get("y", sy) - sy,
+                            )
+                            > 50.0
+                        ):
                             return state
             return None
 
         seen = await self._wait_for(_delta_seen)
-        self.assertGreater(seen["x"], START_X)
+        self.assertGreater(math.hypot(seen["x"] - sx, seen["y"] - sy), 50.0)
 
     async def test_duplicate_nonce_is_idempotent(self) -> None:
         ws, connected = await self._raw_connect()
@@ -346,8 +392,11 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(err["type"], "error")
             self.assertEqual(err["code"], "CUSTODY_DENIED")
             self.assertEqual(_intent_count(connected["session_id"], "forged-1"), 0)
-            pos = json.loads(_soul_row(OTHER_SOUL_ID)["position"])
-            self.assertEqual(pos, [500.0, 500.0])
+            # The forged intent moved nothing: the soul sits at its spawn.
+            ox, oy = self.spawn[OTHER_SOUL_ID]
+            pos = _rt_position(OTHER_SOUL_ID)
+            self.assertAlmostEqual(pos[0], ox, delta=0.5)
+            self.assertAlmostEqual(pos[1], oy, delta=0.5)
         finally:
             await ws.close()
 
@@ -361,8 +410,9 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
             return row if row and row["status"] == "adjudicated" else None
 
         await self._wait_for(_adjudicated)
+        sx, sy = self.spawn[SOUL_ID]
         target = json.loads(_soul_row(SOUL_ID)["move_target"])
-        dist = math.hypot(target[0] - START_X, target[1] - START_Y)
+        dist = math.hypot(target[0] - sx, target[1] - sy)
         self.assertLessEqual(dist, 3000.0 + 1.0)
         self.assertGreater(dist, 1000.0)
 

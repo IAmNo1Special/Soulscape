@@ -24,6 +24,7 @@ import websockets
 from client.system.network.viewport_client import ViewportConsumer
 from server import database as server_db
 from server import main as server_main
+from server import persistence as server_persistence
 
 HUB_SECRET = "viewport-e2e-secret"
 SOUL_ID = "viewport-e2e-soul"
@@ -60,12 +61,10 @@ async def _arest(port: int, method: str, path: str, payload: dict) -> dict:
 
 
 def _hub_position() -> tuple[float, float]:
-    with server_db.get_db() as conn:
-        row = conn.execute(
-            "SELECT position FROM souls WHERE soul_id = ?", (SOUL_ID,)
-        ).fetchone()
-    pos = json.loads(row["position"])
-    return (float(pos[0]), float(pos[1]))
+    # Authoritative position: the tick integrates into an in-memory dirty
+    # set flushed every few seconds, so a raw DB read is stale mid-flight.
+    # This is the same read-through path the viewport and REST readers use.
+    return server_persistence.read_positions_through()[SOUL_ID]
 
 
 class FakeClock:
