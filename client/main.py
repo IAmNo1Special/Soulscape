@@ -41,6 +41,7 @@ from .system.network.viewport_client import (
     ViewportMapper,
     is_statue,
     viewport_mode_enabled,
+    viewport_prune_ids,
 )
 from .core.interactions.pet_gestures import (
     CARRY_BEGIN,
@@ -1115,10 +1116,9 @@ class SoulscapeApp:
             self.active_souls.append(soul)
             self.dirty_tracker.mark_dirty()
 
-        for sid in set(existing) - known:
-            # Souls mid walk-off fade are removed when the fade ends.
-            if sid in self._walkoff_fades:
-                continue
+        for sid in viewport_prune_ids(
+            existing, known, self.instance_id, self._walkoff_fades
+        ):
             soul = existing[sid]
             soul.cleanup()
             self.active_souls.remove(soul)

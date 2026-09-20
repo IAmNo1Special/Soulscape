@@ -7,7 +7,7 @@ SoulStats class for managing base stats, IVs, EVs, and leveling logic.
 from __future__ import annotations
 
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from shared.enums import Stat
@@ -99,6 +99,7 @@ class SoulStats:
     evs: StatSet
     nature: Nature
     level: int = 1
+    _max_hp_override: int | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def create_random(cls, level: int = 5) -> SoulStats:
@@ -172,8 +173,19 @@ class SoulStats:
 
     @property
     def max_hp(self) -> int:
-        """Calculated Maximum HP."""
+        """Calculated Maximum HP.
+
+        A Hub-authoritative override wins when set (viewport mode
+        applies the Hub stream's max_hp here); otherwise the value
+        is derived from base/IV/EV/nature/level as before.
+        """
+        if self._max_hp_override is not None:
+            return self._max_hp_override
         return self.calculate_value(Stat.HP)
+
+    @max_hp.setter
+    def max_hp(self, value: int) -> None:
+        self._max_hp_override = max(1, int(value))
 
     @property
     def attack(self) -> int:

@@ -13,8 +13,9 @@ from __future__ import annotations
 import collections
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from shared import protocol
 
@@ -91,6 +92,29 @@ def dormant_statue_orb_color(
 def viewport_mode_enabled() -> bool:
     """Viewport mode is the explicit online client mode from settings."""
     return get_client_mode() == MODE_ONLINE
+
+
+def viewport_prune_ids(
+    existing: Mapping[str, Any],
+    known_ids: set[str],
+    instance_id: str,
+    walkoff_fades: set[str],
+) -> list[str]:
+    """Viewport soul ids to drop from the local render list.
+
+    A soul is stale when the Hub stream no longer carries it, with two
+    exceptions: souls mid walk-off fade (removed when the fade ends) and
+    locally-owned souls, which are still syncing upward -- the Hub has
+    not echoed them back yet, so absence from the stream is expected.
+    """
+    prunes: list[str] = []
+    for sid in existing.keys() - known_ids:
+        if sid in walkoff_fades:
+            continue
+        if getattr(existing[sid], "owner_id", None) == instance_id:
+            continue
+        prunes.append(sid)
+    return prunes
 
 
 @dataclass
