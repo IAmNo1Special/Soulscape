@@ -29,16 +29,29 @@ def _dummy(*args, **kwargs):
     return None
 
 
-def _install_pyglet_stubs() -> None:
-    for mod_name in ("pyglet", "pyglet.gl"):
-        if mod_name not in sys.modules:
-            sys.modules[mod_name] = _StubModule(mod_name)
+def _install_pyglet_stubs() -> dict[str, types.ModuleType | None]:
+    """Swap pyglet/pyglet.gl for headless stubs; returns prior state."""
+    prior = {name: sys.modules.get(name) for name in ("pyglet", "pyglet.gl")}
+    for name in prior:
+        sys.modules[name] = _StubModule(name)
+    return prior
 
 
-_install_pyglet_stubs()
+def _restore_pyglet(prior: dict[str, types.ModuleType | None]) -> None:
+    """Restore the pre-stub sys.modules so later test modules see real pyglet."""
+    for name, mod in prior.items():
+        if mod is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = mod
 
-from client.core.soul.soul import Soul  # noqa: E402
-from client.ui.graphics.scene_renderer import _soul_state  # noqa: E402
+
+_prior_pyglet = _install_pyglet_stubs()
+try:
+    from client.core.soul.soul import Soul  # noqa: E402
+    from client.ui.graphics.scene_renderer import _soul_state  # noqa: E402
+finally:
+    _restore_pyglet(_prior_pyglet)
 
 
 @pytest.fixture
