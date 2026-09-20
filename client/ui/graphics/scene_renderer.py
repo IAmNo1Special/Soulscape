@@ -67,7 +67,7 @@ def _soul_state(soul: Soul, base_color: tuple[float, float, float]) -> dict:
     return {
         "satiety": max(0.0, min(1.0, biology.satiety / 100.0)),
         "hydration": max(0.0, min(1.0, biology.hydration / 100.0)),
-        "hp": biology.get_current_health() / max(1, biology.max_health()),
+        "hp": biology.get_current_health() / max(1, biology.max_health),
         "statue_kind": _statue_kind(soul),
         "typing_dip": soul.typing_dip,
         "reflex": soul.reflex_kind,

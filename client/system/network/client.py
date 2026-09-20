@@ -63,7 +63,9 @@ class NetworkClient:
         """Lazily initializes and returns the shared httpx.AsyncClient."""
         if self._client is None:
             self._client = httpx.AsyncClient(
-                base_url=self.base_url, headers=self.headers
+                base_url=self.base_url,
+                headers=self.headers,
+                trust_env=False,
             )
         return self._client
 
