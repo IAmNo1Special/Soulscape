@@ -10,10 +10,13 @@ from client.system.network.presence import PresenceManager
 
 @pytest.fixture
 def mock_env():
+    proxy_vars = [v for v in os.environ if v.lower().endswith("_proxy")]
     with patch.dict(
         os.environ,
         {"HUB_URL": "http://localhost", "HUB_SECRET_KEY": "test-secret-123"},
     ):
+        for var in proxy_vars:
+            os.environ.pop(var, None)
         yield
 
 
