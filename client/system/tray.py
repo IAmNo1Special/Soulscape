@@ -200,10 +200,16 @@ class TrayController:
             items.append(
                 Item(
                     f"Ask {name} for a quip",
-                    lambda icon, item, sid=sid: self._on_request_quip(sid),
+                    self._quip_action(sid),
                 )
             )
         return pystray.Menu(*items)
+
+    def _quip_action(self, soul_id: str) -> Callable[[Any, Any], None]:
+        def action(icon: Any, item: Any) -> None:
+            self._on_request_quip(soul_id)
+
+        return action
 
     def _recap_menu(self) -> pystray.Menu:
         """Morning-recap dashboard submenu (issue #33): per-soul recaps
@@ -227,15 +233,19 @@ class TrayController:
                     day_items.append(
                         Item(
                             label,
-                            lambda icon, item, sid=soul_id, d=day: self._on_open_recap(
-                                sid, d
-                            ),
+                            self._recap_action(soul_id, day),
                         )
                     )
             soul_items.append(Item(f"{name}", pystray.Menu(*day_items)))
         if not soul_items:
             return pystray.Menu(self._info("no recaps yet"))
         return pystray.Menu(*soul_items)
+
+    def _recap_action(self, soul_id: str, day: str) -> Callable[[Any, Any], None]:
+        def action(icon: Any, item: Any) -> None:
+            self._on_open_recap(soul_id, day)
+
+        return action
 
     def _create_menu(self) -> pystray.Menu:
         """Create the right-click context menu (rebuilt on refresh)."""
