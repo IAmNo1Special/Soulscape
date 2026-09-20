@@ -3,14 +3,15 @@ Pydantic models for request and response validation in the Soulscape Hub API.
 """
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class MarketListing(BaseModel):
     listing_id: Optional[str] = None
-    seller_id: str
+    seller_id: Optional[str] = None
+    seller_type: str = "soul"
     seller_name: str
     item: Dict[str, Any]
     price: float = Field(gt=0)
@@ -47,6 +48,28 @@ class SocialPostResponse(BaseModel):
     replies: List[SocialReplyResponse] = []
 
 
+class SocialMessageNode(BaseModel):
+    """One node of the unified threaded social tree (issue #18).
+
+    ``content``/``timestamp`` are legacy aliases of ``body``/
+    ``created_at`` kept for the desktop client, which reads those names.
+    """
+
+    message_id: str
+    parent_id: Optional[str] = None
+    author_type: str
+    author_id: str
+    author_name: str = ""
+    title: Optional[str] = None
+    body: str = ""
+    content: str = ""
+    created_at: float = 0.0
+    timestamp: float = 0.0
+    edited_at: Optional[float] = None
+    deleted: bool = False
+    replies: List["SocialMessageNode"] = []
+
+
 class SocialEdit(BaseModel):
     author_id: str
     content: str
@@ -57,21 +80,38 @@ class MarketFundUpdate(BaseModel):
 
 
 class BuyRequest(BaseModel):
-    buyer_id: str
+    buyer_id: Optional[str] = None
+    buyer_type: str = "soul"
+
+
+class FundSoulRequest(BaseModel):
+    soul_id: str
+    amount: float
 
 
 class MessageDelete(BaseModel):
     author_id: str
 
 
+class FeedSoulRequest(BaseModel):
+    feeder_soul_id: str
+    recipient_soul_id: str
+
+
+class QuipRequest(BaseModel):
+    prompt: Optional[str] = None
+
+
 class SoulUpdate(BaseModel):
-    owner_id: str
+    owner_id: Optional[str] = None
+    custodian_id: Optional[str] = None
     souls: List[Dict[str, Any]]
 
 
 class SoulResponse(BaseModel):
     soul_id: str
     owner_id: str
+    custodian_id: Optional[str] = None
     name: Optional[str] = None
     first_name: Optional[str] = None
     family_name: Optional[str] = None
@@ -84,7 +124,10 @@ class SoulResponse(BaseModel):
     satiety: Optional[float] = 100.0
     hydration: Optional[float] = 100.0
     essence: Optional[float] = 0.0
+    state: Optional[str] = "normal"
+    fed_flag: Optional[int] = 0
     position: Optional[List[float]] = [0.0, 0.0]
+    velocity: Optional[List[float]] = [0.0, 0.0]
     hometown: Optional[Any] = None
     birth_date: Optional[str] = None
     activity: Optional[str] = None
@@ -116,3 +159,150 @@ class SoulResponse(BaseModel):
     inventory: Dict[str, int] = {}
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TamerRegister(BaseModel):
+    username: str
+    password: str
+
+
+class TamerLogin(BaseModel):
+    username: str
+    password: str
+
+
+class TamerResponse(BaseModel):
+    tamer_id: str
+    username: str
+
+
+class TamerSessionResponse(BaseModel):
+    token: str
+    tamer_id: str
+    username: str
+    expires_at: float
+
+
+class WsTicketResponse(BaseModel):
+    ticket: str
+    expires_in: int
+
+
+class KeyUploadRequest(BaseModel):
+    provider: str
+    key: str
+    label: str = ""
+
+
+class KeyRotateRequest(BaseModel):
+    new_key: str
+
+
+class KeyMetadata(BaseModel):
+    key_id: str
+    tamer_id: str
+    provider: str
+    label: str
+    last4: str
+    created_at: float
+    rotated_at: Optional[float] = None
+    revoked_at: Optional[float] = None
+    superseded_by: Optional[str] = None
+
+
+class PricingUpdate(BaseModel):
+    """Operator pricing-knob update (issue #27). Both fields optional;
+    omitted fields keep their current values. Affects new settlements
+    only."""
+
+    essence_per_usd: Optional[float] = None
+    model_rates: Optional[Dict[str, List[float]]] = None
+
+
+class TamerPresenceReport(BaseModel):
+    """Strict REST schema for the privacy-gated presence payload (#28).
+
+    `extra="forbid"`: padded/unknown fields are rejected with 422. Enum
+    values are closed; unknown values are rejected with 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    presence: Literal["active", "idle", "locked", "away"]
+    idle_bucket: Literal["0-5", "5-30", "30+"]
+    event: Optional[Literal["tamer_return", "lock", "unlock"]] = None
+    app_category: Optional[
+        Literal["game", "browser", "media", "chat", "work", "other"]
+    ] = None
+
+
+class PresenceOptIn(BaseModel):
+    """Tamer-scoped toggle for the optional app-category signal (#28)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class TamerPresenceState(BaseModel):
+    tamer_id: str
+    presence: Optional[str] = None
+    idle_bucket: Optional[str] = None
+    last_event: Optional[str] = None
+    app_category: Optional[str] = None
+    updated_at: Optional[float] = None
+    stale: bool = False
+
+
+class BridgeTokenCreate(BaseModel):
+    """Request body for POST /bridge/tokens."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+
+
+class BridgeTokenMeta(BaseModel):
+    """Integration-token metadata. Never carries token material."""
+
+    token_id: str
+    tamer_id: str
+    name: str
+    last4: str
+    created_at: float
+    revoked_at: Optional[float] = None
+    last_used_at: Optional[float] = None
+
+
+class BridgeTokenCreated(BridgeTokenMeta):
+    """Create response: metadata PLUS the plaintext token, shown once."""
+
+    token: str
+
+
+class BridgeEventIn(BaseModel):
+    """Strict schema for POST /bridge/events.
+
+    `extra="forbid"`: padded/unknown fields are rejected with 422.
+    summary >280 chars is rejected with 422 (never silently clamped).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=32)
+    summary: str = Field(min_length=1, max_length=280)
+    ref: Optional[str] = Field(default=None, max_length=256)
+    commentary: bool = False
+
+
+class BridgeActivityItem(BaseModel):
+    """One bridge event for the info-card activity log / tray tooltip."""
+
+    event_id: str
+    soul_id: str
+    source_id: str
+    kind: str
+    summary: str
+    ref: Optional[str] = None
+    created_at: float

@@ -7,7 +7,7 @@ import random
 import time
 from typing import TYPE_CHECKING, Callable
 
-import pyautogui
+from shared.spatial import SpatialHashGrid
 
 from ...constants import (
     HOVER_AMPLITUDE,
@@ -22,6 +22,46 @@ from ...system.logger import log
 
 if TYPE_CHECKING:
     from .soul import Soul
+
+
+SEPARATION_CELL_SIZE = 32.0
+
+_separation_frame = 0
+_separation_grids: dict[int, tuple[int, SpatialHashGrid]] = {}
+
+
+def begin_separation_frame() -> None:
+    """Advances the separation frame so the next lookup rebuilds the grid.
+
+    Call once per simulation frame before updating souls. The neighbor
+    grid is then built lazily on the first separation query of the frame
+    and reused by every soul, keeping the whole frame O(n).
+    """
+    global _separation_frame
+    _separation_frame += 1
+
+
+def _separation_key(other: Soul) -> str:
+    biology = getattr(other, "biology", None)
+    soul_id = getattr(biology, "soul_id", None)
+    return soul_id if soul_id else str(id(other))
+
+
+def _separation_grid(registry: list[Soul]) -> SpatialHashGrid:
+    key = id(registry)
+    cached = _separation_grids.get(key)
+    if cached is not None and cached[0] == _separation_frame:
+        return cached[1]
+    grid = SpatialHashGrid(cell_size=SEPARATION_CELL_SIZE)
+    for other in registry:
+        grid.insert(
+            _separation_key(other),
+            other.x + other.width / 2,
+            other.y + other.height / 2,
+            other,
+        )
+    _separation_grids[key] = (_separation_frame, grid)
+    return grid
 
 
 # --- Window Physics and Interaction ---
@@ -107,13 +147,9 @@ class SoulPhysics:
 
         self.width: int = SOUL_WIDTH
         self.height: int = SOUL_HEIGHT
-        log.debug(
-            f"Soul: {self.name} initialized with position ({self.x}, {self.y})"
-        )
+        log.debug(f"Soul: {self.name} initialized with position ({self.x}, {self.y})")
 
-    def on_mouse_press(
-        self, x: int, y: int, button: int, modifiers: int
-    ) -> None:
+    def on_mouse_press(self, x: int, y: int, button: int, modifiers: int) -> None:
         """Handles mouse press events to initiate dragging.
 
         Args:
@@ -129,12 +165,9 @@ class SoulPhysics:
                 self.x <= x <= self.x + self.width
                 and self.y <= y <= self.y + self.height
             ):
-
                 # Check for double click (within 300ms)
                 current_time = time.time()
-                if (
-                    current_time - self.last_click_time < 0.3
-                ):  # Double click detected
+                if current_time - self.last_click_time < 0.3:  # Double click detected
                     self.follow_mouse = not self.follow_mouse
 
                     if self.follow_mouse:
@@ -156,9 +189,7 @@ class SoulPhysics:
                 self.vx = 0.0  # Stop independent movement
                 self.vy = 0.0
 
-    def on_mouse_release(
-        self, x: int, y: int, button: int, modifiers: int
-    ) -> None:
+    def on_mouse_release(self, x: int, y: int, button: int, modifiers: int) -> None:
         """Handles mouse release events to stop dragging."""
         if button == 1:  # 1 is LEFT mouse button
             was_dragging = self.is_dragging
@@ -229,9 +260,7 @@ class SoulPhysics:
             )
             self.y = max(
                 -WINDOW_OVERSHOOT,
-                min(
-                    self.y, self.screen_height - self.height + WINDOW_OVERSHOOT
-                ),
+                min(self.y, self.screen_height - self.height + WINDOW_OVERSHOOT),
             )
 
             # Update soul position
@@ -311,12 +340,8 @@ class SoulPhysics:
                 self.target_location is None or random.random() < 0.005
             ):
                 padding = min(self.screen_width, self.screen_height) * 0.1
-                tx = random.uniform(
-                    padding, self.screen_width - self.width - padding
-                )
-                ty = random.uniform(
-                    padding, self.screen_height - self.height - padding
-                )
+                tx = random.uniform(padding, self.screen_width - self.width - padding)
+                ty = random.uniform(padding, self.screen_height - self.height - padding)
                 self.target_location = (tx, ty)
 
             # Move towards target
@@ -326,9 +351,7 @@ class SoulPhysics:
                 )
                 if reached:
                     self.target_location = None
-                    self.roaming_pause = random.uniform(
-                        ROAM_PAUSE_MIN, ROAM_PAUSE_MAX
-                    )
+                    self.roaming_pause = random.uniform(ROAM_PAUSE_MIN, ROAM_PAUSE_MAX)
                     if self.on_move_end:
                         self.on_move_end(self.soul, self.x, self.y)
 
@@ -353,18 +376,13 @@ class SoulPhysics:
 
         # Access registry from soul if available
         if hasattr(self.soul, "soul_registry") and self.soul.soul_registry:
-            for other in self.soul.soul_registry:
+            grid = _separation_grid(self.soul.soul_registry)
+            neighbors = grid.query_radius(
+                my_center_x, my_center_y, separation_radius
+            )
+            for _, other_center_x, other_center_y, other in neighbors:
                 if other is self.soul:
                     continue
-
-                # Check rough bounds first
-                if abs(other.x - self.x) > separation_radius:
-                    continue
-                if abs(other.y - self.y) > separation_radius:
-                    continue
-
-                other_center_x = other.x + other.width / 2
-                other_center_y = other.y + other.height / 2
 
                 dx = my_center_x - other_center_x
                 dy = my_center_y - other_center_y
@@ -400,9 +418,7 @@ class SoulPhysics:
             self.soul.x = self.x
             self.soul.y = self.y
 
-    def _move_towards_target(
-        self, target_x: float, target_y: float, dt: float
-    ) -> bool:
+    def _move_towards_target(self, target_x: float, target_y: float, dt: float) -> bool:
         """Moves the soul towards a target position with smooth deceleration.
 
         Args:
@@ -439,9 +455,7 @@ class SoulPhysics:
         dy *= inv_distance
 
         # Calculate speed with smooth deceleration using an ease-out curve
-        deceleration_distance = (
-            50.0  # Distance over which to decelerate (pixels)
-        )
+        deceleration_distance = 50.0  # Distance over which to decelerate (pixels)
         speed_factor = min(1.0, distance / deceleration_distance)
 
         # Apply a smoother curve (ease-out cubic)
@@ -463,9 +477,7 @@ class SoulPhysics:
         # Clamp to screen edges with sub-pixel precision
         self.x = max(
             float(-WINDOW_OVERSHOOT),
-            min(
-                self.x, self.screen_width - self.width + float(WINDOW_OVERSHOOT)
-            ),
+            min(self.x, self.screen_width - self.width + float(WINDOW_OVERSHOOT)),
         )
         self.y = max(
             float(-WINDOW_OVERSHOOT),
@@ -490,6 +502,8 @@ class SoulPhysics:
         Args:
             dt: Delta time.
         """
+        import pyautogui
+
         mouse_x, mouse_y = pyautogui.position()
         target_x = float(mouse_x) - (self.width // 2)
         target_y = float(mouse_y) - (self.height // 2)

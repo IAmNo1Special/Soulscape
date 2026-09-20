@@ -1,0 +1,602 @@
+"""Bounded async agent pool (issue #24).
+
+One think per due soul: gather senses -> reflex evaluation ->
+vocabulary validation -> execution-time revalidation -> enqueue.
+
+The pool is asyncio.Semaphore-bounded (MAX_CONCURRENT_THINKS) so the
+#25 LLM deliberation path can share the same structure; v0 reflex
+thinks are CPU/DB-trivial and never block the loop.
+
+Execution-time revalidation (the agent-side pre-enqueue gate, ahead of
+the #14/#17 adjudication revalidation):
+  1. soul still exists, awake (not dormant), uncollapsed;
+  2. payload well-formed for the action;
+  3. target_ref still valid (food/water still at the referenced spot);
+  4. wallet still covers the action's price (post/reply today).
+A stale intent is rejected SILENTLY: a journal row
+(agent_stale_reject), no intent enqueued, nothing surfaced.
+
+Off-menu emissions never reach validation: they normalize to the fixed
+peaceful sensation, recorded in the ring + journal.
+
+Enqueue uses session "agent-pool" with a fresh nonce per intent;
+custodian_id is the soul's own custodian so the move adjudication's
+custody check passes while closed-plot rules still apply (the soul's
+own reflex does not bypass other tamers' closed plots).
+"""
+
+import asyncio
+import json
+import logging
+import math
+import random
+import secrets
+import time
+
+from .. import biology, database, dormancy, intents, mailbag, persistence, presence
+from .. import resources
+from . import drives, memory, metering, reflex, scheduler, sensations, vocab
+
+logger = logging.getLogger("soulscape_hub")
+
+#: Session id under which agent-pool intents are enqueued.
+POOL_SESSION_ID = "agent-pool"
+
+#: Bound on concurrent think tasks.
+MAX_CONCURRENT_THINKS = 8
+
+#: Essence price the revalidation gate checks for paid vocab actions
+#: the pool can emit in v0. claim_plot's ring-priced fee is #25 scope.
+_PAID_ACTIONS = {"post": 20.0, "reply": 8.0}
+
+
+def _observation_line(row: dict, drive_vec: dict, observations: list) -> str:
+    """One-line working-memory rendering of a think's observation."""
+    nearest = ""
+    if observations:
+        first = sorted(observations, key=lambda o: float(o.get("distance", 1e9)))[0]
+        nearest = (
+            f"; nearest {first.get('kind', '?')} "
+            f"{float(first.get('distance', 0.0)):.0f}wu"
+        )
+    drives_txt = ",".join(f"{k}={v:.2f}" for k, v in sorted(drive_vec.items()))
+    return (
+        f"satiety {row.get('satiety')} hydration {row.get('hydration')} "
+        f"hp {row.get('hp')} essence {row.get('essence')}{nearest}; "
+        f"drives {drives_txt}"
+    )[:280]
+
+
+def _reflex_summary(result: dict) -> str:
+    actions = [str(e.get("action")) for e in result.get("intents", [])]
+    if actions:
+        return "reflex fired: " + ", ".join(actions)
+    texts = [str(s.get("text", "")) for s in result.get("sensations", [])][:2]
+    return "reflex noted: " + "; ".join(texts) if texts else "reflex think"
+
+
+def _as_pair(raw) -> tuple[float, float] | None:
+    try:
+        x, y = float(raw[0]), float(raw[1])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    return (x, y)
+
+
+def validate_agent_payload(action: str, payload: dict) -> dict | None:
+    """Canonical payload for an agent-emitted action, or None if bad.
+
+    Covers the actions the v0 reflex layer emits. Deliberation actions
+    (#25) get full validators there.
+    """
+    payload = payload or {}
+    if action == "move_to":
+        try:
+            x, y = float(payload["x"]), float(payload["y"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        out = {"x": x, "y": y}
+        ref = payload.get("target_ref")
+        if isinstance(ref, dict) and _as_pair(ref.get("at")) is not None:
+            out["target_ref"] = {
+                "kind": str(ref.get("kind", "")),
+                "at": [float(ref["at"][0]), float(ref["at"][1])],
+            }
+        return out
+    if action == "gather":
+        node_id = payload.get("node_id")
+        if isinstance(node_id, str) and node_id:
+            return {"node_id": node_id}
+        return None
+    if action == "eat":
+        # Eating is from inventory: no target needed. A legacy food pair
+        # is accepted and ignored (kept for trace compatibility).
+        if "food" not in payload:
+            return {}
+        pair = _as_pair(payload.get("food"))
+        return {"food": [pair[0], pair[1]]} if pair else None
+    if action == "drink":
+        if "water" not in payload:
+            return {}
+        pair = _as_pair(payload.get("water"))
+        return {"water": [pair[0], pair[1]]} if pair else None
+    if action in ("look", "rest", "wait"):
+        return {}
+    if isinstance(payload, dict):
+        return dict(payload)
+    return None
+
+
+def _journal(conn, tick_id: int, event_type: str, payload: dict) -> None:
+    persistence.append_event(conn, tick_id, event_type, payload)
+    conn.commit()
+
+
+def record_illegal(soul_id: str, action: str, tick_id: int = 0) -> dict:
+    """Normalize an off-menu emission to the peaceful sensation.
+
+    Recorded in the ring and the journal; never becomes an intent.
+    """
+    with database.get_db() as conn:
+        sensation = sensations.record(
+            soul_id,
+            vocab.PEACEFUL_SENSATION,
+            cause=f"illegal_action:{action}",
+            tick_id=tick_id,
+            journal_conn=conn,
+        )
+        conn.commit()
+    return sensation
+
+
+def _parse_position_pair(raw: object) -> tuple[float, float]:
+    """Parse a stored [x, y] position pair; (0.0, 0.0) when missing."""
+    if raw is None:
+        return (0.0, 0.0)
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    x, y = float(raw[0]), float(raw[1])
+    if not math.isfinite(x) or not math.isfinite(y):
+        raise ValueError("non-finite pair")
+    return (x, y)
+
+
+def execution_revalidate(
+    row: dict,
+    action: str,
+    payload: dict,
+    provider: reflex.FoodWaterProvider,
+) -> tuple[bool, str]:
+    """Pre-enqueue gate against live state. (True, "") or (False, reason)."""
+    if row is None:
+        return False, "soul_not_found"
+    if (row.get("state") or biology.STATE_NORMAL) == biology.STATE_COLLAPSED:
+        return False, "collapsed"
+    if dormancy.is_dormant(row.get("essence")):
+        return False, "soul_dormant"
+    canonical = validate_agent_payload(action, payload)
+    if canonical is None:
+        return False, "bad_payload"
+    if action == "gather":
+        node = provider.node_by_id(canonical.get("node_id") or "")
+        if node is None or int(node.get("amount") or 0) <= 0:
+            return False, "target_gone"
+        try:
+            sx, sy = _parse_position_pair(row.get("position"))
+        except (ValueError, TypeError, IndexError):
+            return False, "bad_position"
+        if (
+            math.hypot(float(node["x"]) - sx, float(node["y"]) - sy)
+            > resources.GATHER_REACH_WU
+        ):
+            return False, "too_far"
+        return True, ""
+    ref = canonical.get("target_ref") if action == "move_to" else None
+    if ref is not None:
+        kind, (ax, ay) = ref["kind"], ref["at"]
+        if kind == "food" and not provider.is_food_at(ax, ay):
+            return False, "target_gone"
+        if kind == "water" and not provider.is_water_at(ax, ay):
+            return False, "target_gone"
+    price = _PAID_ACTIONS.get(action)
+    if price is not None and float(row.get("essence") or 0.0) < price:
+        return False, "insufficient_essence"
+    return True, ""
+
+
+class AgentPool:
+    def __init__(
+        self,
+        max_concurrent: int = MAX_CONCURRENT_THINKS,
+        think_scheduler: scheduler.ThinkScheduler | None = None,
+        seed: int | None = None,
+    ) -> None:
+        self.max_concurrent = max_concurrent
+        self.think_scheduler = think_scheduler or scheduler.default()
+        self._rng = random.Random(seed)
+        self._observations: dict[str, dict] = {}
+
+    def last_observation(self, soul_id: str) -> dict | None:
+        """Most recent think observation payload for a soul.
+
+        Carries the soul's recent sensations (sensations requirement).
+        The viewport stream does not include these yet -- hook for #30.
+        """
+        return self._observations.get(soul_id)
+
+    def _load_soul(self, soul_id: str) -> dict | None:
+        with database.get_db() as conn:
+            row = conn.execute(
+                "SELECT soul_id, position, velocity, nature, state, "
+                "COALESCE(essence, 0.0) AS essence, "
+                "COALESCE(satiety, 100.0) AS satiety, "
+                "COALESCE(hydration, 100.0) AS hydration, "
+                "COALESCE(hp, 100.0) AS hp, "
+                "COALESCE(max_hp, 100.0) AS max_hp, "
+                "COALESCE(loyalty, 0.5) AS loyalty, "
+                "custodian_id, owner_id "
+                "FROM souls WHERE soul_id = ?",
+                (soul_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def _parse_pair(raw):
+        return _parse_position_pair(raw)
+
+    def _enqueue(self, row: dict, action: str, payload: dict) -> dict:
+        custodian = row.get("custodian_id") or row.get("owner_id")
+        nonce = "pool_" + secrets.token_urlsafe(16)
+        return intents.enqueue_intent(
+            POOL_SESSION_ID, nonce, custodian, row["soul_id"], action, payload
+        )
+
+    def validate_and_enqueue(
+        self,
+        soul_id: str,
+        action: str,
+        payload: dict,
+        provider: reflex.FoodWaterProvider,
+        tick_id: int,
+    ) -> str | None:
+        """Validate one emitted action and enqueue it, or handle rejection.
+
+        Off-menu actions normalize to the peaceful sensation (never an
+        intent). Stale intents are rejected silently into the journal.
+        Returns the intent_id when enqueued, else None.
+        """
+        name, ok = vocab.validate(action)
+        if not ok:
+            record_illegal(soul_id, str(action), tick_id)
+            return None
+        canonical = validate_agent_payload(name, payload or {})
+        if canonical is None:
+            return None
+        live = self._load_soul(soul_id)
+        good, reason = execution_revalidate(live, name, canonical, provider)
+        if not good:
+            with database.get_db() as conn:
+                sensations.journal_stale_reject(
+                    conn, tick_id, soul_id, name, canonical, reason
+                )
+                conn.commit()
+            return None
+        return self._enqueue(live, name, canonical)["intent_id"]
+
+    async def think(
+        self,
+        soul_id: str,
+        vision,
+        provider: reflex.FoodWaterProvider,
+        tick_id: int,
+        now: float,
+    ) -> dict:
+        """One reflex think for one soul. Returns a small summary dict."""
+        row = self._load_soul(soul_id)
+        if row is None:
+            self.think_scheduler.forget(soul_id)
+            return {"soul_id": soul_id, "status": "missing"}
+        if (row.get("state") or biology.STATE_NORMAL) == biology.STATE_COLLAPSED:
+            self.think_scheduler.schedule_next(soul_id, now)
+            return {"soul_id": soul_id, "status": "collapsed"}
+        if dormancy.is_dormant(row.get("essence")):
+            self.think_scheduler.schedule_next(soul_id, now)
+            return {"soul_id": soul_id, "status": "dormant"}
+        try:
+            x, y = self._parse_pair(row.get("position"))
+        except (ValueError, TypeError, IndexError):
+            x, y = 0.0, 0.0
+        observations = vision.detail_observations(soul_id)
+        # Feed #25's escalation tracker: wallet sightings (every ledger
+        # applier flows through here) and detail-vision enters. Lazy
+        # import: deliberation imports this module at top level.
+        from . import deliberation as _delib
+
+        _delib.tracker().note_wallet(soul_id, float(row.get("essence") or 0.0), now)
+        _delib.tracker().check_detail_enters(soul_id, observations, now)
+        drive_vec = drives.compute_drives(
+            row.get("nature"),
+            row.get("satiety"),
+            row.get("hydration"),
+            row.get("hp"),
+            row.get("max_hp"),
+            observations,
+            row.get("loyalty"),
+        )
+        with database.get_db() as conn:
+            pack = resources.inventory_for(conn, soul_id)
+        observation = {
+            "soul_id": soul_id,
+            "position": [x, y],
+            "satiety": row.get("satiety"),
+            "hydration": row.get("hydration"),
+            "hp": row.get("hp"),
+            "essence": row.get("essence"),
+            "nature": row.get("nature"),
+            "state": row.get("state"),
+            "drives": drive_vec,
+            "observations": observations,
+            "emote": reflex.emote_of(soul_id),
+            # #28: the custodian-tamer's redacted presence. None when
+            # unknown -- never fabricated.
+            "tamer_presence": presence.get_presence(
+                row.get("custodian_id") or row.get("owner_id"), now
+            ),
+        }
+        result = reflex.evaluate(
+            soul_id,
+            x,
+            y,
+            float(row.get("satiety") or 100.0),
+            float(row.get("hydration") or 100.0),
+            drive_vec,
+            observations,
+            provider,
+            self._rng,
+            now,
+            inventory=pack,
+        )
+        with database.get_db() as conn:
+            for s in result["sensations"]:
+                sensations.record(
+                    soul_id, s["text"], s["cause"], tick_id, journal_conn=conn
+                )
+            conn.commit()
+        observation["sensations"] = sensations.recent(soul_id)
+        observation["emote"] = result["emote"] or reflex.emote_of(soul_id)
+        self._observations[soul_id] = observation
+        # #26: the observation joins volatile working memory.
+        memory.remember_working(
+            soul_id,
+            {
+                "kind": "observation",
+                "text": _observation_line(row, drive_vec, observations),
+                "at": now,
+            },
+        )
+        enqueued: list[str] = []
+        enqueued_actions: list[tuple[str, str]] = []
+        for emitted in result["intents"]:
+            action = str(emitted.get("action"))
+            intent_id = self.validate_and_enqueue(
+                soul_id,
+                action,
+                emitted.get("payload") or {},
+                provider,
+                tick_id,
+            )
+            if intent_id is not None:
+                enqueued.append(intent_id)
+                enqueued_actions.append((action, intent_id))
+                memory.remember_working(
+                    soul_id,
+                    {
+                        "kind": "intent",
+                        "text": f"enqueued {action} ({intent_id[:8]})",
+                        "at": now,
+                    },
+                )
+        # #26: notable reflex firings become episodic rows. Salience-
+        # gated: a quiet think (nothing emitted, no sensations) writes
+        # nothing -- not every tick becomes a memory.
+        if result["intents"] or result["sensations"]:
+            memory.log_episode(
+                soul_id,
+                "reflex",
+                {
+                    "summary": _reflex_summary(result),
+                    "actions": [a for a, _ in enqueued_actions],
+                    "sensations": [s["text"] for s in result["sensations"]][:4],
+                    "enqueued": enqueued,
+                },
+                salience=0.6 if result["intents"] else 0.45,
+            )
+        self.think_scheduler.schedule_next(soul_id, now)
+        return {
+            "soul_id": soul_id,
+            "status": "thought",
+            "enqueued": enqueued,
+            "emote": result["emote"],
+        }
+
+    async def deliberate(
+        self,
+        soul_id: str,
+        vision,
+        provider: reflex.FoodWaterProvider,
+        tick_id: int,
+        now: float,
+        escalation: str | None,
+        deliberator=None,
+    ) -> dict:
+        """One #25 deliberation for one soul (the promoted think path).
+
+        Runs under the same semaphore as reflex thinks. The deliberator
+        walks the provider chain; validated intents go through the same
+        validate_and_enqueue path as reflex intents. On total provider
+        failure (or any unexpected crash) the soul still acts: the #24
+        reflex think runs instead. Nothing here ever raises out.
+        """
+        from . import deliberation as _delib
+
+        row = self._load_soul(soul_id)
+        if row is None:
+            self.think_scheduler.forget(soul_id)
+            return {"soul_id": soul_id, "status": "missing"}
+        if (row.get("state") or biology.STATE_NORMAL) == biology.STATE_COLLAPSED:
+            self.think_scheduler.schedule_next(soul_id, now)
+            return {"soul_id": soul_id, "status": "collapsed"}
+        if dormancy.is_dormant(row.get("essence")):
+            self.think_scheduler.schedule_next(soul_id, now)
+            return {"soul_id": soul_id, "status": "dormant"}
+        _delib.tracker().note_wallet(soul_id, float(row.get("essence") or 0.0), now)
+        thinker = deliberator or _delib.Deliberator(self)
+        try:
+            result = thinker.deliberate(
+                soul_id, row, vision, provider, now, escalation, tick_id
+            )
+        except Exception:
+            logger.exception("deliberation crashed for %s; reflex fallback", soul_id)
+            result = {
+                "status": "heuristic",
+                "intents": [],
+                "fallback_used": True,
+            }
+        if result.get("status") == "heuristic":
+            summary = await self.think(soul_id, vision, provider, tick_id, now)
+            summary["deliberation"] = "heuristic_fallback"
+            summary["degraded_reason"] = result.get("degraded_reason")
+            return summary
+        # #26: the deliberation itself is episodic memory (rationale
+        # included); the rationale also joins working memory.
+        rationale = str(result.get("rationale") or "")
+        memory.log_episode(
+            soul_id,
+            "deliberation",
+            {
+                "summary": rationale[:200],
+                "rationale": rationale[:1000],
+                "intents": [a for a, _ in result.get("intents", [])],
+                "tier": result.get("tier"),
+                "escalation": escalation,
+            },
+            salience=0.8,
+        )
+        if rationale:
+            memory.remember_working(
+                soul_id,
+                {"kind": "rationale", "text": rationale[:280], "at": now},
+            )
+        enqueued: list[str] = []
+        for action, payload in result.get("intents", []):
+            intent_id = self.validate_and_enqueue(
+                soul_id, action, payload, provider, tick_id
+            )
+            if intent_id is not None:
+                enqueued.append(intent_id)
+        # #32 mailbag: a successful LLM deliberation may attach one free
+        # question for the tamer (an optional think-output field, NOT a
+        # vocab action). ask_question enforces the 3-pending cap (the 4th
+        # drops, journaled) and fans the question bubble. The heuristic
+        # fallback above returns early, so degraded brains never ask.
+        question = str(result.get("question") or "").strip()
+        mailbag_result: dict | None = None
+        if question:
+            try:
+                mailbag_result = mailbag.ask_question(soul_id, question, now, tick_id)
+            except Exception:
+                logger.exception("mailbag ask failed for %s", soul_id)
+        # #27: join the deliberation's trace to the intents it produced.
+        trace_id = result.get("trace_id")
+        if trace_id and enqueued:
+            metering.attach_intent_ids(trace_id, enqueued)
+        self.think_scheduler.schedule_next(soul_id, now)
+        summary = {
+            "soul_id": soul_id,
+            "status": "deliberated",
+            "escalation": escalation,
+            "tier": result.get("tier"),
+            "provider": result.get("provider"),
+            "model": result.get("model"),
+            "fallback_used": result.get("fallback_used"),
+            "enqueued": enqueued,
+            "trace_id": trace_id,
+        }
+        if mailbag_result is not None:
+            summary["mailbag"] = mailbag_result
+        return summary
+
+    async def think_batch(
+        self,
+        soul_ids: list[str],
+        vision,
+        provider: reflex.FoodWaterProvider,
+        tick_id: int,
+        now: float,
+        deliberate_ids: frozenset[str] | set[str] | None = None,
+        escalations: dict[str, str] | None = None,
+        deliberator=None,
+    ) -> list[dict]:
+        """Run thinks for due souls under the concurrency bound.
+
+        Souls in deliberate_ids take the #25 deliberation path (with
+        their escalation reason); the rest take the reflex path. One
+        shared deliberator keeps flash-failure counters across the batch.
+        """
+        deliberate_ids = deliberate_ids or frozenset()
+        escalations = escalations or {}
+        if deliberate_ids and deliberator is None:
+            from . import deliberation as _delib
+
+            deliberator = _delib.Deliberator(self)
+        sem = asyncio.Semaphore(self.max_concurrent)
+
+        async def _one(soul_id: str) -> dict:
+            async with sem:
+                try:
+                    if soul_id in deliberate_ids:
+                        return await self.deliberate(
+                            soul_id,
+                            vision,
+                            provider,
+                            tick_id,
+                            now,
+                            escalations.get(soul_id),
+                            deliberator,
+                        )
+                    return await self.think(soul_id, vision, provider, tick_id, now)
+                except Exception:
+                    logger.exception("agent think failed for %s", soul_id)
+                    return {"soul_id": soul_id, "status": "error"}
+
+        return list(await asyncio.gather(*(_one(sid) for sid in soul_ids)))
+
+    def run_thinks(
+        self,
+        soul_ids: list[str],
+        vision,
+        provider: reflex.FoodWaterProvider,
+        tick_id: int,
+        now: float | None = None,
+        deliberate_ids: frozenset[str] | set[str] | None = None,
+        escalations: dict[str, str] | None = None,
+        deliberator=None,
+    ) -> list[dict]:
+        """Sync entry for the tick loop (which runs off the event loop)."""
+        now = time.time() if now is None else now
+        return asyncio.run(
+            self.think_batch(
+                soul_ids,
+                vision,
+                provider,
+                tick_id,
+                now,
+                deliberate_ids=deliberate_ids,
+                escalations=escalations,
+                deliberator=deliberator,
+            )
+        )

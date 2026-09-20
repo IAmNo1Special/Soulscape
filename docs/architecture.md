@@ -14,7 +14,7 @@ Soulscape is a **new frontend for AI agents**: not a chat window, but a persiste
 
 ## 1. System Topology
 
-One node, two processes (target state; see §9 migration):
+One node, two processes (**implemented** — ADR-0003; was "target state"):
 
 ```
 ┌────────────────────────── hub-api (uvicorn, workers=1) ──────────────────────────┐
@@ -137,7 +137,17 @@ Forage (5–20 min → 1–6 e items) · fetch water · sell at market · post/r
 XP per completed activity (+social engagement cap anti-farming); level curve `xp_next = 60×level^1.4 [S]`; level-ups grant +2 stat points auto-allocated by nature-weighted preference (the Soul chooses its build — watchable); EVs earned Pokémon-style from activities; IVs fixed at birth; Vision IV gates detection/pilfer rolls. Breeding v2: co-location + gender + 300 e joint fee; child inherits 3 IVs/parent + 1 mutation. Rarity tiers: species 70/20/8/2, aura-color shiny variants.
 
 ### Pet interaction grammar (autonomy-safe)
-Hover nameplate · left-click attention chirp · right-click info card (mood, needs, activity, whereabouts) · petting (affection → loyalty memory, 1/hr cooldown, no economic effect) · resistable carry (stubborn natures squirm free; set-down anywhere; never crosses plots). **Zero command verbs on the body** — steering stays goals/budgets/orders.
+Hover nameplate · left-click attention chirp · right-click info card (mood, needs, activity, whereabouts) · petting (affection → loyalty memory, no economic effect) · resistable carry (stubborn natures squirm free; never crosses plots). **Zero command verbs on the body** — steering stays goals/budgets/orders.
+
+Implemented (issue #31):
+- Grammar is affection/attention only: `chirp`, `affection_pet`, `carry_move{ grab, move, release }`. No direct-command verbs (move/stay/fetch/attack and friends are not intent kinds and never will be on the body).
+- Custody: only the soul's custodian-tamer may chirp/pet/carry; strangers are rejected at ingress and adjudication. Dormant (unfunded) and collapsed souls cannot be touched or carried.
+- Gestures (client): short click = chirp (local pulse + signed chirp intent), press-and-hold ≥ 0.8 s = pet, drag past 6 px = carry grab; carry moves stream at ≤ 5 Hz; release = set down. `move_to` on the body is removed.
+- Petting: 5-minute cooldown per (soul, tamer), enforced server-side in the adjudication transaction (durable across restarts); each accepted pet nudges stored `souls.loyalty` +0.02 toward a 1.0 cap and writes exactly one high-salience episodic memory (+ semantic store). Chirp records an attention sensation, pulls the think scheduler forward, and emits a solicited `!` system bubble.
+- Carry: phases grab → move → release. Each move is validated against the soul's true (read-through) coordinates: must stay on the origin plot and within a 120-unit leash of the true position, else rejected with the last valid position untouched. While carried, `move_to` is suspended and normal position integration is skipped — the tamer's drag stream owns the soul's position for the carry duration.
+- Escape: per-move escape roll, cadence-independent `p = 1 - (1 - rate)^dt`, clamped to 5 s ticks. Per-second rates: docile 2%, calm 5%, playful-like 12%, timid 25%, wild-like 40%, default 10%. An escape drops the soul at its true position and starts a 30 s re-grab cooldown.
+- Identity stream: name/species/level/activity ride the viewport snapshot (hover nameplate, info card) and stream as priority `identity`-domain delta ops when they change mid-session, so the card never waits for a re-snapshot.
+- Bubbles (`!` chirp, `♥` pet, escape notice) are emitted post-commit so a rolled-back adjudication can never leave a phantom bubble.
 
 ### Session loops
 Unlock = login moment: greeting ritual + morning-note bubble (≤3 lines: overnight highlights + mailbag count). Mailbag answers ambient via bubble taps. Weekly deep session (market/social/planning) unchanged. Water-cooler reactions to machine activity (free reflex layer).
@@ -183,8 +193,8 @@ Ordered, each step shippable:
 3. Move wallets/economy behind tick-boundary intent adjudication (durable intent queue).
 4. Introduce plot grid, allocation counter, origin commons.
 5. Hash grid replaces O(n²).
-6. Extract SimProcess to its own container/process + replay/operator tooling.
-7. Shard by ring bands **[S]**.
+6. Extract SimProcess to its own container/process + replay/operator tooling. **[done — ADR-0003]**
+7. Shard by ring bands **[S]** — revisit sharding on sustained ticks-behind or third-Tamer onboarding.
 
 Client rewrite runs in parallel: delete ADK brain, LocalStore/RemoteStore dual-write, pyautogui paths, command-queue-as-game-logic once flags flip; overlay mechanics land early (presentation-only). Dual-source-of-truth windows kept short and flagged.
 

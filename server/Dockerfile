@@ -1,4 +1,4 @@
-# server/Dockerfile
+# server/Dockerfile — Soulscape hub image (issue #37: sim + api processes).
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 WORKDIR /app
@@ -11,8 +11,7 @@ COPY pyproject.toml uv.lock ./
 COPY server/pyproject.toml ./server/
 COPY client/pyproject.toml ./client/
 
-# Install dependencies for the package named "server"
-# Note: This requires your uv.lock to be up-to-date with the name change!
+# Install dependencies for the server package (no dev deps)
 RUN uv sync --frozen --no-dev --package server --no-install-project
 
 # Second stage
@@ -24,20 +23,15 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Create the package directory and copy files into it
-# This results in /app/server/main.py, /app/server/database.py, etc.
-WORKDIR /app/server
-COPY server/main.py server/database.py server/managers.py server/models.py server/security.py ./
-COPY server/routers ./routers
-COPY server/pyproject.toml ./
-# Copy .env if needed, though docker-compose usually handles this
-# COPY server/.env ./
+# Copy the full server package and the shared models it imports.
+# (An earlier revision copied an obsolete file subset and missed new
+# modules; copying the whole tree keeps the image in sync with the repo.)
+COPY server/ ./server/
+COPY shared/ ./shared/
 
-# Return to root
-WORKDIR /app
-
-# Add /app to PYTHONPATH so "server" is recognized as a top-level package
+# /app on the path so `server` and `shared` import as top-level packages.
 ENV PYTHONPATH="/app"
+ENV PYTHONUNBUFFERED=1
 
-# Run the app as a module
+# Default: run the API. The sim service overrides CMD (see docker-compose.yml).
 CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "9785"]

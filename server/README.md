@@ -33,13 +33,20 @@ Soulscape Hub is the central backend engine for the Soulscape metaverse. It prov
 
 ### Running the Hub
 
-To start the server locally:
+To start the server locally, from the repo root run the API and the
+simulation process in two separate terminals:
 
 ```bash
-uv run main.py
+uv run --package server python -m server
+uv run --package server python -m server.sim_process
 ```
 
 The Hub will be available at `http://0.0.0.0:9785`. You can access the Interactive API documentation (Swagger UI) at `http://localhost:9785/docs`.
+
+The SimProcess is required: without it the Hub reports
+`"status": "degraded"` on `/health`, and every intent, marketplace,
+and social action returns `503 Simulation unavailable` until the
+SimProcess is up.
 
 ### Running with Docker
 

@@ -16,6 +16,16 @@ uniform float time;
 
 uniform vec3 base_color_uniform; // New uniform for custom base color
 
+uniform float desat_factor; // Issue #29: 0 full color .. 1 full grayscale
+
+uniform float brightness; // Issue #29: biology/reflex brightness multiplier
+
+uniform float opacity; // Issue #29: typing-dip / reflex alpha multiplier
+
+uniform float pulse_rate; // Issue #29: plasma-pulse speed multiplier
+
+uniform float pulse_strength; // Issue #29: plasma-pulse amplitude multiplier
+
 
 
 float noise(vec2 p) {
@@ -64,13 +74,17 @@ void main() {
 
  
 
-  // Plasma effect
+  // Plasma effect (issue #29: pulse_rate scales the time terms,
+  // pulse_strength scales the highlight mix; 0 freezes the pattern)
+  float pt = time * pulse_rate;
 
-  float plasma = pnoise(uv * 10.0 + time * 0.5) * 0.5;
+  float plasma = pnoise(uv * 10.0 + pt * 0.5) * 0.5;
 
-  plasma += pnoise(uv * 20.0 - time * 0.3) * 0.3;
+  plasma += pnoise(uv * 20.0 - pt * 0.3) * 0.3;
 
   plasma = fract(plasma);
+
+  plasma = plasma * pulse_strength + 0.5 * (1.0 - pulse_strength);
 
  
 
@@ -97,6 +111,11 @@ void main() {
   float boost = mix(1.4, 1.0, luminance);  // Less boost for brighter colors
   final_color *= boost;
 
-  fragColor = vec4(clamp(final_color, 0.0, 1.0), 1.0);
+  // Issue #29: state-driven desaturation, then brightness
+  vec3 gray = vec3(dot(final_color, vec3(0.299, 0.587, 0.114)));
+  final_color = mix(final_color, gray, desat_factor);
+  final_color *= brightness;
+
+  fragColor = vec4(clamp(final_color, 0.0, 1.0), opacity);
 
 }

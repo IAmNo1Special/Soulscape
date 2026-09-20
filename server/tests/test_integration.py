@@ -1,5 +1,17 @@
 from fastapi.testclient import TestClient
 
+from .. import database
+
+
+def _seed_inventory(soul_id, item_name, qty=10):
+    with database.get_db() as conn:
+        conn.execute(
+            "INSERT INTO soul_inventory (soul_id, item_name, quantity) "
+            "VALUES (?, ?, ?)",
+            (soul_id, item_name, qty),
+        )
+        conn.commit()
+
 
 def test_full_user_journey(client: TestClient, register_soul):
     register_soul(
@@ -10,6 +22,7 @@ def test_full_user_journey(client: TestClient, register_soul):
         "buyer_01", essence=500.0, name="Buyer",
         secret="buyer_secret_key_1234"
     )
+    _seed_inventory("seller_01", "Rare Candy")
 
     list_resp = client.post(
         "/marketplace/list",

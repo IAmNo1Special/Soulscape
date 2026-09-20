@@ -1,17 +1,35 @@
-"""
-API endpoints for the marketplace functionality, including item listings and trading.
+"""Marketplace REST endpoints (issue #17).
+
+list/buy/cancel are durable intents adjudicated at tick boundaries.
+REST stays synchronous: each write enqueues the intent
+(commit-before-ack, escrow hold for buys in the same transaction),
+pumps the tick's intent queue once in-request, and returns the settled
+outcome mapped onto the pre-#17 response shapes -- so RemoteStore and
+existing clients need no changes. The same endpoints work whether or
+not the authoritative tick loop is running.
+
+Idempotency: pass Idempotency-Key to make a retry return the original
+intent's outcome instead of double-applying. Without the header each
+call gets a fresh nonce.
 """
 
 import json
 import logging
+import secrets
 import time
-import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import database
+from .. import intents
+from .. import market
+from .. import viewport
+from ..market import MAX_ITEM_SIZE, MAX_JSON_DEPTH, MarketRefusal
 from ..models import BuyRequest, MarketListing
+from ..rate_limit import market_write_limit, read_limit
 from ..security import UserIdentity, get_api_key
+from ..sim_gateway import SimError, SimRefusal, SimUnreachable, gateway_for
+from .actor import rest_actor
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -21,8 +39,6 @@ router = APIRouter(
     dependencies=[Depends(get_api_key)],
 )
 
-MAX_ITEM_SIZE = 100_000
-MAX_JSON_DEPTH = 10
 CACHE_TTL = 10.0
 
 _marketplace_cache: dict = {"timestamp": 0.0, "data": None}
@@ -50,7 +66,107 @@ def _validate_depth(obj, depth: int = 0):
             _validate_depth(v, depth + 1)
 
 
-@router.get("")
+def _invalidate_cache() -> None:
+    _marketplace_cache["timestamp"] = 0.0
+    _marketplace_cache["data"] = None
+
+
+_REFUSAL_STATUS = {
+    "listing_not_found": 404,
+    "buyer_not_found": 404,
+    "seller_not_found": 400,
+    "insufficient_funds": 400,
+    "insufficient_inventory": 400,
+    "item_unnamed": 400,
+    "item_too_large": 400,
+    "item_too_deep": 400,
+    "custody": 403,
+}
+
+
+def _refusal_http(refusal: MarketRefusal) -> HTTPException:
+    return HTTPException(
+        status_code=_REFUSAL_STATUS.get(refusal.reason, 400),
+        detail=refusal.detail,
+    )
+
+
+def _validate_actor_type(value: str | None, field: str) -> str:
+    actor_type = value or database.ACTOR_SOUL
+    if actor_type not in (database.ACTOR_SOUL, database.ACTOR_TAMER):
+        raise HTTPException(status_code=400, detail=f"Bad {field}")
+    return actor_type
+
+
+def _sim_503() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="Simulation unavailable: intent not accepted; retry with "
+        "the same Idempotency-Key",
+    )
+
+
+def _settle_intent(request: Request, record: dict) -> dict:
+    """Wait for the sim's tick to adjudicate; return the fresh intent row."""
+    return gateway_for(request).await_settled(
+        record["session_id"], record["nonce"]
+    )
+
+
+def _enqueue_and_settle(
+    request: Request,
+    identity: UserIdentity,
+    kind: str,
+    soul_id: str,
+    custodian_id: str | None,
+    payload: dict,
+    idempotency_key: str | None,
+) -> dict:
+    """Enqueue a market intent and settle it within this request."""
+    validated, error = intents.validate_payload(kind, payload)
+    if error is not None:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {error}")
+    session_id = f"rest:{identity.id}"
+    nonce = (
+        idempotency_key.strip()
+        if idempotency_key and idempotency_key.strip()
+        else "rest_" + secrets.token_urlsafe(16)
+    )
+    try:
+        record = gateway_for(request).submit_intent(
+            session_id, nonce, custodian_id, soul_id, kind, validated
+        )
+    except SimRefusal as refusal:
+        raise _refusal_http(refusal)
+    except SimUnreachable:
+        raise _sim_503()
+    except SimError as exc:
+        logger.error(f"Error in _enqueue_and_settle: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+    return _settle_intent(request, record)
+
+
+def _map_rejection(kind: str, result: dict) -> HTTPException:
+    reason = result.get("reason", "internal")
+    detail = result.get("detail", reason)
+    if kind == market.KIND_MARKET_BUY:
+        if reason == "listing_gone":
+            return HTTPException(status_code=404, detail="Listing not found")
+        if reason == "custody":
+            return HTTPException(status_code=403, detail=detail)
+        return HTTPException(status_code=500, detail=detail)
+    if kind == market.KIND_MARKET_LIST:
+        if reason == "custody":
+            return HTTPException(status_code=403, detail=detail)
+        return HTTPException(status_code=400, detail=detail)
+    if reason == "listing_not_found":
+        return HTTPException(status_code=404, detail="Listing not found")
+    if reason == "custody":
+        return HTTPException(status_code=403, detail=detail)
+    return HTTPException(status_code=400, detail=detail)
+
+
+@router.get("", dependencies=[Depends(read_limit)])
 def get_marketplace():
     now = time.time()
     if _marketplace_cache["data"] is not None:
@@ -78,121 +194,184 @@ def get_marketplace():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/list")
-def add_listing(listing: MarketListing, identity: UserIdentity = Depends(get_api_key)):
-    listing_id = listing.listing_id or str(uuid.uuid4())[:8]
+@router.post("/list", dependencies=[Depends(market_write_limit)])
+def add_listing(
+    listing: MarketListing,
+    request: Request,
+    identity: UserIdentity = Depends(get_api_key),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     if listing.price <= 0:
         raise HTTPException(status_code=400, detail="Price must be greater than zero")
+    seller_type = _validate_actor_type(listing.seller_type, "seller_type")
+    # IDOR Mitigation: strictly derive the seller from the identity;
+    # operators may name any soul or tamer explicitly.
+    actor_type, actor_id, custodian_id = rest_actor(
+        identity, seller_type, listing.seller_id
+    )
+    if (
+        identity.is_tamer
+        and seller_type == database.ACTOR_SOUL
+        and not listing.seller_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="seller_id is required when seller_type is 'soul'",
+        )
 
     listing_data = listing.model_dump()
-    # IDOR Mitigation: Strictly derive seller_id from identity
-    seller_id = identity.id
-    if identity.is_operator and listing.seller_id:
-        seller_id = listing.seller_id
+    payload = {
+        "item": listing_data["item"],
+        "price": listing_data["price"],
+        "seller_type": actor_type,
+        "seller_soul_id": actor_id,
+        "seller_name": listing_data["seller_name"],
+    }
+    if listing.listing_id:
+        payload["listing_id"] = listing.listing_id
 
     try:
-        with database.get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO marketplace (listing_id, seller_id, seller_name, item, price, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    listing_id,
-                    seller_id,
-                    listing_data["seller_name"],
-                    json.dumps(listing_data["item"]),
-                    listing_data["price"],
-                    listing_data["timestamp"],
-                ),
-            )
-            if identity.is_operator and identity.id != seller_id:
-                database.log_audit(
-                    cursor, identity.id, "marketplace_list_override",
-                    target_type="listing", target_id=listing_id,
-                    details=f"seller_id={seller_id}",
-                )
-            if identity.is_operator and listing.seller_id:
-                database.log_audit(
-                    cursor, identity.id, "add_listing_as_operator",
-                    target_type="listing", target_id=listing_id,
-                )
-            conn.commit()
-            _marketplace_cache["timestamp"] = 0.0
+        record = _enqueue_and_settle(
+            request,
+            identity,
+            market.KIND_MARKET_LIST,
+            actor_id,
+            custodian_id,
+            payload,
+            idempotency_key,
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in add_listing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    return {"status": "success", "listing_id": listing_id}
+
+    if record["status"] == "adjudicated":
+        if identity.is_operator and identity.id != actor_id:
+            database.audit_log(
+                identity.id,
+                "marketplace_list_override",
+                target_type="listing",
+                target_id=record["result"]["listing_id"],
+                details=f"seller_id={actor_id}",
+            )
+        _invalidate_cache()
+        return {"status": "success", "listing_id": record["result"]["listing_id"]}
+    if record["status"] == "pending":
+        return {
+            "status": "pending",
+            "intent_id": record["intent_id"],
+            "listing_id": payload.get("listing_id"),
+        }
+    raise _map_rejection(market.KIND_MARKET_LIST, record["result"] or {})
 
 
-@router.post("/buy/{listing_id}")
+@router.post("/buy/{listing_id}", dependencies=[Depends(market_write_limit)])
 def buy_item(
     listing_id: str,
     buyer_data: BuyRequest,
+    request: Request,
     identity: UserIdentity = Depends(get_api_key),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    # IDOR Mitigation: derive the buyer from the identity; operators
+    # may name any soul or tamer explicitly.
+    buyer_type = _validate_actor_type(buyer_data.buyer_type, "buyer_type")
+    actor_type, actor_id, custodian_id = rest_actor(
+        identity, buyer_type, buyer_data.buyer_id
+    )
+    if (
+        identity.is_tamer
+        and buyer_type == database.ACTOR_SOUL
+        and not buyer_data.buyer_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="buyer_id is required when buyer_type is 'soul'",
+        )
+
+    payload = {
+        "listing_id": listing_id,
+        "buyer_type": actor_type,
+        "buyer_soul_id": actor_id,
+    }
     try:
-        with database.get_db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM marketplace WHERE listing_id = ?", (listing_id,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Listing not found")
-
-            listing = dict(row)
-            price = listing["price"]
-            seller_id = listing["seller_id"]
-
-            # IDOR Mitigation: Derive buyer_id from identity
-            buyer_id = buyer_data.buyer_id
-            if identity.is_user:
-                buyer_id = identity.id
-
-            # Calculate tax and net
-            tax = round(price * 0.02, 2)
-            seller_net = round(price - tax, 2)
-
-            # Atomic removal of listing to prevent race conditions
-            cursor.execute(
-                "DELETE FROM marketplace WHERE listing_id = ?", (listing_id,)
-            )
-            if cursor.rowcount == 0:
-                raise HTTPException(
-                    status_code=404, detail="Listing already sold or removed"
-                )
-
-            # Atomic deduction from buyer using shared utility
-            if not identity.is_operator:
-                database.charge_soul(
-                    cursor, buyer_id, price, f"purchase of listing {listing_id}"
-                )
-
-            # Credit seller
-            cursor.execute(
-                "UPDATE souls SET essence = essence + ? WHERE soul_id = ?",
-                (seller_net, seller_id),
-            )
-            # Update hub fund
-            cursor.execute(
-                "UPDATE globals SET value = value + ? WHERE key = 'essence_fund'",
-                (tax,),
-            )
-            conn.commit()
-            _marketplace_cache["timestamp"] = 0.0
-
-        return {
-            "status": "success",
-            "item": _safe_json_loads(listing["item"]),
-            "seller_id": seller_id,
-            "seller_credited": seller_net,
-            "tax_collected": tax,
-        }
+        record = _enqueue_and_settle(
+            request,
+            identity,
+            market.KIND_MARKET_BUY,
+            actor_id,
+            custodian_id,
+            payload,
+            idempotency_key,
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in buy_item: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    if record["status"] == "adjudicated":
+        result = record["result"]
+        _invalidate_cache()
+        if actor_type == database.ACTOR_SOUL:
+            viewport.viewport.notify_economy_soul(actor_id)
+        seller_type = result.get("seller_type", database.ACTOR_SOUL)
+        if seller_type == database.ACTOR_SOUL:
+            viewport.viewport.notify_economy_soul(result["seller_id"])
+        return {
+            "status": "success",
+            "item": result["item"],
+            "seller_id": result["seller_id"],
+            "seller_credited": result["seller_credited"],
+            "tax_collected": result["tax_collected"],
+        }
+    if record["status"] == "pending":
+        return {"status": "pending", "intent_id": record["intent_id"]}
+    raise _map_rejection(market.KIND_MARKET_BUY, record["result"] or {})
+
+
+@router.post("/cancel/{listing_id}", dependencies=[Depends(market_write_limit)])
+def cancel_listing(
+    listing_id: str,
+    request: Request,
+    identity: UserIdentity = Depends(get_api_key),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    payload = {"listing_id": listing_id}
+    actor_type, actor_id, custodian_id = rest_actor(identity)
+    payload["actor_type"] = actor_type
+    try:
+        record = _enqueue_and_settle(
+            request,
+            identity,
+            market.KIND_MARKET_CANCEL,
+            actor_id,
+            custodian_id,
+            payload,
+            idempotency_key,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in cancel_listing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if record["status"] == "adjudicated":
+        if identity.is_operator:
+            database.audit_log(
+                identity.id,
+                "marketplace_cancel",
+                target_type="listing",
+                target_id=listing_id,
+                details=f"seller_id={record['result'].get('seller_id')}",
+            )
+        _invalidate_cache()
+        return {
+            "status": "success",
+            "listing_id": listing_id,
+            "seller_id": record["result"].get("seller_id"),
+        }
+    if record["status"] == "pending":
+        return {"status": "pending", "intent_id": record["intent_id"]}
+    raise _map_rejection(market.KIND_MARKET_CANCEL, record["result"] or {})

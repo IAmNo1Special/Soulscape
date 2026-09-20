@@ -44,5 +44,6 @@ addopts = [
 testpaths = [
     "server/tests",
     "client/tests",
+    "shared/tests",
 ]
 

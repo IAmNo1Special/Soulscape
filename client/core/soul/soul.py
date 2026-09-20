@@ -15,6 +15,10 @@ from typing import Any
 from ...constants import SOUL_HEIGHT, SOUL_WIDTH
 from ...system.command_queue import CommandQueue
 from ...system.logger import log
+from ...system.network.viewport_client import (
+    dormant_statue_orb_color,
+    statue_orb_color,
+)
 from ..biology import Gender, SoulBiology, SoulStats, Species
 from ..interactions import Inventory
 from .goap_brain import GoapBrain
@@ -31,7 +35,7 @@ class Soul:
     is a no-op while no brain is attached.
 
     Attributes:
-        soul_id: A unique integer identifier for the soul instance.
+        soul_id: A unique string identifier for the soul instance.
         name: The display name of the soul.
         species: The Species object defining biological defaults.
         gender: The Gender object defining reproductive capabilities.
@@ -210,6 +214,23 @@ class Soul:
         self.bulge_position: list[float] = [0.0, 0.0, 0.0]
         self.aura_visible: bool = True
         self.camera_distance: float = 1.0
+        # Issue #21: statue render state streamed from the Hub. When True,
+        # the renderer desaturates the orb/aura (stone treatment) and the
+        # plasma pulse freezes (visual_tick is skipped in viewport mode).
+        self.statue: bool = False
+        # Issue #22: dormant (unfunded) souls render as statues too, but
+        # amber-tinted to distinguish them from collapsed statues.
+        self.dormant_statue: bool = False
+        # Issue #29: shader-state mapping inputs owned by the client.
+        # offline_stale marks a viewport soul whose Hub presence is
+        # stale/unknown (desaturated "offline" statue variant). The
+        # reflex fields are written each frame by the water-cooler
+        # reflex controller (local-only) and consumed by
+        # state_to_uniforms in the scene renderer.
+        self.offline_stale: bool = False
+        self.reflex_kind: str | None = None
+        self.reflex_t: float = 0.0
+        self.typing_dip: float = 0.0
 
         # Updates
         self.last_update_time: float = time.time()
@@ -235,10 +256,7 @@ class Soul:
         self.local_instance_id = local_instance_id
         self.agent: Any = None
 
-        if (
-            self.owner_id == self.local_instance_id
-            or self.local_instance_id is None
-        ):
+        if self.owner_id == self.local_instance_id or self.local_instance_id is None:
             log.info(f"Attaching GOAP brain for local soul: {self.biology.name}")
             self.agent = GoapBrain(soul=self)
         else:
@@ -262,9 +280,7 @@ class Soul:
         """
         if self.biology.satiety < 20 or self.biology.hydration < 20:
             event = random.choice(["hallucination", "fatigue"])
-            print(
-                f"Due to low levels, {self.biology.name} experiences {event}!"
-            )
+            print(f"Due to low levels, {self.biology.name} experiences {event}!")
 
     # --- Main Update ---
 
@@ -401,6 +417,41 @@ class Soul:
         # Biology updates not critical for remote viewing unless displaying stats
         # For now, position is the main thing.
 
+    def visual_tick(self, dt: float) -> None:
+        """Advances animation-only state for one frame.
+
+        Used by the viewport render path, where positions come from the Hub
+        stream instead of the local simulation.
+        """
+        self.time += dt
+        angle: float = self.time * 0.5
+        self.bulge_position: list[float] = [
+            math.cos(angle) * 0.5,
+            math.sin(angle * 0.7) * 0.35,
+            math.sin(angle) * 0.5,
+        ]
+
+    def display_orb_color(self) -> tuple[float, float, float]:
+        """Orb color for the shader's base_color_uniform.
+
+        Collapsed souls render as statues: desaturated stone gray.
+        Dormant souls render as statues too: amber-tinted stone (issue
+        #22), so the two freeze states are distinguishable.
+        """
+        if self.dormant_statue:
+            return dormant_statue_orb_color(self.orb_color_rgb)
+        if self.statue:
+            return statue_orb_color(self.orb_color_rgb)
+        return self.orb_color_rgb
+
+    def display_aura_color(self) -> tuple[float, float, float]:
+        """Aura color for the shader's base_color_uniform (statue: stone)."""
+        if self.dormant_statue:
+            return dormant_statue_orb_color(self.aura_color_rgb)
+        if self.statue:
+            return statue_orb_color(self.aura_color_rgb)
+        return self.aura_color_rgb
+
     def update(self, dt: float) -> None:
         """Drives the soul's simulation and AI logic for a single frame.
 
@@ -410,18 +461,10 @@ class Soul:
         Args:
             dt: The time delta in fractional seconds.
         """
-        self.time += dt
+        self.visual_tick(dt)
 
         # Physics updates happen for all souls (synced via Hub)
         self.physics.update(dt)
-
-        # Visual Update
-        angle: float = self.time * 0.5
-        self.bulge_position: list[float] = [
-            math.cos(angle) * 0.5,
-            math.sin(angle * 0.7) * 0.35,
-            math.sin(angle) * 0.5,
-        ]
 
         # Simulation Update (Tick-based)
         if self.biology.is_alive():
@@ -479,9 +522,7 @@ class Soul:
                 try:
                     command.execute(self)
                 except Exception as e:
-                    log.error(
-                        f"Error executing command {type(command).__name__}: {e}"
-                    )
+                    log.error(f"Error executing command {type(command).__name__}: {e}")
 
     def schedule_task(self, coro: Any) -> None:
         """Schedules an async task on the background loop via the scheduler callback."""
@@ -554,9 +595,7 @@ class Soul:
         """
         y_top_left = screen_height - y
         if self.physics:
-            self.physics.on_mouse_drag(
-                x, y_top_left, dx, -dy, buttons, modifiers
-            )
+            self.physics.on_mouse_drag(x, y_top_left, dx, -dy, buttons, modifiers)
 
     def on_mouse_release(
         self, x: int, y: int, button: int, modifiers: int, screen_height: int

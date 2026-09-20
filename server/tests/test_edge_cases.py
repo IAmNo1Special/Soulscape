@@ -71,24 +71,21 @@ def test_get_souls_json_decode_error(client: TestClient):
 
 
 def test_update_souls_missing_owner(client: TestClient):
-    # Test line 561: owner_id is required
+    # owner_id/custodian_id is required: 400 when neither is provided
     response = client.post("/souls", json={"souls": []})
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_operator_delete_reply(client: TestClient, register_soul):
-    # Test lines 489-492: Operator deleting a reply
-    # Create souls first
+    # Operator deleting a reply
     register_soul("1", essence=100.0, name="A")
     register_soul("2", essence=100.0, name="B")
-    register_soul(
-        "999", essence=100.0, name="Operator"
-    )  # Operator needs to exist? No, usually hardcoded check, but maybe essence check?
 
     # Create post and reply first
     p_res = client.post(
         "/social/post",
-        json={"author_id": "1", "author_name": "A", "content": "P"},
+        json={"author_id": "1", "author_name": "A", "title": "P",
+              "content": "P"},
     )
     p_id = p_res.json()["message_id"]
 
@@ -110,30 +107,41 @@ def test_operator_delete_reply(client: TestClient, register_soul):
     )
     assert res.status_code == 200
 
-    # Verify deleted
+    # Soft delete: the reply stays as a tombstone under the post.
     get_res = client.get("/social")
     posts = get_res.json()
-    assert len(posts[0]["replies"]) == 0
+    assert len(posts[0]["replies"]) == 1
+    assert posts[0]["replies"][0]["message_id"] == r_id
+    assert posts[0]["replies"][0]["deleted"] is True
+    assert posts[0]["replies"][0]["body"] == "[deleted]"
 
 
 @pytest.mark.anyio
-async def test_websocket_soul_update(client: TestClient):
-    # Test lines 705-721: soul_update message in WS
-    with client.websocket_connect("/ws/user1") as ws1:
-        ws1.receive_json()  # connection msg
-
-        with client.websocket_connect("/ws/user2") as ws2:
-            ws2.receive_json()  # connection msg
-            ws1.receive_json()  # user2 online msg
-
-            # Send soul_update from user2
-            ws2.send_json({"type": "soul_update", "souls": [{"soul_id": "1"}]})
-
-            # ws1 should receive soul_updated
-            data = ws1.receive_json()
-            assert data["type"] == "soul_updated"
-            assert data["owner_id"] == "user2"
-            assert data["souls"] == [{"soul_id": "1"}]
+async def test_websocket_soul_update_removed(client: TestClient):
+    # The legacy upstream state-push channel was deleted (issue #14):
+    # soul_update now yields an explicit CHANNEL_REMOVED rejection, never
+    # a state change, and the connection stays alive.
+    with client.websocket_connect("/ws/user1") as ws:
+        ws.receive_json()
+        assert ws.receive_json()["type"] == "snapshot"
+        ws.send_json(
+            {
+                "v": 1,
+                "type": "soul_update",
+                "souls": [{"soul_id": "1", "x": 999.0, "y": 999.0}],
+            }
+        )
+        err = None
+        for _ in range(5):
+            frame = ws.receive_json()
+            if frame.get("type") == "error":
+                err = frame
+                break
+        assert err is not None
+        assert err["code"] == "CHANNEL_REMOVED"
+        # Connection stays alive (ping/pong to verify)
+        ws.send_text("ping")
+        assert ws.receive_text() == "pong"
 
 
 @pytest.mark.anyio
@@ -141,6 +149,7 @@ async def test_websocket_malformed_json(client: TestClient):
     # Test line 725-726: JSONDecodeError in WS
     with client.websocket_connect("/ws/user1") as ws:
         ws.receive_json()
+        assert ws.receive_json()["type"] == "snapshot"
         ws.send_text("{invalid")
         # Connection should stay alive (ping/pong to verify)
         ws.send_text("ping")
@@ -153,6 +162,7 @@ async def test_websocket_handle_message_exception(client: TestClient):
     # Send a JSON list, which parses but fails .get("type")
     with client.websocket_connect("/ws/user1") as ws:
         ws.receive_json()
+        assert ws.receive_json()["type"] == "snapshot"
         ws.send_text("[]")
         # Connection should stay alive
         ws.send_text("ping")

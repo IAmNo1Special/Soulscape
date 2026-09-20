@@ -146,6 +146,20 @@ class StateUpdateCommand(Command):
 
 
 @dataclass
+class ViewportFrameCommand(Command):
+    """Applies a Hub viewport SNAPSHOT/DELTA frame to the render consumer."""
+
+    consumer: Any = None
+    frame: Dict[str, Any] = field(default_factory=dict)
+    priority: int = 5
+
+    def execute(self, context: Any) -> None:
+        """Feeds the frame into the viewport consumer (main thread)."""
+        if self.consumer is not None:
+            self.consumer.apply_frame(self.frame)
+
+
+@dataclass
 class OwnerPresenceCommand(Command):
     """Command to handle owner presence changes."""
 

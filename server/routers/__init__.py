@@ -1,3 +1,3 @@
-from . import marketplace, social, souls, websockets
+from . import keys, marketplace, plots, social, souls, websockets
 
-__all__ = ["marketplace", "social", "souls", "websockets"]
+__all__ = ["keys", "marketplace", "plots", "social", "souls", "websockets"]

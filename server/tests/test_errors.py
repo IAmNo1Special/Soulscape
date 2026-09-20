@@ -38,7 +38,8 @@ def test_create_post_error(client):
     with patch("server.database.get_db", side_effect=Exception("DB Error")):
         response = client.post(
             "/social/post",
-            json={"author_id": "1", "author_name": "A", "content": "C"},
+            json={"author_id": "1", "author_name": "A", "title": "T",
+                  "content": "C"},
         )
         assert response.status_code == 500
 

@@ -3,6 +3,7 @@ Database configuration, initialization, and shared utility functions for Soulsca
 Uses SQLite with WAL mode enabled for better concurrency.
 """
 
+import hashlib
 import logging
 import os
 import sqlite3
@@ -14,12 +15,21 @@ from fastapi import HTTPException
 
 logger = logging.getLogger("soulscape_hub")
 
+#: Actor types for wallet-bearing entities (issue #40). Souls and tamers
+#: each hold an essence wallet and an inventory; ledger, escrow, and
+#: marketplace rows record which kind of actor a row belongs to.
+ACTOR_SOUL = "soul"
+ACTOR_TAMER = "tamer"
+
 # Argon2 hasher for soul secrets
 _hasher = PasswordHasher()
 
-# Ensure DB path is absolute relative to this file
+# Ensure DB path is absolute relative to this file. SOULSCAPE_DB_PATH overrides
+# the default location (used by isolated integration tests and deployments).
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "soulscape_hub.db")
+DB_PATH = os.environ.get("SOULSCAPE_DB_PATH") or os.path.join(
+    BASE_DIR, "soulscape_hub.db"
+)
 
 
 def _get_connection() -> sqlite3.Connection:
@@ -46,9 +56,12 @@ def verify_secret_hash(secret: str, secret_hash: str) -> bool:
         return False
 
 
-def create_ws_session(owner_id: str, soul_id: str, hmac_key: str, ttl_seconds: int = 86400) -> str:
+def create_ws_session(
+    owner_id: str, soul_id: str, hmac_key: str, ttl_seconds: int = 86400
+) -> str:
     """Create a new WebSocket session with HMAC key. Returns session_id."""
     import secrets as pysecrets
+
     session_id = pysecrets.token_urlsafe(32)
     now = time.time()
     with get_db() as conn:
@@ -56,7 +69,16 @@ def create_ws_session(owner_id: str, soul_id: str, hmac_key: str, ttl_seconds: i
         cursor.execute(
             """INSERT INTO ws_sessions (session_id, owner_id, soul_id, hmac_key, created_at, last_used_at, expires_at, used_nonces)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, owner_id, soul_id, hmac_key, now, now, now + ttl_seconds, "[]"),
+            (
+                session_id,
+                owner_id,
+                soul_id,
+                hmac_key,
+                now,
+                now,
+                now + ttl_seconds,
+                "[]",
+            ),
         )
         conn.commit()
     return session_id
@@ -83,12 +105,15 @@ def get_ws_session(session_id: str) -> dict | None:
     return None
 
 
-def validate_and_store_nonce(session_id: str, nonce: str, max_age_seconds: int = 300) -> bool:
+def validate_and_store_nonce(
+    session_id: str, nonce: str, max_age_seconds: int = 300
+) -> bool:
     """
     Validate a nonce hasn't been used recently and store it.
     Returns True if nonce is new, False if replay detected.
     """
     import json
+
     now = time.time()
     cutoff = now - max_age_seconds
     with get_db() as conn:
@@ -125,6 +150,14 @@ def delete_ws_session(session_id: str) -> None:
         conn.commit()
 
 
+def delete_ws_sessions_for_owner(owner_id: str) -> int:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ws_sessions WHERE owner_id = ?", (owner_id,))
+        conn.commit()
+        return cursor.rowcount
+
+
 def cleanup_expired_ws_sessions() -> int:
     """Remove expired WebSocket sessions. Returns count deleted."""
     now = time.time()
@@ -133,6 +166,129 @@ def cleanup_expired_ws_sessions() -> int:
         cursor.execute("DELETE FROM ws_sessions WHERE expires_at <= ?", (now,))
         conn.commit()
         return cursor.rowcount
+
+
+def get_tamer_by_username(username: str) -> dict | None:
+    """Fetch a tamer row by username, or None."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tamer_id, username, password_hash, created_at, essence "
+            "FROM tamers WHERE username = ?",
+            (username,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def create_tamer_session(tamer_id: str, session_hash: str, expires_at: float) -> str:
+    """Store a hashed tamer session. Returns session_id."""
+    import secrets as pysecrets
+
+    session_id = pysecrets.token_urlsafe(32)
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO tamer_sessions
+               (session_id, tamer_id, session_hash, created_at, expires_at,
+                revoked)
+               VALUES (?, ?, ?, ?, ?, 0)""",
+            (session_id, tamer_id, session_hash, now, expires_at),
+        )
+        conn.commit()
+    return session_id
+
+
+def get_tamer_session(session_hash: str) -> dict | None:
+    """Fetch a live tamer session by token hash. None if missing,
+    expired, or revoked."""
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT s.session_id, s.tamer_id, t.username, s.expires_at
+               FROM tamer_sessions s
+               JOIN tamers t ON t.tamer_id = s.tamer_id
+               WHERE s.session_hash = ? AND s.revoked = 0
+                 AND s.expires_at > ?""",
+            (session_hash, now),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def revoke_tamer_session(session_hash: str) -> bool:
+    """Revoke a tamer session by token hash. True if one was revoked."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE tamer_sessions SET revoked = 1 "
+            "WHERE session_hash = ? AND revoked = 0",
+            (session_hash,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_expired_tamer_sessions() -> int:
+    """Remove expired tamer sessions. Returns count deleted."""
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tamer_sessions WHERE expires_at <= ?", (now,))
+        conn.commit()
+        return cursor.rowcount
+
+
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def create_ws_ticket(
+    custodian_id: str,
+    role: str,
+    soul_id: str | None = None,
+    ttl_seconds: int = 60,
+) -> str:
+    import secrets as pysecrets
+
+    ticket = "wst_" + pysecrets.token_urlsafe(32)
+    now = time.time()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO ws_tickets
+               (ticket_hash, custodian_id, soul_id, role, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                _sha256_hex(ticket),
+                custodian_id,
+                soul_id,
+                role,
+                now,
+                now + ttl_seconds,
+            ),
+        )
+        conn.commit()
+    return ticket
+
+
+def redeem_ws_ticket(ticket: str) -> dict | None:
+    digest = _sha256_hex(ticket)
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT ticket_hash, custodian_id, soul_id, role, expires_at "
+            "FROM ws_tickets WHERE ticket_hash = ?",
+            (digest,),
+        )
+        row = cursor.fetchone()
+        cursor.execute("DELETE FROM ws_tickets WHERE ticket_hash = ?", (digest,))
+        conn.commit()
+    if row is None or row["expires_at"] <= now:
+        return None
+    return dict(row)
 
 
 # Token Bucket Rate Limiting (per owner_id)
@@ -201,7 +357,10 @@ def get_rate_limit_status(owner_id: str) -> dict:
         )
         row = cursor.fetchone()
         if row:
-            tokens = min(row["max_tokens"], row["tokens"] + (now - row["last_refill"]) * row["refill_rate"])
+            tokens = min(
+                row["max_tokens"],
+                row["tokens"] + (now - row["last_refill"]) * row["refill_rate"],
+            )
             return {
                 "tokens": tokens,
                 "max_tokens": row["max_tokens"],
@@ -216,7 +375,7 @@ def get_rate_limit_status(owner_id: str) -> dict:
 
 # Movement validation constants
 MAX_BASE_SPEED = 300.0  # pixels per second base
-SPEED_PER_DEX = 5.0     # additional pixels per second per SPE stat point
+SPEED_PER_DEX = 5.0  # additional pixels per second per SPE stat point
 MAX_TELEPORT_DISTANCE = 50.0  # max allowed position jump between updates (pixels)
 SCREEN_BOUNDS = (1920, 1080)  # default, can be overridden
 
@@ -234,7 +393,7 @@ def validate_soul_movement(
 ) -> tuple[float, float]:
     """
     Validate and clamp soul movement server-side.
-    
+
     Returns (clamped_x, clamped_y) - the validated position.
     Raises ValueError if movement is invalid.
     """
@@ -265,13 +424,6 @@ def validate_soul_movement(
         )
 
     return new_x, new_y
-    """Creates a new SQLite connection with common pragmas."""
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
 
 
 @contextmanager
@@ -349,34 +501,44 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS marketplace (
                     listing_id TEXT PRIMARY KEY,
                     seller_id TEXT,
+                    seller_type TEXT NOT NULL DEFAULT 'soul',
                     seller_name TEXT,
                     item TEXT,
                     price REAL,
                     timestamp REAL
                 )
             """)
-            # Social Posts Table
+            # Unified social messages (issue #18): self-referencing
+            # parent_id (NULL = top-level post), typed authors.
+            # Legacy social_posts/social_replies are migrated into this
+            # table by _migrate_social() and then dropped.
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS social_posts (
+                CREATE TABLE IF NOT EXISTS messages (
                     message_id TEXT PRIMARY KEY,
-                    author_id TEXT,
-                    author_name TEXT,
+                    parent_id TEXT,
+                    author_type TEXT NOT NULL,
+                    author_id TEXT NOT NULL,
+                    author_name TEXT NOT NULL DEFAULT '',
                     title TEXT,
-                    content TEXT,
-                    timestamp REAL
+                    body TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    edited_at REAL,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (parent_id) REFERENCES messages (message_id),
+                    CONSTRAINT chk_messages_author_type
+                        CHECK (author_type IN ('soul', 'tamer')),
+                    CONSTRAINT chk_messages_title CHECK (
+                        (parent_id IS NULL
+                         AND title IS NOT NULL
+                         AND trim(title) <> '')
+                        OR (parent_id IS NOT NULL AND title IS NULL)
+                    ),
+                    CONSTRAINT chk_messages_deleted CHECK (deleted IN (0, 1))
                 )
             """)
-            # Social Replies Table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS social_replies (
-                    reply_id TEXT PRIMARY KEY,
-                    parent_id TEXT,
-                    author_id TEXT,
-                    author_name TEXT,
-                    content TEXT,
-                    timestamp REAL,
-                    FOREIGN KEY (parent_id) REFERENCES social_posts (message_id) ON DELETE CASCADE
-                )
+                CREATE INDEX IF NOT EXISTS idx_messages_parent_id
+                ON messages(parent_id)
             """)
             # Souls Table
             cursor.execute("""
@@ -430,7 +592,12 @@ def init_db():
                     secret_prefix TEXT,
                     updated_at REAL,
                     token_expiry REAL,
-                    is_revoked INTEGER DEFAULT 0
+                    is_revoked INTEGER DEFAULT 0,
+                    state TEXT DEFAULT 'normal'
+                        CHECK (state IN ('normal','traveling','collapsed')),
+                    fed_flag INTEGER DEFAULT 0,
+                    rest_started_at REAL,
+                    loyalty REAL DEFAULT 0.5
                 )
             """)
             # Inventory Table
@@ -443,6 +610,20 @@ def init_db():
                     metadata TEXT,
                     FOREIGN KEY (soul_id) REFERENCES souls (soul_id) ON DELETE CASCADE
                 )
+                """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tamer_inventory (
+                    inventory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tamer_id TEXT,
+                    item_name TEXT,
+                    quantity INTEGER,
+                    metadata TEXT,
+                    FOREIGN KEY (tamer_id) REFERENCES tamers (tamer_id) ON DELETE CASCADE
+                )
+                """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tamer_inventory_tamer_id
+                ON tamer_inventory(tamer_id)
                 """)
             # Globals Table
             cursor.execute("""
@@ -496,10 +677,6 @@ def init_db():
                 ON marketplace(listing_id)
             """)
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_social_posts_message_id
-                ON social_posts(message_id)
-            """)
-            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     operator_id TEXT NOT NULL,
@@ -520,7 +697,468 @@ def init_db():
                     refill_rate REAL NOT NULL DEFAULT 50.0
                 )
             """)
+            # Tamer accounts (issue #8)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tamers (
+                    tamer_id TEXT PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    essence REAL NOT NULL DEFAULT 0.0
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tamer_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    tamer_id TEXT NOT NULL,
+                    session_hash TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (tamer_id) REFERENCES tamers (tamer_id)
+                        ON DELETE CASCADE
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tamers_username
+                ON tamers(username)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tamer_sessions_hash
+                ON tamer_sessions(session_hash)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ws_tickets (
+                    ticket_hash TEXT PRIMARY KEY,
+                    custodian_id TEXT NOT NULL,
+                    soul_id TEXT,
+                    role TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+            """)
+            # Encrypted BYO LLM provider key vault (issue #23):
+            # ciphertext-only at rest; plaintext never stored.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS llm_keys (
+                    key_id TEXT PRIMARY KEY,
+                    tamer_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    last4 TEXT NOT NULL DEFAULT '',
+                    nonce BLOB NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    created_at REAL NOT NULL,
+                    rotated_at REAL,
+                    revoked_at REAL,
+                    superseded_by TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_llm_keys_owner
+                ON llm_keys(tamer_id, provider)
+            """)
+            # Per-deliberation LLM metering (issue #25): one row per
+            # deliberation, including heuristic fallbacks; #27 consumes.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS llm_usage (
+                    usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    tier TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL,
+                    completion_tokens INTEGER NOT NULL,
+                    estimated_cost_usd REAL NOT NULL,
+                    latency_ms REAL NOT NULL,
+                    fallback_used INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_llm_usage_soul
+                ON llm_usage(soul_id)
+            """)
+            # Quip budget (issue #30): personalized quips are capped at
+            # QUIPS_PER_SOUL_PER_DAY per UTC day. One row per soul per day;
+            # the day boundary resets the budget automatically.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS quip_budgets (
+                    soul_id TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (soul_id, day)
+                )
+            """)
+            # Metering stage-1 (issue #27): idempotent usage events per
+            # #25 llm_usage row, decision traces joining deliberation ->
+            # usage event -> intents -> outcomes, and the runtime pricing
+            # knob (per-model USD/1k rates + essence_per_usd).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS metering_events (
+                    event_id TEXT PRIMARY KEY,
+                    soul_id TEXT NOT NULL,
+                    tier TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL,
+                    completion_tokens INTEGER NOT NULL,
+                    cost_usd_estimate REAL NOT NULL,
+                    essence_charged REAL,
+                    shortfall_essence REAL NOT NULL DEFAULT 0.0,
+                    batch_id TEXT,
+                    settled_at REAL,
+                    settled_by TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_metering_events_soul
+                ON metering_events(soul_id, settled_at)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_metering_events_batch
+                ON metering_events(batch_id)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS decision_traces (
+                    trace_id TEXT PRIMARY KEY,
+                    soul_id TEXT NOT NULL,
+                    deliberation_id INTEGER,
+                    usage_event_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'deliberated',
+                    rationale TEXT NOT NULL DEFAULT '',
+                    intents_json TEXT NOT NULL DEFAULT '[]',
+                    intent_ids_json TEXT NOT NULL DEFAULT '[]',
+                    outcomes_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_decision_traces_soul
+                ON decision_traces(soul_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_decision_traces_event
+                ON decision_traces(usage_event_id)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS metering_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+            # Memory tiers (issue #26): episodic log, weekly digests,
+            # SQLite-backed semantic store. vocab_version stamps every
+            # row so memories stay interpretable across vocabulary
+            # bumps. "Per-soul collections" = logical partitioning by
+            # soul_id (see server/agents/memory.py for the rationale).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS episodes (
+                    episode_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    ts REAL NOT NULL,
+                    kind TEXT NOT NULL,
+                    salience REAL NOT NULL DEFAULT 0.5,
+                    content TEXT NOT NULL DEFAULT '',
+                    vocab_version INTEGER NOT NULL DEFAULT 1,
+                    summarized INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_episodes_soul
+                ON episodes(soul_id, summarized, ts)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS weekly_digests (
+                    digest_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    week_start REAL NOT NULL,
+                    digest_text TEXT NOT NULL DEFAULT '',
+                    episode_count INTEGER NOT NULL DEFAULT 0,
+                    kept_count INTEGER NOT NULL DEFAULT 0,
+                    vocab_version INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    UNIQUE (soul_id, week_start)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_digests_soul
+                ON weekly_digests(soul_id, week_start)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS semantic_memories (
+                    memory_id TEXT PRIMARY KEY,
+                    soul_id TEXT NOT NULL,
+                    episode_id INTEGER,
+                    text TEXT NOT NULL DEFAULT '',
+                    embedding BLOB NOT NULL,
+                    dim INTEGER NOT NULL DEFAULT 256,
+                    salience REAL NOT NULL DEFAULT 0.5,
+                    kind TEXT NOT NULL DEFAULT '',
+                    tags TEXT NOT NULL DEFAULT '[]',
+                    created_at REAL NOT NULL,
+                    vocab_version INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_semmem_soul
+                ON semantic_memories(soul_id, created_at)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS intents (
+                    intent_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    nonce TEXT NOT NULL,
+                    custodian_id TEXT,
+                    soul_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at REAL NOT NULL,
+                    result TEXT,
+                    UNIQUE (session_id, nonce)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_intents_status
+                ON intents(status, created_at)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS journal (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tick_id INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_journal_tick
+                ON journal(tick_id)
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tick_id INTEGER NOT NULL,
+                    journal_seq INTEGER NOT NULL,
+                    blob BLOB NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            # Market escrows (issue #17): buyer funds held between intent
+            # ack and tick-boundary adjudication.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS escrows (
+                    escrow_id TEXT PRIMARY KEY,
+                    intent_id TEXT UNIQUE NOT NULL,
+                    actor_type TEXT NOT NULL DEFAULT 'soul',
+                    soul_id TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'held',
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_escrows_status
+                ON escrows(status)
+            """)
+            # Append-only essence ledger (issue #17): every market essence
+            # movement is a row. souls.essence and the essence_fund global
+            # are caches derived from these rows.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ledger (
+                    ledger_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tick_id INTEGER NOT NULL,
+                    intent_id TEXT NOT NULL,
+                    entry_type TEXT NOT NULL,
+                    actor_type TEXT NOT NULL DEFAULT 'soul',
+                    soul_id TEXT,
+                    amount REAL NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ledger_intent
+                ON ledger(intent_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ledger_soul
+                ON ledger(soul_id)
+            """)
+            # Plot grid (issue #19): square-plot territory layer. The
+            # origin plot is the unclaimable origin Commons; rings
+            # divisible by 3 are unclaimable road rings; the rest are
+            # claimable. access_policy is 'open' or 'closed'.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS plots (
+                    plot_id TEXT PRIMARY KEY,
+                    grid_x INTEGER NOT NULL,
+                    grid_y INTEGER NOT NULL,
+                    ring INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    owner_type TEXT,
+                    owner_id TEXT,
+                    access_policy TEXT NOT NULL DEFAULT 'open',
+                    claimed_at REAL,
+                    claim_seq INTEGER,
+                    CONSTRAINT chk_plots_kind CHECK (
+                        kind IN ('commons', 'road', 'claimable')),
+                    CONSTRAINT chk_plots_access CHECK (
+                        access_policy IN ('open', 'closed'))
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plots_owner
+                ON plots(owner_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plots_ring
+                ON plots(ring)
+            """)
+            cursor.execute(
+                "INSERT OR IGNORE INTO globals (key, value) "
+                "VALUES ('plot_claim_seq', 0.0)"
+            )
+            # Issue #31: petting cooldowns -- one petting per soul per
+            # tamer per PET_COOLDOWN_S, enforced server-side in the
+            # adjudication transaction (durable so restarts can't
+            # bypass the cooldown).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pet_cooldowns (
+                    soul_id TEXT NOT NULL,
+                    tamer_id TEXT NOT NULL,
+                    last_pet_at REAL NOT NULL,
+                    PRIMARY KEY (soul_id, tamer_id)
+                )
+            """)
+            # Issue #28: tamer presence (privacy-gated redacted reports).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tamer_presence (
+                    tamer_id TEXT PRIMARY KEY,
+                    presence TEXT NOT NULL,
+                    idle_bucket TEXT NOT NULL,
+                    last_event TEXT,
+                    app_category TEXT,
+                    updated_at REAL NOT NULL
+                )
+            """)
+            # Issue #32: mailbag -- tamer questions for souls.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mailbag (
+                    question_id TEXT PRIMARY KEY,
+                    soul_id TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    answer TEXT,
+                    answered_at REAL,
+                    answer_latency_ms REAL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mailbag_soul_status
+                ON mailbag (soul_id, status)
+            """)
+            # Issue #32: recap source queue. #33's ambient recap consumes
+            # rows from here (kind, ref_id, summary); mailbag writes
+            # kind='mailbag_unanswered' when a question expires unanswered.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recap_sources (
+                    source_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    soul_id TEXT NOT NULL,
+                    ref_id TEXT,
+                    summary TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_recap_sources_kind
+                ON recap_sources (kind, created_at)
+            """)
+            # Issue #33: ambient recaps. One row per soul per day: the
+            # deterministic highlight lines (JSON), when generated, and
+            # when the morning-note bubble consumed it (shown_at NULL =
+            # fresh, eligible for exactly one morning note).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recaps (
+                    recap_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    lines TEXT NOT NULL,
+                    generated_at REAL NOT NULL,
+                    shown_at REAL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_recaps_soul_day
+                ON recaps (soul_id, generated_at)
+            """)
+            # Issue #36: Agent Bridge. Integration tokens: the plaintext is
+            # returned once at creation and stored only as a SHA-256 hash
+            # (same vault discipline as #23's inference keys). Revocation
+            # is a revoked_at stamp; revoked tokens authenticate as 401.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bridge_tokens (
+                    token_id TEXT PRIMARY KEY,
+                    tamer_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    last4 TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    revoked_at REAL,
+                    last_used_at REAL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bridge_tokens_tamer
+                ON bridge_tokens (tamer_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bridge_tokens_hash
+                ON bridge_tokens (token_hash)
+            """)
+            # Issue #36: durable bridge-event rows backing the info-card
+            # activity log and tray tooltip. Custodian-private: reads are
+            # always tamer-scoped; nothing here flows to social/abroad.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bridge_events (
+                    event_id TEXT PRIMARY KEY,
+                    tamer_id TEXT NOT NULL,
+                    soul_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    ref TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bridge_events_tamer
+                ON bridge_events (tamer_id, created_at)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bridge_events_soul
+                ON bridge_events (soul_id, created_at)
+            """)
+            _add_column_if_missing(
+                cursor, "tamers", "presence_app_opt_in INTEGER DEFAULT 0"
+            )
+            from . import plots as plots_module
+
+            plots_module.seed_plots(conn)
+            from . import resources as resources_module
+
+            resources_module.ensure_schema(conn)
+            resources_module.seed_resource_nodes(conn)
+            from . import expeditions as expeditions_module
+
+            expeditions_module.ensure_schema(conn)
             _migrate_souls(cursor)
+            _migrate_wallets(cursor)
+        _migrate_social(conn)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
@@ -537,10 +1175,58 @@ def _add_column_if_missing(cursor, table: str, column_def: str) -> None:
         logger.info(f"Migration: added {table}.{col_name}")
 
 
+def _migrate_wallets(cursor) -> None:
+    _add_column_if_missing(cursor, "tamers", "essence REAL NOT NULL DEFAULT 0.0")
+    _add_column_if_missing(cursor, "ledger", "actor_type TEXT NOT NULL DEFAULT 'soul'")
+    _add_column_if_missing(cursor, "escrows", "actor_type TEXT NOT NULL DEFAULT 'soul'")
+    _add_column_if_missing(
+        cursor, "marketplace", "seller_type TEXT NOT NULL DEFAULT 'soul'"
+    )
+
+
 def _migrate_souls(cursor) -> None:
     _add_column_if_missing(cursor, "souls", "secret_hash TEXT")
     _add_column_if_missing(cursor, "souls", "secret_prefix TEXT")
     _add_column_if_missing(cursor, "souls", "updated_at REAL")
+    _add_column_if_missing(cursor, "souls", "velocity TEXT")
+    _add_column_if_missing(cursor, "souls", "custodian_id TEXT")
+    _add_column_if_missing(cursor, "souls", "move_target TEXT")
+    # Issue #21: collapsed state machine + feed_soul.
+    _add_column_if_missing(
+        cursor,
+        "souls",
+        "state TEXT DEFAULT 'normal' "
+        "CHECK (state IN ('normal','traveling','collapsed'))",
+    )
+    _add_column_if_missing(cursor, "souls", "fed_flag INTEGER DEFAULT 0")
+    _add_column_if_missing(cursor, "souls", "rest_started_at REAL")
+    # Issue #31: learned loyalty scalar (petting nudges toward 1.0;
+    # drift toward the nature baseline is #24's drive concern).
+    _add_column_if_missing(cursor, "souls", "loyalty REAL DEFAULT 0.5")
+    cursor.execute("UPDATE souls SET loyalty = 0.5 WHERE loyalty IS NULL")
+    cursor.execute("UPDATE souls SET state = 'normal' WHERE state IS NULL")
+    cursor.execute("UPDATE souls SET fed_flag = 0 WHERE fed_flag IS NULL")
+    # Issue #34: XP telemetry column; legacy rows may carry NULL.
+    _add_column_if_missing(cursor, "souls", "xp INTEGER DEFAULT 0")
+    cursor.execute("UPDATE souls SET xp = 0 WHERE xp IS NULL")
+    # Legacy rows may carry NULL biology fields; the server default for a
+    # new soul is full (100), matching the REST layer's defaults. Add the
+    # columns first for ultra-legacy tables that predate them entirely.
+    _add_column_if_missing(cursor, "souls", "satiety REAL")
+    _add_column_if_missing(cursor, "souls", "hydration REAL")
+    _add_column_if_missing(cursor, "souls", "hp REAL")
+    _add_column_if_missing(cursor, "souls", "max_hp REAL")
+    cursor.execute("UPDATE souls SET satiety = 100.0 WHERE satiety IS NULL")
+    cursor.execute("UPDATE souls SET hydration = 100.0 WHERE hydration IS NULL")
+    cursor.execute("UPDATE souls SET hp = COALESCE(max_hp, 100.0) WHERE hp IS NULL")
+    cursor.execute(
+        "UPDATE souls SET custodian_id = owner_id "
+        "WHERE custodian_id IS NULL AND owner_id IS NOT NULL"
+    )
+    if cursor.rowcount:
+        logger.info(
+            f"Migration: backfilled souls.custodian_id on {cursor.rowcount} rows"
+        )
     cursor.execute("PRAGMA table_info(souls)")
     cols = {row["name"] for row in cursor.fetchall()}
     if "secret" in cols:
@@ -552,8 +1238,7 @@ def _migrate_souls(cursor) -> None:
         for row in cursor.fetchall():
             secret_hash = hash_secret(row["secret"])
             cursor.execute(
-                "UPDATE souls SET secret_hash = ?, secret_prefix = ? "
-                "WHERE soul_id = ?",
+                "UPDATE souls SET secret_hash = ?, secret_prefix = ? WHERE soul_id = ?",
                 (secret_hash, secret_hash[:16], row["soul_id"]),
             )
             migrated += 1
@@ -562,3 +1247,91 @@ def _migrate_souls(cursor) -> None:
             f"Migration: hashed {migrated} legacy plaintext secrets, "
             "dropped souls.secret"
         )
+
+
+def _migrate_social(conn: sqlite3.Connection) -> None:
+    """Expand-contract migration from social_posts/social_replies.
+
+    Expand: backfill every legacy row into messages -- posts as
+    title-bearing roots, replies as children of their parent's message
+    id -- preserving ids, authors, and timestamps. Legacy posts with
+    empty titles get the '(untitled)' placeholder so the messages
+    title CHECK holds. Contract: drop the legacy tables once the
+    migrated row count verifies.
+
+    Idempotent: a no-op once the legacy tables are gone. Foreign keys
+    are toggled off for the backfill only (toggling is a no-op inside
+    a transaction, so this runs outside the init_db transaction);
+    orphaned replies keep their original parent_id and are reported
+    by foreign_key_check instead of being dropped or re-parented.
+    """
+    tables = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    if "social_posts" not in tables and "social_replies" not in tables:
+        return
+    if conn.in_transaction:
+        conn.commit()
+    post_count = (
+        conn.execute("SELECT COUNT(*) AS n FROM social_posts").fetchone()["n"]
+        if "social_posts" in tables
+        else 0
+    )
+    reply_count = (
+        conn.execute("SELECT COUNT(*) AS n FROM social_replies").fetchone()["n"]
+        if "social_replies" in tables
+        else 0
+    )
+    before = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if "social_posts" in tables:
+                conn.execute(
+                    "INSERT INTO messages (message_id, parent_id, "
+                    "author_type, author_id, author_name, title, body, "
+                    "created_at, edited_at, deleted) "
+                    "SELECT message_id, NULL, 'soul', author_id, "
+                    "author_name, "
+                    "CASE WHEN title IS NULL OR trim(title) = '' "
+                    "THEN '(untitled)' ELSE title END, "
+                    "content, timestamp, NULL, 0 "
+                    "FROM social_posts"
+                )
+            if "social_replies" in tables:
+                conn.execute(
+                    "INSERT INTO messages (message_id, parent_id, "
+                    "author_type, author_id, author_name, title, body, "
+                    "created_at, edited_at, deleted) "
+                    "SELECT reply_id, parent_id, 'soul', author_id, "
+                    "author_name, NULL, content, timestamp, NULL, 0 "
+                    "FROM social_replies"
+                )
+            after = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
+            if after - before != post_count + reply_count:
+                raise RuntimeError(
+                    "social migration row-count mismatch: "
+                    f"legacy={post_count + reply_count} "
+                    f"migrated={after - before}"
+                )
+            conn.execute("DROP TABLE IF EXISTS social_replies")
+            conn.execute("DROP TABLE IF EXISTS social_posts")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+    violations = conn.execute("PRAGMA foreign_key_check(messages)").fetchall()
+    if violations:
+        logger.warning(
+            "social migration: %d orphaned message(s) kept with dangling parent_id: %s",
+            len(violations),
+            [dict(v) for v in violations],
+        )
+    logger.info(
+        f"Migration: moved {post_count} posts + {reply_count} replies into "
+        "messages; dropped social_posts/social_replies"
+    )

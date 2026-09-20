@@ -16,8 +16,32 @@ except ImportError:
 
 import pyglet
 
+from .dpi import parse_wm_dpichanged, window_dpi
+from .fullscreen import monitor_rect_for_window
 from .logger import log
 from .window import SoulscapeWindow
+
+
+class _Point(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def get_cursor_pos() -> tuple[int, int] | None:
+    """Return the cursor position in screen coords (top-left origin).
+
+    Returns:
+        tuple[int, int] | None: (x, y) from GetCursorPos, or None when
+        unavailable (non-Windows or Win32 call failed).
+    """
+    if sys.platform != "win32" or windll is None:
+        return None
+    try:
+        pt = _Point()
+        if windll.user32.GetCursorPos(ctypes.byref(pt)):
+            return (pt.x, pt.y)
+    except Exception:
+        pass
+    return None
 
 
 class WindowManager(ABC):
@@ -116,6 +140,19 @@ class WindowManager(ABC):
         """
         pass
 
+    def show_window(self) -> bool:
+        """Show the overlay window without stealing focus.
+
+        The never-steal-focus policy requires activation-free showing;
+        platform managers override this with the native no-activate
+        mechanism (SW_SHOWNA on Windows).
+
+        Returns:
+            bool: True if the window was shown.
+        """
+        self.window.set_visible(True)
+        return True
+
 
 class StubWindowManager(WindowManager):
     """Stub implementation for unsupported platforms."""
@@ -171,12 +208,16 @@ class WindowsWindowManager(WindowManager):
     WS_EX_APPWINDOW = 0x00040000
     WS_EX_TOOLWINDOW = 0x00000080
     WS_EX_TOPMOST = 0x00000008
+    WS_EX_NOACTIVATE = 0x08000000
+
+    SW_SHOWNA = 8
 
     LWA_COLORKEY = 0x0001
     LWA_ALPHA = 0x0002
 
     SWP_NOMOVE = 0x0002
     SWP_NOSIZE = 0x0001
+    SWP_NOZORDER = 0x0004
     SWP_FRAMECHANGED = 0x0020
     SWP_NOACTIVATE = 0x0010
 
@@ -184,6 +225,8 @@ class WindowsWindowManager(WindowManager):
         """Initializes the WindowsWindowManager."""
         super().__init__()
         self._current_opacity = 255  # Default to full opacity
+        self._click_through = True
+        self._dpi: int | None = None
 
     def get_hwnd(self) -> int | None:
         """Get the Win32 window handle for a Pyglet window.
@@ -205,9 +248,7 @@ class WindowsWindowManager(WindowManager):
         self.window.set_caption(window_title)
 
         if windll:
-            hwnd = windll.user32.FindWindowW(
-                None, create_unicode_buffer(window_title)
-            )
+            hwnd = windll.user32.FindWindowW(None, create_unicode_buffer(window_title))
             if not hwnd:
                 log.warning(
                     f"Could not find {window_title} window handle by caption. "
@@ -236,9 +277,7 @@ class WindowsWindowManager(WindowManager):
                 log.warning("Could not find window handle for Soulscape.")
                 return False
 
-            z_order = c_void_p(
-                self.HWND_TOPMOST if enabled else self.HWND_NOTOPMOST
-            )
+            z_order = c_void_p(self.HWND_TOPMOST if enabled else self.HWND_NOTOPMOST)
 
             flags = (
                 self.SWP_NOMOVE
@@ -260,6 +299,161 @@ class WindowsWindowManager(WindowManager):
 
         except Exception as e:
             log.error(f"Error setting always-on-top: {e}")
+            return False
+
+    def show_window(self) -> bool:
+        """Show the overlay via SW_SHOWNA so it never steals focus.
+
+        Returns:
+            bool: True if the window was shown.
+        """
+        try:
+            if self.hwnd and windll:
+                return bool(windll.user32.ShowWindow(self.hwnd, self.SW_SHOWNA))
+            self.window.set_visible(True)
+            return False
+        except Exception as e:
+            log.error(f"Error showing window without activation: {e}")
+            return False
+
+    def set_click_through(self, enabled: bool) -> bool:
+        """Toggle WS_EX_TRANSPARENT on the overlay window.
+
+        Args:
+            enabled: True makes clicks pass through the window; False makes
+                the window clickable again.
+
+        Returns:
+            bool: True if the style was applied.
+        """
+        try:
+            if not self.hwnd or windll is None:
+                return False
+
+            style = windll.user32.GetWindowLongW(self.hwnd, self.GWL_EXSTYLE)
+            if enabled:
+                new_style = style | self.WS_EX_TRANSPARENT
+            else:
+                new_style = style & ~self.WS_EX_TRANSPARENT
+            windll.user32.SetWindowLongW(self.hwnd, self.GWL_EXSTYLE, new_style)
+            return True
+
+        except Exception as e:
+            log.error(f"Error toggling click-through: {e}")
+            return False
+
+    def update_click_through(self, soul_under_cursor: object | None) -> bool:
+        """Apply click-through unless the cursor is over a Soul.
+
+        Idempotent: the Win32 style is only touched when the desired state
+        changes, so the 12Hz cursor poll costs nothing when idle.
+
+        Args:
+            soul_under_cursor: The Soul under the cursor, or None.
+
+        Returns:
+            bool: The effective click-through state.
+        """
+        want_click_through = soul_under_cursor is None
+        if want_click_through != self._click_through:
+            if self.set_click_through(want_click_through):
+                self._click_through = want_click_through
+        return self._click_through
+
+    def current_dpi(self) -> int | None:
+        """Return the current DPI of the overlay window.
+
+        Returns:
+            int | None: The window DPI, or None when unavailable.
+        """
+        if not self.hwnd:
+            return None
+        return window_dpi(self.hwnd)
+
+    def check_dpi_changed(self) -> bool:
+        """Poll for DPI changes and re-assert the window rect when changed.
+
+        Returns:
+            bool: True when a DPI change was detected and applied.
+        """
+        dpi = self.current_dpi()
+        if dpi is None:
+            return False
+        if self._dpi is None:
+            self._dpi = dpi
+            return False
+        if dpi != self._dpi:
+            self._dpi = dpi
+            self.apply_monitor_rect()
+            return True
+        return False
+
+    def apply_monitor_rect(self) -> bool:
+        """Re-assert the fullscreen monitor rect without activating.
+
+        Repositioning in one SetWindowPos avoids ghosting artifacts that
+        appear when the window is resized in multiple steps.
+
+        Returns:
+            bool: True if the rect was applied.
+        """
+        try:
+            if not self.hwnd or windll is None:
+                return False
+            rect = monitor_rect_for_window(self.hwnd)
+            if rect is None:
+                return False
+            left, top, right, bottom = rect
+            flags = self.SWP_NOZORDER | self.SWP_NOACTIVATE | self.SWP_FRAMECHANGED
+            return bool(
+                windll.user32.SetWindowPos(
+                    self.hwnd,
+                    None,
+                    left,
+                    top,
+                    right - left,
+                    bottom - top,
+                    flags,
+                )
+            )
+        except Exception as e:
+            log.error(f"Error applying monitor rect: {e}")
+            return False
+
+    def on_wm_dpichanged(
+        self,
+        wparam: int,
+        suggested_rect: tuple[int, int, int, int],
+    ) -> bool:
+        """Apply a WM_DPICHANGED message using Windows' suggested rect.
+
+        Args:
+            wparam: WPARAM carrying the new DPI values.
+            suggested_rect: (left, top, right, bottom) suggested by Windows.
+
+        Returns:
+            bool: True if the suggested rect was applied.
+        """
+        try:
+            if not self.hwnd or windll is None:
+                return False
+            change = parse_wm_dpichanged(wparam, suggested_rect)
+            self._dpi = change.dpi_x
+            left, top, right, bottom = change.suggested_rect
+            flags = self.SWP_NOZORDER | self.SWP_NOACTIVATE | self.SWP_FRAMECHANGED
+            return bool(
+                windll.user32.SetWindowPos(
+                    self.hwnd,
+                    None,
+                    left,
+                    top,
+                    right - left,
+                    bottom - top,
+                    flags,
+                )
+            )
+        except Exception as e:
+            log.error(f"Error handling WM_DPICHANGED: {e}")
             return False
 
     def set_opacity(self, opacity: float) -> bool:
@@ -304,8 +498,12 @@ class WindowsWindowManager(WindowManager):
                 self._current_opacity = 255
 
             style = windll.user32.GetWindowLongW(self.hwnd, self.GWL_EXSTYLE)
-            new_style = style | self.WS_EX_LAYERED
-            new_style &= ~self.WS_EX_TRANSPARENT  # Keep window clickable
+            new_style = (
+                style
+                | self.WS_EX_LAYERED
+                | self.WS_EX_NOACTIVATE
+                | self.WS_EX_TRANSPARENT
+            )
             windll.user32.SetWindowLongW(self.hwnd, self.GWL_EXSTYLE, new_style)
 
             # Flags: Always LWA_COLORKEY. Add LWA_ALPHA if we want opacity.
@@ -335,9 +533,7 @@ class WindowsWindowManager(WindowManager):
             if not windll:
                 return False
 
-            style = ctypes.windll.user32.GetWindowLongW(
-                self.hwnd, self.GWL_STYLE
-            )
+            style = ctypes.windll.user32.GetWindowLongW(self.hwnd, self.GWL_STYLE)
             ctypes.windll.user32.SetWindowLongW(
                 self.hwnd,
                 self.GWL_STYLE,
@@ -362,13 +558,9 @@ class WindowsWindowManager(WindowManager):
             if not getattr(ctypes, "windll", None):
                 return False
 
-            style = ctypes.windll.user32.GetWindowLongW(
-                self.hwnd, self.GWL_EXSTYLE
-            )
+            style = ctypes.windll.user32.GetWindowLongW(self.hwnd, self.GWL_EXSTYLE)
             new_style = (style | self.WS_EX_TOOLWINDOW) & ~self.WS_EX_APPWINDOW
-            ctypes.windll.user32.SetWindowLongW(
-                self.hwnd, self.GWL_EXSTYLE, new_style
-            )
+            ctypes.windll.user32.SetWindowLongW(self.hwnd, self.GWL_EXSTYLE, new_style)
             log.debug("Hidden from taskbar.")
             return True
 

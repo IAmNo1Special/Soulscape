@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +31,12 @@ class LocalStore(DataStore):
             return {}
 
     def _read_json_sync(self, path: Path) -> Any:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        from ...system.persistence import _read_json_document
+
+        status, data = _read_json_document(path)
+        if status != "ok":
+            return {}
+        return data
 
     async def _save_json(self, path: Path, data: Any) -> bool:
         try:
@@ -47,16 +48,10 @@ class LocalStore(DataStore):
             return False
 
     def _write_json_sync(self, path: Path, data: Any) -> None:
-        os.makedirs(path.parent, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(dir=path.parent, text=True)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            os.replace(temp_path, path)
-        except Exception:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise
+        from ...system.persistence import _atomic_write_json
+
+        if not _atomic_write_json(path, data):
+            raise OSError(f"Failed to write {path}")
 
     # --- Marketplace ---
     async def load_marketplace(self) -> Any:

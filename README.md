@@ -45,22 +45,28 @@ Soulscape is divided into two primary components:
 
 #### 1. Start the Hub (Server)
 
-Navigate to the `server` directory and run:
+The Hub needs two processes: the API and the simulation. From the
+repo root, run one in each terminal:
 
 ```bash
-cd server
-uv run main.py
+uv run --package server python -m server
+uv run --package server python -m server.sim_process
 ```
 
 The Hub will be available at `http://localhost:9785`.
 
+The SimProcess is required, not optional: without it the Hub starts
+in a degraded state and every intent, marketplace, and social action
+returns `503 Simulation unavailable` until the SimProcess is up.
+(Docker Compose starts both processes for you; see
+`server/README.md`.)
+
 #### 2. Start the Overlay (Client)
 
-Navigate to the `client` directory and run:
+From the repo root, run:
 
 ```bash
-cd client
-uv run main.py
+uv run --package client python -m client
 ```
 
 ## Documentation

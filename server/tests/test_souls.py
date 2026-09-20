@@ -121,8 +121,60 @@ def test_souls_json_parsing(client: TestClient):
     data = response.json()
     soul = data[0]
 
-    # Check that these fields came back as parsed objects, not strings
-    assert soul["position"] == [10, 20]
+    # Check that these fields came back as parsed objects, not strings.
+    # Newborn souls materialize at the origin Commons center (issue #19),
+    # so the posted position is overridden for a new soul.
+    from .. import plots
+
+    assert soul["position"] == list(plots.commons_center())
     assert soul["hometown"] == {"x": 1, "y": 1}
     assert soul["orb_color"] == [255, 0, 0]
     assert soul["aura_color"] == [0, 255, 0]
+
+
+def test_post_souls_reports_actual_spawn_positions(client: TestClient):
+    from .. import plots
+
+    commons = list(plots.commons_center())
+    response = client.post(
+        "/souls",
+        json={
+            "owner_id": "user1",
+            "souls": [
+                {"soul_id": "born1", "name": "Newb", "position": [999, 999]},
+                {"soul_id": "born2", "name": "Newb2"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["count"] == 2
+    assert body["skipped"] == []
+    reported = {s["soul_id"]: s["position"] for s in body["souls"]}
+    assert reported["born1"] == [float(commons[0]), float(commons[1])]
+    assert reported["born2"] == [float(commons[0]), float(commons[1])]
+
+    stored = {s["soul_id"]: s["position"] for s in client.get("/souls").json()}
+    assert stored["born1"] == reported["born1"]
+    assert stored["born2"] == reported["born2"]
+
+
+def test_post_souls_reports_existing_soul_position(client: TestClient):
+    client.post(
+        "/souls",
+        json={"owner_id": "user1", "souls": [{"soul_id": "old1", "name": "A"}]},
+    )
+    response = client.post(
+        "/souls",
+        json={
+            "owner_id": "user1",
+            "souls": [{"soul_id": "old1", "name": "A", "position": [42, 7]}],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    reported = {s["soul_id"]: s["position"] for s in body["souls"]}
+    assert reported["old1"] == [42.0, 7.0]
+    stored = {s["soul_id"]: s["position"] for s in client.get("/souls").json()}
+    assert stored["old1"] == reported["old1"]
