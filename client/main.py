@@ -63,7 +63,7 @@ from .system.persistence import (
 )
 from .system.tray import TrayController
 from .system.window_manager import get_cursor_pos, get_window_manager
-from .system.dirty_tracker import DirtyTracker
+from .system.dirty_tracker import DirtyTracker, frame_needs_redraw
 from .system.dpi import declare_per_monitor_v2_dpi_awareness
 from .system.fullscreen import foreground_is_exclusive_fullscreen
 from .ui.graphics.scene_renderer import SceneRenderer
@@ -979,12 +979,10 @@ class SoulscapeApp:
             self.window_manager.set_always_on_top()
             self.last_topmost_time = time.time()
 
-        snapshot = [
-            (soul.biology.soul_id, round(soul.x, 3), round(soul.y, 3))
-            for soul in self.active_souls
-        ]
-        if snapshot != self._last_render_snapshot:
-            self._last_render_snapshot = snapshot
+        needs_draw, self._last_render_snapshot = frame_needs_redraw(
+            self.active_souls, self.sim_paused, self._last_render_snapshot
+        )
+        if needs_draw:
             self.dirty_tracker.mark_dirty()
 
     def _poll_topmost(self) -> None:
@@ -1163,12 +1161,10 @@ class SoulscapeApp:
             if not soul.statue and not soul.dormant_statue and not self.sim_paused:
                 soul.visual_tick(dt)
 
-        snapshot = [
-            (soul.biology.soul_id, round(soul.x, 3), round(soul.y, 3))
-            for soul in self.active_souls
-        ]
-        if snapshot != self._last_render_snapshot:
-            self._last_render_snapshot = snapshot
+        needs_draw, self._last_render_snapshot = frame_needs_redraw(
+            self.active_souls, self.sim_paused, self._last_render_snapshot
+        )
+        if needs_draw:
             self.dirty_tracker.mark_dirty()
 
     def create_soul(

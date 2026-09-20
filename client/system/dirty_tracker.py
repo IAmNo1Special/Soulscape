@@ -1,5 +1,34 @@
 """Dirty-flag state machine driving the overlay render loop."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..core.soul.soul import Soul
+
+
+def frame_needs_redraw(
+    souls: list[Soul], sim_paused: bool, last_snapshot: list | None
+) -> tuple[bool, list]:
+    """Decide whether the overlay must redraw this frame.
+
+    A position change always needs a redraw. Independently, any
+    non-statue soul advances animation-only uniforms every frame
+    (plasma pulse, hover bob, camera orbit via visual_tick), so the
+    scene must keep redrawing while one is visible. Otherwise an
+    idle soul freezes on a single frame until an unrelated event
+    happens to mark the scene dirty.
+    """
+    snapshot = [
+        (soul.biology.soul_id, round(soul.x, 3), round(soul.y, 3)) for soul in souls
+    ]
+    moved = snapshot != last_snapshot
+    animating = not sim_paused and any(
+        not soul.statue and not soul.dormant_statue for soul in souls
+    )
+    return (moved or animating, snapshot)
+
 
 class DirtyTracker:
     """Tracks whether the overlay scene needs a redraw.
