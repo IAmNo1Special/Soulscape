@@ -96,6 +96,7 @@ def clear_db(db_conn):
     cursor.execute("DELETE FROM resource_nodes")
     cursor.execute("DELETE FROM llm_keys")
     cursor.execute("DELETE FROM llm_usage")
+    cursor.execute("DELETE FROM jev_usage")
     cursor.execute("DELETE FROM quip_budgets")
     cursor.execute("DELETE FROM metering_events")
     cursor.execute("DELETE FROM decision_traces")

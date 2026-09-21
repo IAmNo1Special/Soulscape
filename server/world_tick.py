@@ -30,6 +30,7 @@ view every tick and diffs coarse-vision enter/exit events every 5th tick.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -56,6 +57,12 @@ from . import agents
 from . import expeditions
 from . import resources
 from .agents import metering
+from .agents import reflex
+from .agents import jev as jev_mod
+from .agents import jev_brain as jev_brain_mod
+from .agents import jev_queue as jev_queue_mod
+from .agents import jev_telemetry as jev_telemetry_mod
+from .agents import jev_worker as jev_worker_mod
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -110,6 +117,10 @@ class WorldTick:
         self.vision = world.WorldVision()
         self.agent_pool = agents.pool.AgentPool()
         self._agent_soul_count: int | None = None
+        self._jev_worker: jev_worker_mod.JevWorker | None = None
+        self._jev_queue: jev_queue_mod.JevEventQueue | None = None
+        self._jev_boot_at = 0.0
+        self._jev_last_restless_sweep = 0.0
 
     async def start(self) -> None:
         if self.running:
@@ -123,6 +134,7 @@ class WorldTick:
                 conn, self.tick_id, self.scenario_seed, self.tick_dt
             )
             conn.commit()
+        self._jev_init()
         self._task = asyncio.create_task(self._run_loop())
 
     async def stop(self) -> None:
@@ -135,6 +147,7 @@ class WorldTick:
                 pass
             self._task = None
         await asyncio.to_thread(self._finalize)
+        await asyncio.to_thread(self._jev_shutdown)
         self.enabled = False
 
     def _finalize(self) -> None:
@@ -142,7 +155,9 @@ class WorldTick:
             try:
                 self.flush()
                 with database.get_db() as conn:
-                    persistence.take_snapshot(conn, self.tick_id, scenario_seed=self.scenario_seed)
+                    persistence.take_snapshot(
+                        conn, self.tick_id, scenario_seed=self.scenario_seed
+                    )
                     persistence.prune_snapshots(conn)
                 self._last_snapshot_tick = self.tick_id
             except Exception:
@@ -153,6 +168,232 @@ class WorldTick:
             count = persistence.flush_dirty(conn, self.tick_id)
         self._last_flush_at = time.monotonic()
         return count
+
+    def _jev_init(self) -> None:
+        if self._jev_worker is not None:
+            return
+        if not jev_mod.enabled():
+            logger.info("jev tier disabled: SOULSCAPE_JEV_TIER not set")
+            return
+        if not jev_mod.api_key_present():
+            logger.warning("jev tier auto-disabled: TYPESAFE_API_KEY not set")
+            return
+        queue = jev_queue_mod.JevEventQueue()
+        worker = jev_worker_mod.JevWorker(
+            queue=queue,
+            breaker=jev_mod.JevBreaker(),
+            emit_fn=self._jev_emit,
+            telemetry_fn=self._jev_telemetry,
+            suppressed_fn=self._jev_suppressed,
+        )
+        self._jev_queue = queue
+        self._jev_worker = worker
+        self._jev_boot_at = time.time()
+        self._jev_last_restless_sweep = self._jev_boot_at
+        self.agent_pool.jev_note = self._jev_note
+        try:
+            worker.start()
+        except Exception:
+            logger.exception("jev tier failed to start; continuing without it")
+            self._jev_shutdown()
+            return
+        logger.info("jev tier enabled: dedicated worker started")
+
+    def _jev_shutdown(self) -> None:
+        worker = self._jev_worker
+        if worker is None:
+            return
+        self.agent_pool.jev_note = None
+        self._jev_worker = None
+        self._jev_queue = None
+        try:
+            worker.stop()
+        except Exception:
+            logger.exception("jev worker stop failed")
+
+    def _jev_note(
+        self, soul_id: str, kind: str, floor_override: float | None = None
+    ) -> None:
+        worker = self._jev_worker
+        queue = self._jev_queue
+        if worker is None or queue is None:
+            return
+        now = time.time()
+        snapshot = self._jev_snapshot(soul_id, [kind], now)
+        if snapshot is None:
+            return
+        try:
+            worker.note(soul_id, kind, now, snapshot, floor_override=floor_override)
+        except Exception:
+            logger.exception("jev note failed for %s", soul_id)
+
+    def _jev_carry_changed(self, intent: dict, result: dict | None) -> None:
+        if not isinstance(result, dict):
+            return
+        phase = result.get("phase")
+        if phase == "grab":
+            pass
+        elif phase == "release":
+            if not result.get("was_carried"):
+                return
+        elif phase == "move":
+            if not result.get("escaped"):
+                return
+        else:
+            return
+        self._jev_note(intent["soul_id"], "carry_change")
+
+    def _jev_snapshot(
+        self,
+        soul_id: str,
+        kinds: list[str],
+        now: float,
+        position_override: tuple[float, float] | None = None,
+    ) -> dict | None:
+        queue = self._jev_queue
+        if queue is None:
+            return None
+        try:
+            return jev_brain_mod.build_snapshot(
+                self.agent_pool,
+                soul_id,
+                self.vision,
+                resources.node_provider(),
+                kinds,
+                now,
+                queue.last_event_at(soul_id),
+                position_override=position_override,
+            )
+        except Exception:
+            logger.exception("jev snapshot failed for %s", soul_id)
+            return None
+
+    def _jev_emit(
+        self, soul_id: str, goal: str, action: str, payload: dict
+    ) -> str | None:
+        try:
+            intent_id = self.agent_pool.validate_and_enqueue(
+                soul_id,
+                action,
+                payload,
+                resources.node_provider(),
+                self.tick_id,
+            )
+            if intent_id is None:
+                logger.debug("jev emit rejected for %s: %s", soul_id, action)
+            return intent_id
+        except Exception:
+            logger.exception("jev emit failed for %s", soul_id)
+            return None
+
+    def _jev_telemetry(self, row: jev_telemetry_mod.JevUsageRow) -> None:
+        try:
+            with database.get_db() as conn:
+                jev_telemetry_mod.record_usage(conn, row)
+                conn.commit()
+        except Exception:
+            logger.exception("jev telemetry write failed")
+
+    def _jev_suppressed(self, soul_id: str, snapshot: dict) -> bool:
+        if snapshot.get("moving"):
+            return True
+        bands = snapshot.get("need_bands") or {}
+        if bands.get("satiety") == "low" or bands.get("hydration") == "low":
+            return True
+        if snapshot.get("fear", 0.0) > reflex.FLEE_FEAR:
+            return True
+        if snapshot.get("state") == biology.STATE_COLLAPSED:
+            return True
+        try:
+            if dormancy.is_dormant(snapshot.get("essence")):
+                return True
+        except Exception:
+            logger.exception("jev dormancy check failed")
+        try:
+            if soul_id in affection.carried_souls():
+                return True
+        except Exception:
+            logger.exception("jev carried check failed")
+        return False
+
+    @staticmethod
+    def _jev_jitter(soul_id: str) -> float:
+        digest = hashlib.sha256(soul_id.encode()).digest()
+        return (int.from_bytes(digest[:2], "big") % 1500) / 100.0
+
+    def _jev_restlessness_sweep(self, now: float) -> None:
+        queue = self._jev_queue
+        worker = self._jev_worker
+        if queue is None or worker is None:
+            return
+        try:
+            candidates = self._agent_candidates()
+        except Exception:
+            logger.exception("jev restlessness sweep: candidates failed")
+            return
+        for soul_id in candidates:
+            try:
+                last = self._jev_boot_at
+                queued = queue.last_event_at(soul_id)
+                if queued is not None:
+                    last = max(last, queued)
+                emitted = self.agent_pool.last_emit_at.get(soul_id)
+                if emitted is not None:
+                    last = max(last, emitted)
+                if now - last >= jev_mod.RESTLESS_AFTER_S + self._jev_jitter(soul_id):
+                    self._jev_note(soul_id, "restlessness")
+            except Exception:
+                logger.exception("jev restlessness sweep failed for %s", soul_id)
+        try:
+            worker.prune_sensors(set(candidates))
+        except Exception:
+            logger.exception("jev sensor prune failed")
+
+    def _jev_movement_completed(self, arrived: list[tuple[str, float, float]]) -> None:
+        worker = self._jev_worker
+        queue = self._jev_queue
+        if worker is None or queue is None or not arrived:
+            return
+        now = time.time()
+        with database.get_db() as conn:
+            for soul_id, tx, ty in arrived:
+                snapshot = self._jev_snapshot(
+                    soul_id, ["movement_complete"], now, position_override=(tx, ty)
+                )
+                if snapshot is None:
+                    continue
+                try:
+                    worker.note(soul_id, "movement_complete", now, snapshot)
+                except Exception:
+                    logger.exception("jev movement note failed for %s", soul_id)
+                    continue
+                intent_id = worker.wander_intent_id(soul_id)
+                if intent_id is None:
+                    continue
+                try:
+                    row = conn.execute(
+                        "SELECT payload, result FROM intents WHERE intent_id = ?",
+                        (intent_id,),
+                    ).fetchone()
+                except Exception:
+                    logger.exception("jev completion lookup failed for %s", soul_id)
+                    continue
+                if row is None:
+                    continue
+                try:
+                    payload = json.loads(row["payload"] or "{}")
+                    result = json.loads(row["result"] or "{}")
+                except Exception:
+                    logger.exception("jev completion parse failed for %s", soul_id)
+                    continue
+                if payload.get("wander") is not True:
+                    continue
+                if result.get("x") != tx or result.get("y") != ty:
+                    continue
+                try:
+                    worker.on_wander_leg_complete(soul_id, now, snapshot)
+                except Exception:
+                    logger.exception("jev wander leg complete failed for %s", soul_id)
 
     async def _run_loop(self) -> None:
         next_deadline = time.monotonic() + self.tick_dt
@@ -224,9 +465,20 @@ class WorldTick:
             elif intent["kind"] == presence_module.KIND_TAMER_PRESENCE:
                 presence_module.adjudicate_presence_intent(self, intent)
             elif intent["kind"] in affection.AFFECTION_KINDS:
-                affection.adjudicate_affection_intent(self, intent)
+                outcome = affection.adjudicate_affection_intent(self, intent)
+                if outcome["status"] == "adjudicated":
+                    if intent["kind"] in (affection.KIND_CHIRP, affection.KIND_PET):
+                        self._jev_note(intent["soul_id"], "tamer_poke")
+                    elif intent["kind"] == affection.KIND_CARRY_MOVE:
+                        self._jev_carry_changed(intent, outcome["result"])
             elif intent["kind"] == bridge.BRIDGE_INTENT_KIND:
                 bridge.adjudicate_bridge_event(self, intent)
+            elif intent["kind"] == "look":
+                self._adjudicate_look(intent)
+            elif intent["kind"] == "rest":
+                self._adjudicate_rest(intent)
+            elif intent["kind"] == "wait":
+                self._adjudicate_wait(intent)
             else:
                 with database.get_db() as conn:
                     self._reject(conn, intent, "unknown_kind")
@@ -236,9 +488,7 @@ class WorldTick:
                 try:
                     self._reject(conn, intent, "internal")
                 except Exception:
-                    logger.exception(
-                        "Intent rejection failed: %s", intent["intent_id"]
-                    )
+                    logger.exception("Intent rejection failed: %s", intent["intent_id"])
 
     def _reject(self, conn, intent: dict, reason: str) -> None:
         result = {"reason": reason}
@@ -318,9 +568,12 @@ class WorldTick:
                 self._reject(conn, intent, "custody")
                 return
             # Hungry souls (satiety <= 50) move at 75% speed (issue #21).
-            speed = INTENT_MOVE_SPEED * biology.speed_multiplier(
-                biology.full_or_100(row["satiety"])
-            )
+            if payload.get("wander") is True and payload.get("pace") == "amble":
+                speed = jev_mod.JEV_AMBLE_SPEED
+            else:
+                speed = INTENT_MOVE_SPEED * biology.speed_multiplier(
+                    biology.full_or_100(row["satiety"])
+                )
             x, y = _parse_pair(row["position"])
             unflushed = persistence.dirty_get(soul_id)
             if unflushed is not None and unflushed.get("position") is not None:
@@ -439,6 +692,7 @@ class WorldTick:
             # Carry (issue #31): snapshot once per tick; a carried soul's
             # position is owned by the tamer's drag stream.
             carried = affection.carried_souls()
+            arrived: list[tuple[str, float, float]] = []
             with database.get_db() as conn:
                 rows = conn.execute(
                     "SELECT soul_id, position, velocity, move_target, "
@@ -478,6 +732,7 @@ class WorldTick:
                     (nx, ny), (nvx, nvy), new_target = persistence.integrate_soul(
                         (x, y), (vx, vy), target, self.tick_dt, bounds
                     )
+                    did_arrive = target is not None and new_target is None
                     if closed_barrier and not plots.can_enter_plot(
                         conn, soul_id, nx, ny
                     ):
@@ -486,6 +741,7 @@ class WorldTick:
                             (0.0, 0.0),
                             None,
                         )
+                        did_arrive = False
                     persistence.dirty.mark(
                         soul_id,
                         position=[nx, ny],
@@ -493,6 +749,8 @@ class WorldTick:
                         move_target=new_target,
                     )
                     moved += 1
+                    if did_arrive:
+                        arrived.append((soul_id, target[0], target[1]))
             self.vision.rebuild()
             coarse_events: dict[str, dict] = {}
             # Issue #34: resource-node respawn sweep every 100 ticks
@@ -531,11 +789,140 @@ class WorldTick:
                 except Exception:
                     logger.exception("retention compaction failed")
             self._run_agent_pool(coarse_events)
+            try:
+                self._jev_movement_completed(arrived)
+            except Exception:
+                logger.exception("jev movement completion failed")
+            now = time.time()
+            if now - self._jev_last_restless_sweep >= jev_mod.SWEEP_EVERY_S:
+                self._jev_last_restless_sweep = now
+                try:
+                    self._jev_restlessness_sweep(now)
+                except Exception:
+                    logger.exception("jev restlessness sweep failed")
             self.tick_id += 1
             self.souls_moved_last_tick = moved
             self._maybe_flush()
             self._maybe_snapshot()
             return moved
+
+    def _adjudicate_look(self, intent: dict) -> None:
+        intent_id = intent["intent_id"]
+        soul_id = intent["soul_id"]
+        with database.get_db() as conn:
+            row = conn.execute(
+                "SELECT soul_id FROM souls WHERE soul_id = ?", (soul_id,)
+            ).fetchone()
+            if row is None:
+                self._reject(conn, intent, "soul_not_found")
+                return
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "UPDATE intents SET status = ?, result = ? WHERE intent_id = ?",
+                    ("adjudicated", json.dumps({"at": self.tick_id}), intent_id),
+                )
+                persistence.append_event(
+                    conn,
+                    self.tick_id,
+                    persistence.EVENT_INTENT_ADJUDICATED,
+                    {
+                        "intent_id": intent_id,
+                        "kind": "look",
+                        "soul_id": soul_id,
+                    },
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def _adjudicate_rest(self, intent: dict) -> None:
+        intent_id = intent["intent_id"]
+        soul_id = intent["soul_id"]
+        with database.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT soul_id FROM souls WHERE soul_id = ?", (soul_id,)
+                ).fetchone()
+                if row is None:
+                    conn.rollback()
+                    self._reject(conn, intent, "soul_not_found")
+                    return
+                conn.execute(
+                    "UPDATE souls SET activity = 'rest' WHERE soul_id = ?",
+                    (soul_id,),
+                )
+                persistence.dirty.mark(
+                    soul_id,
+                    velocity=[0.0, 0.0],
+                    move_target=None,
+                )
+                conn.execute(
+                    "UPDATE intents SET status = ?, result = ? WHERE intent_id = ?",
+                    ("adjudicated", json.dumps({"at": self.tick_id}), intent_id),
+                )
+                persistence.append_event(
+                    conn,
+                    self.tick_id,
+                    persistence.EVENT_INTENT_ADJUDICATED,
+                    {
+                        "intent_id": intent_id,
+                        "kind": "rest",
+                        "soul_id": soul_id,
+                    },
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def _adjudicate_wait(self, intent: dict) -> None:
+        intent_id = intent["intent_id"]
+        soul_id = intent["soul_id"]
+        with database.get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT soul_id FROM souls WHERE soul_id = ?", (soul_id,)
+                ).fetchone()
+                if row is None:
+                    conn.rollback()
+                    self._reject(conn, intent, "soul_not_found")
+                    return
+                persistence.dirty.mark(
+                    soul_id,
+                    velocity=[0.0, 0.0],
+                    move_target=None,
+                )
+                conn.execute(
+                    "UPDATE intents SET status = ?, result = ? WHERE intent_id = ?",
+                    ("adjudicated", json.dumps({"at": self.tick_id}), intent_id),
+                )
+                persistence.append_event(
+                    conn,
+                    self.tick_id,
+                    persistence.EVENT_INTENT_ADJUDICATED,
+                    {
+                        "intent_id": intent_id,
+                        "kind": "wait",
+                        "soul_id": soul_id,
+                    },
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def _note_vision_events(self, coarse_events: dict[str, dict], now: float) -> None:
+        sched = agents.scheduler.default()
+        for soul_id, events in coarse_events.items():
+            if events.get("entered"):
+                sched.note_vision_enter(soul_id, now)
+                self._jev_note(soul_id, "vision_enter")
+            if events.get("exited"):
+                self._jev_note(soul_id, "vision_exit")
 
     def _run_agent_pool(self, coarse_events: dict[str, dict]) -> None:
         """Agent pool phase (issue #24): bounded reflex thinks.
@@ -554,9 +941,7 @@ class WorldTick:
         sched = agents.scheduler.default()
         tracker = agents.deliberation.tracker()
         tracker.bind_scheduler(sched)
-        for soul_id, events in coarse_events.items():
-            if events.get("entered"):
-                sched.note_vision_enter(soul_id, now)
+        self._note_vision_events(coarse_events, now)
         with database.get_db() as conn:
             count = conn.execute("SELECT COUNT(*) AS c FROM souls").fetchone()["c"]
         if sched.needs_boot() or count != self._agent_soul_count:
@@ -632,7 +1017,9 @@ class WorldTick:
     def _maybe_snapshot(self) -> None:
         if self.tick_id - self._last_snapshot_tick >= persistence.SNAPSHOT_EVERY_TICKS:
             with database.get_db() as conn:
-                persistence.take_snapshot(conn, self.tick_id, scenario_seed=self.scenario_seed)
+                persistence.take_snapshot(
+                    conn, self.tick_id, scenario_seed=self.scenario_seed
+                )
                 persistence.prune_snapshots(conn)
             self._last_snapshot_tick = self.tick_id
 

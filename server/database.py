@@ -779,6 +779,32 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_llm_usage_soul
                 ON llm_usage(soul_id)
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS jev_usage (
+                    usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_id TEXT NOT NULL,
+                    at REAL NOT NULL,
+                    trigger_event TEXT NOT NULL,
+                    lane INTEGER NOT NULL,
+                    latency_ms REAL,
+                    queue_wait_ms REAL,
+                    input_tokens INTEGER,
+                    questions_asked INTEGER NOT NULL,
+                    snapshot TEXT,
+                    raw_judgments TEXT,
+                    error_type TEXT,
+                    stale_cache_hit INTEGER NOT NULL DEFAULT 0,
+                    shed_count INTEGER NOT NULL DEFAULT 0,
+                    coalesced_event_kinds TEXT,
+                    active_goal_set TEXT,
+                    goal_selected TEXT,
+                    plan_action_count INTEGER
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_jev_usage_soul
+                ON jev_usage(soul_id)
+            """)
             # Quip budget (issue #30): personalized quips are capped at
             # QUIPS_PER_SOUL_PER_DAY per UTC day. One row per soul per day;
             # the day boundary resets the budget automatically.

@@ -518,11 +518,19 @@ class EscalationTracker:
         """Record a wallet sighting; flag when |delta| > 10%.
 
         Called on every think, so every ledger applier feeds it.
-        Returns the signed fractional delta (0.0 on first sighting).
+        A rise from zero (funding a dormant soul) flags too.
+        Returns the signed fractional delta (0.0 on first sighting,
+        1.0 on a rise from zero).
         """
         before = self._essence.get(soul_id)
         self._essence[soul_id] = essence
-        if before is None or before <= 0:
+        if before is None:
+            return 0.0
+        if before <= 0:
+            if essence > 0:
+                self._wallet_mag[soul_id] = 1.0
+                self._flag(soul_id, "wallet_delta", now, magnitude=1.0)
+                return 1.0
             return 0.0
         delta = (essence - before) / before
         mag = abs(delta)

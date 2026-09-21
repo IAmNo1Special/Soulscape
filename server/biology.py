@@ -78,6 +78,20 @@ REST_ACTIVITIES = frozenset({"rest", "idle"})
 STATE_NORMAL = "normal"
 STATE_TRAVELING = "traveling"  # reserved for v1.5 fast-travel; unused in v1
 STATE_COLLAPSED = "collapsed"
+
+NEED_BAND_LOW = 35.0
+NEED_BAND_MID = 70.0
+
+
+def need_band(value: float | None) -> str:
+    v = float(value or 0.0)
+    if v < NEED_BAND_LOW:
+        return "low"
+    if v < NEED_BAND_MID:
+        return "mid"
+    return "high"
+
+
 VALID_STATES = (STATE_NORMAL, STATE_TRAVELING, STATE_COLLAPSED)
 
 # ---------------------------------------------------------------------------

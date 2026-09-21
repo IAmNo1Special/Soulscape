@@ -641,8 +641,27 @@ def _carry_release(conn, intent: dict, now: float) -> dict:
 # entry point
 
 
-def adjudicate_affection_intent(tick, intent: dict) -> None:
-    """Tick-pump entry point for the pet grammar. Never raises."""
+def _settled_outcome(intent_id: str) -> dict:
+    with database.get_db() as conn:
+        row = conn.execute(
+            "SELECT status, result FROM intents WHERE intent_id = ?", (intent_id,)
+        ).fetchone()
+    if row is None:
+        return {"status": "missing", "result": None}
+    result = row["result"]
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (ValueError, TypeError):
+            result = None
+    return {"status": row["status"], "result": result}
+
+
+def adjudicate_affection_intent(tick, intent: dict) -> dict:
+    """Tick-pump entry point for the pet grammar. Never raises.
+
+    Returns the settled outcome: {"status": ..., "result": ...}.
+    """
     kind = intent["kind"]
     try:
         if kind == KIND_CHIRP:
@@ -666,3 +685,4 @@ def adjudicate_affection_intent(tick, intent: dict) -> None:
     except Exception:
         logger.exception("affection adjudication failed: %s", intent["intent_id"])
         _reject(tick.tick_id, intent, "internal")
+    return _settled_outcome(intent["intent_id"])

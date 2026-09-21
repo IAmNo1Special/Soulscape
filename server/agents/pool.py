@@ -35,7 +35,7 @@ import time
 
 from .. import biology, database, dormancy, intents, mailbag, persistence, presence
 from .. import resources
-from . import drives, memory, metering, reflex, scheduler, sensations, vocab
+from . import brain_busy, drives, memory, metering, reflex, scheduler, sensations, vocab
 
 logger = logging.getLogger("soulscape_hub")
 
@@ -100,6 +100,10 @@ def validate_agent_payload(action: str, payload: dict) -> dict | None:
         if not math.isfinite(x) or not math.isfinite(y):
             return None
         out = {"x": x, "y": y}
+        if payload.get("pace") == "amble":
+            out["pace"] = "amble"
+        if payload.get("wander") is True:
+            out["wander"] = True
         ref = payload.get("target_ref")
         if isinstance(ref, dict) and _as_pair(ref.get("at")) is not None:
             out["target_ref"] = {
@@ -219,6 +223,10 @@ class AgentPool:
         self.think_scheduler = think_scheduler or scheduler.default()
         self._rng = random.Random(seed)
         self._observations: dict[str, dict] = {}
+        self.last_emit_at: dict[str, float] = {}
+        self._need_bands: dict[str, tuple[str, str, str]] = {}
+        self._tamer_presence: dict[str, str | None] = {}
+        self.jev_note = None
 
     def last_observation(self, soul_id: str) -> dict | None:
         """Most recent think observation payload for a soul.
@@ -231,7 +239,7 @@ class AgentPool:
     def _load_soul(self, soul_id: str) -> dict | None:
         with database.get_db() as conn:
             row = conn.execute(
-                "SELECT soul_id, position, velocity, nature, state, "
+                "SELECT soul_id, position, velocity, move_target, nature, state, "
                 "COALESCE(essence, 0.0) AS essence, "
                 "COALESCE(satiety, 100.0) AS satiety, "
                 "COALESCE(hydration, 100.0) AS hydration, "
@@ -285,7 +293,9 @@ class AgentPool:
                 )
                 conn.commit()
             return None
-        return self._enqueue(live, name, canonical)["intent_id"]
+        intent_id = self._enqueue(live, name, canonical)["intent_id"]
+        self.last_emit_at[soul_id] = time.time()
+        return intent_id
 
     async def think(
         self,
@@ -296,6 +306,21 @@ class AgentPool:
         now: float,
     ) -> dict:
         """One reflex think for one soul. Returns a small summary dict."""
+        if not brain_busy.acquire(soul_id):
+            return {"soul_id": soul_id, "status": "busy"}
+        try:
+            return await self._think_inner(soul_id, vision, provider, tick_id, now)
+        finally:
+            brain_busy.release(soul_id)
+
+    async def _think_inner(
+        self,
+        soul_id: str,
+        vision,
+        provider: reflex.FoodWaterProvider,
+        tick_id: int,
+        now: float,
+    ) -> dict:
         row = self._load_soul(soul_id)
         if row is None:
             self.think_scheduler.forget(soul_id)
@@ -303,6 +328,26 @@ class AgentPool:
         if (row.get("state") or biology.STATE_NORMAL) == biology.STATE_COLLAPSED:
             self.think_scheduler.schedule_next(soul_id, now)
             return {"soul_id": soul_id, "status": "collapsed"}
+        # Feed #25's escalation tracker: wallet sightings (every ledger
+        # applier flows through here) and detail-vision enters. Sighted
+        # before the dormancy gate so funding a dormant soul registers.
+        # Lazy import: deliberation imports this module at top level.
+        from . import deliberation as _delib
+
+        delta = _delib.tracker().note_wallet(
+            soul_id, float(row.get("essence") or 0.0), now
+        )
+        if delta > _delib.WALLET_DELTA_TRIGGER and self.jev_note is not None:
+            self.jev_note(soul_id, "wallet_delta")
+        bands = (
+            biology.need_band(row.get("satiety")),
+            biology.need_band(row.get("hydration")),
+            biology.need_band(row.get("hp")),
+        )
+        if self._need_bands.get(soul_id) not in (None, bands):
+            if self.jev_note is not None:
+                self.jev_note(soul_id, "needs_change")
+        self._need_bands[soul_id] = bands
         if dormancy.is_dormant(row.get("essence")):
             self.think_scheduler.schedule_next(soul_id, now)
             return {"soul_id": soul_id, "status": "dormant"}
@@ -311,12 +356,6 @@ class AgentPool:
         except (ValueError, TypeError, IndexError):
             x, y = 0.0, 0.0
         observations = vision.detail_observations(soul_id)
-        # Feed #25's escalation tracker: wallet sightings (every ledger
-        # applier flows through here) and detail-vision enters. Lazy
-        # import: deliberation imports this module at top level.
-        from . import deliberation as _delib
-
-        _delib.tracker().note_wallet(soul_id, float(row.get("essence") or 0.0), now)
         _delib.tracker().check_detail_enters(soul_id, observations, now)
         drive_vec = drives.compute_drives(
             row.get("nature"),
@@ -347,6 +386,13 @@ class AgentPool:
                 row.get("custodian_id") or row.get("owner_id"), now
             ),
         }
+        tamer_id = row.get("custodian_id") or row.get("owner_id")
+        if tamer_id:
+            tstate = (observation["tamer_presence"] or {}).get("presence")
+            if self._tamer_presence.get(soul_id) not in (None, tstate):
+                if self.jev_note is not None:
+                    self.jev_note(soul_id, "tamer_presence")
+            self._tamer_presence[soul_id] = tstate
         result = reflex.evaluate(
             soul_id,
             x,
@@ -441,6 +487,25 @@ class AgentPool:
         failure (or any unexpected crash) the soul still acts: the #24
         reflex think runs instead. Nothing here ever raises out.
         """
+        if not brain_busy.acquire(soul_id):
+            return {"soul_id": soul_id, "status": "busy"}
+        try:
+            return await self._deliberate_inner(
+                soul_id, vision, provider, tick_id, now, escalation, deliberator
+            )
+        finally:
+            brain_busy.release(soul_id)
+
+    async def _deliberate_inner(
+        self,
+        soul_id: str,
+        vision,
+        provider: reflex.FoodWaterProvider,
+        tick_id: int,
+        now: float,
+        escalation: str | None,
+        deliberator=None,
+    ) -> dict:
         from . import deliberation as _delib
 
         row = self._load_soul(soul_id)
@@ -450,10 +515,23 @@ class AgentPool:
         if (row.get("state") or biology.STATE_NORMAL) == biology.STATE_COLLAPSED:
             self.think_scheduler.schedule_next(soul_id, now)
             return {"soul_id": soul_id, "status": "collapsed"}
+        delta = _delib.tracker().note_wallet(
+            soul_id, float(row.get("essence") or 0.0), now
+        )
+        if delta > _delib.WALLET_DELTA_TRIGGER and self.jev_note is not None:
+            self.jev_note(soul_id, "wallet_delta")
+        bands = (
+            biology.need_band(row.get("satiety")),
+            biology.need_band(row.get("hydration")),
+            biology.need_band(row.get("hp")),
+        )
+        if self._need_bands.get(soul_id) not in (None, bands):
+            if self.jev_note is not None:
+                self.jev_note(soul_id, "needs_change")
+        self._need_bands[soul_id] = bands
         if dormancy.is_dormant(row.get("essence")):
             self.think_scheduler.schedule_next(soul_id, now)
             return {"soul_id": soul_id, "status": "dormant"}
-        _delib.tracker().note_wallet(soul_id, float(row.get("essence") or 0.0), now)
         thinker = deliberator or _delib.Deliberator(self)
         try:
             result = thinker.deliberate(
@@ -467,7 +545,7 @@ class AgentPool:
                 "fallback_used": True,
             }
         if result.get("status") == "heuristic":
-            summary = await self.think(soul_id, vision, provider, tick_id, now)
+            summary = await self._think_inner(soul_id, vision, provider, tick_id, now)
             summary["deliberation"] = "heuristic_fallback"
             summary["degraded_reason"] = result.get("degraded_reason")
             return summary
