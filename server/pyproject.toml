@@ -13,6 +13,7 @@ dependencies = [
     "websockets>=15.0.1",
     "shared",
     "cryptography>=50.0.1",
+    "goapauto[jev]>=0.5.0",
 ]
 
 [tool.uv.sources]

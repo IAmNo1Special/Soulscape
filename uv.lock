@@ -250,7 +250,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "goapauto", specifier = ">=0.4.0" },
+    { name = "goapauto", specifier = ">=0.5.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "pyautogui", specifier = ">=0.9.54" },
@@ -419,15 +419,19 @@ wheels = [
 
 [[package]]
 name = "goapauto"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
-    { name = "typesafe-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/91/b0/bc34e6baa87c77f14c268e9f1babde750a571a28da5f0e4ed56505b1e4be/goapauto-0.4.0.tar.gz", hash = "sha256:dffa8cec7260258be4d3a149c6caf0904663790dace3c0b1c8c45caa215dd00c", size = 27122, upload-time = "2026-09-19T05:35:48.086Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/00/4232c91644fda20fb770aef6a84a693d243e3577f17770f036e61cd21152/goapauto-0.5.0.tar.gz", hash = "sha256:a641c1fffd4f71e31fda9733d874c47b1c318e7819c57d0a0e0631d6b10a03c9", size = 30148, upload-time = "2026-09-21T02:33:34.019Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b9/15/ccd804aec5c86a2e6a2ad865de350450fcf6fe4da64e4a1ff37cc33076fc/goapauto-0.4.0-py3-none-any.whl", hash = "sha256:62fd734c5c08f64afe364965933c0ae4043bd91b72abc7b5097494631bd3fadd", size = 33313, upload-time = "2026-09-19T05:35:46.684Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/83/2c29e771baff0fd957ff3836870fdfcc8c4559ff41eedd6d94cc72cbe9a2/goapauto-0.5.0-py3-none-any.whl", hash = "sha256:0c5d410e7df5a8b63c56beace53dae11e7e6a8f17ceb79824cff727dfcf4c835", size = 37241, upload-time = "2026-09-21T02:33:32.734Z" },
+]
+
+[package.optional-dependencies]
+jev = [
+    { name = "typesafe-sdk" },
 ]
 
 [[package]]
@@ -1039,6 +1043,7 @@ dependencies = [
     { name = "argon2-cffi" },
     { name = "cryptography" },
     { name = "fastapi" },
+    { name = "goapauto", extra = ["jev"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "shared" },
@@ -1056,6 +1061,7 @@ requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1.0" },
     { name = "cryptography", specifier = ">=50.0.1" },
     { name = "fastapi", specifier = ">=0.128.6" },
+    { name = "goapauto", extras = ["jev"], specifier = ">=0.5.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "shared", editable = "shared" },
