@@ -251,7 +251,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "goapauto", specifier = ">=0.5.0" },
+    { name = "goapauto", specifier = ">=0.6.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "pyautogui", specifier = ">=0.9.54" },
@@ -421,14 +421,14 @@ wheels = [
 
 [[package]]
 name = "goapauto"
-version = "0.5.0"
+version = "0.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/72/00/4232c91644fda20fb770aef6a84a693d243e3577f17770f036e61cd21152/goapauto-0.5.0.tar.gz", hash = "sha256:a641c1fffd4f71e31fda9733d874c47b1c318e7819c57d0a0e0631d6b10a03c9", size = 30148, upload-time = "2026-09-21T02:33:34.019Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/63/2a1055bb83e9d7de2a6ca8f52ae67eb5f13bbf8408fe61db5efc5a5d4f39/goapauto-0.6.1.tar.gz", hash = "sha256:8f3e597941e89087707c6d307d558466882f1399a460308a1d3a8676674810bf", size = 74600, upload-time = "2026-09-21T16:04:37.69Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/83/2c29e771baff0fd957ff3836870fdfcc8c4559ff41eedd6d94cc72cbe9a2/goapauto-0.5.0-py3-none-any.whl", hash = "sha256:0c5d410e7df5a8b63c56beace53dae11e7e6a8f17ceb79824cff727dfcf4c835", size = 37241, upload-time = "2026-09-21T02:33:32.734Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/dd/0fa55925e7d3ffac17621c196c14afa09a861c3be3ba8e01be7966c9c99a/goapauto-0.6.1-py3-none-any.whl", hash = "sha256:c636515ebe214f21e54fbb71bef2b4311d87009d6ba7bf58041f8b33a67b9acc", size = 85389, upload-time = "2026-09-21T16:04:36.425Z" },
 ]
 
 [package.optional-dependencies]
@@ -1063,7 +1063,7 @@ requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1.0" },
     { name = "cryptography", specifier = ">=50.0.1" },
     { name = "fastapi", specifier = ">=0.128.6" },
-    { name = "goapauto", extras = ["jev"], specifier = ">=0.5.0" },
+    { name = "goapauto", extras = ["jev"], specifier = ">=0.6.1" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "shared", editable = "shared" },
