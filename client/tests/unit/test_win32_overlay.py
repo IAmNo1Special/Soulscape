@@ -37,7 +37,7 @@ def _fill_win_rect(ptr: int, left: int, top: int, right: int, bottom: int) -> No
 
 
 def _make_fullscreen_user32(
-    fg_hwnd: int, fg_rect: tuple, monitor_rect: tuple
+    fg_hwnd: int, fg_rect: tuple, monitor_rect: tuple, fg_class: str = ""
 ) -> MagicMock:
     user32 = MagicMock(name="user32")
     user32.GetForegroundWindow.return_value = fg_hwnd
@@ -52,9 +52,18 @@ def _make_fullscreen_user32(
         rc.left, rc.top, rc.right, rc.bottom = monitor_rect
         return 1
 
+    def get_class_name(hwnd: int, buf, n: int) -> int:
+        if not fg_class:
+            return 0
+        for i, ch in enumerate(fg_class[: n - 1]):
+            buf[i] = ch
+        buf[len(fg_class)] = "\x00"
+        return len(fg_class)
+
     user32.GetWindowRect.side_effect = get_rect
     user32.MonitorFromWindow.return_value = 777
     user32.GetMonitorInfoW.side_effect = get_info
+    user32.GetClassNameW.side_effect = get_class_name
     return user32
 
 
@@ -113,6 +122,22 @@ class TestFullscreenDetection:
     def test_no_foreground_window(self) -> None:
         user32 = MagicMock(name="user32")
         user32.GetForegroundWindow.return_value = 0
+        assert not fullscreen.foreground_is_exclusive_fullscreen(
+            own_hwnd=0x200, user32=user32
+        )
+
+    def test_desktop_progman_never_counts(self) -> None:
+        user32 = _make_fullscreen_user32(
+            0x100, (0, 0, 1920, 1080), (0, 0, 1920, 1080), fg_class="Progman"
+        )
+        assert not fullscreen.foreground_is_exclusive_fullscreen(
+            own_hwnd=0x200, user32=user32
+        )
+
+    def test_desktop_workerw_never_counts(self) -> None:
+        user32 = _make_fullscreen_user32(
+            0x100, (0, 0, 1920, 1080), (0, 0, 1920, 1080), fg_class="WorkerW"
+        )
         assert not fullscreen.foreground_is_exclusive_fullscreen(
             own_hwnd=0x200, user32=user32
         )

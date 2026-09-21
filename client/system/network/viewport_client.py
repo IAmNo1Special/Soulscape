@@ -590,3 +590,13 @@ class ViewportMapper:
             vx + sx / monitor_w * vw,
             vy + sy / monitor_h * vh,
         )
+
+    def event_to_world(
+        self, ex: float, ey: float, monitor_w: float, monitor_h: float
+    ) -> tuple[float, float]:
+        """Map a Pyglet pointer-event position to Hub world coords.
+
+        Pyglet event coordinates use a bottom-left origin; screen_to_world
+        expects top-left monitor pixels, so the Y axis is flipped first.
+        """
+        return self.screen_to_world(ex, monitor_h - ey, monitor_w, monitor_h)

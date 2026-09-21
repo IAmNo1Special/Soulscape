@@ -1243,7 +1243,7 @@ class SoulscapeApp:
             if self.viewport_mapper is None:
                 return
             display = pyglet.display.get_display().get_default_screen()
-            wx, wy = self.viewport_mapper.screen_to_world(
+            wx, wy = self.viewport_mapper.event_to_world(
                 float(event.x), float(event.y), display.width, display.height
             )
             intent_kind, payload = gesture_intent(event, soul_id, (wx, wy))

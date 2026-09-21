@@ -368,6 +368,21 @@ class TestScreenToWorld(unittest.TestCase):
         self.assertAlmostEqual(wx, 960.0, places=6)
         self.assertAlmostEqual(wy, 540.0, places=6)
 
+    def test_event_to_world_flips_pyglet_y(self):
+        mapper = ViewportMapper()
+        mapper.set_region(0.0, 0.0, 1920.0, 1080.0)
+        wx, wy = mapper.event_to_world(960.0, 480.0, 1920.0, 1080.0)
+        self.assertAlmostEqual(wx, 960.0, places=6)
+        self.assertAlmostEqual(wy, 600.0, places=6)
+
+    def test_event_to_world_matches_screen_point(self):
+        mapper = ViewportMapper()
+        mapper.set_region(0.0, 0.0, 1920.0, 1080.0)
+        wx, wy = mapper.event_to_world(200.0, 800.0, 1920.0, 1080.0)
+        rx, ry = mapper.screen_to_world(200.0, 280.0, 1920.0, 1080.0)
+        self.assertAlmostEqual(wx, rx, places=6)
+        self.assertAlmostEqual(wy, ry, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

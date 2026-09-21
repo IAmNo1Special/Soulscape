@@ -15,6 +15,20 @@ Rect = tuple[int, int, int, int]
 
 MONITOR_DEFAULTTONEAREST = 2
 
+DESKTOP_WINDOW_CLASSES = frozenset({"Progman", "WorkerW"})
+
+_CLASS_NAME_BUF = 256
+
+
+def _foreground_window_class(fg: int, user32: Any) -> str:
+    try:
+        buf = ctypes.create_unicode_buffer(_CLASS_NAME_BUF)
+        if user32.GetClassNameW(fg, buf, _CLASS_NAME_BUF) > 0:
+            return buf.value
+    except Exception:
+        pass
+    return ""
+
 
 class _WinRect(ctypes.Structure):
     _fields_ = [
@@ -86,7 +100,9 @@ def foreground_is_exclusive_fullscreen(
     """Detect whether the foreground window is exclusive-fullscreen.
 
     Heuristic: the foreground window's rect covers the entire monitor rect.
-    The overlay's own window never counts as fullscreen.
+    The overlay's own window never counts as fullscreen, and neither do
+    the Windows desktop shell windows (Progman/WorkerW) -- clicking the
+    desktop must not park the overlay.
 
     Args:
         own_hwnd: The overlay's own window handle, excluded from detection.
@@ -102,6 +118,8 @@ def foreground_is_exclusive_fullscreen(
     try:
         fg = user32.GetForegroundWindow()
         if not fg or (own_hwnd is not None and fg == own_hwnd):
+            return False
+        if _foreground_window_class(fg, user32) in DESKTOP_WINDOW_CLASSES:
             return False
         fg_rect = _WinRect()
         if not user32.GetWindowRect(fg, ctypes.byref(fg_rect)):
