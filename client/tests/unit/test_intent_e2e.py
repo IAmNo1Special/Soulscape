@@ -90,12 +90,6 @@ def _intent_count(session_id: str, nonce: str) -> int:
 
 
 def _rt_position(soul_id: str) -> tuple[float, float]:
-    """Authoritative position: dirty write-behind overlaid on the DB.
-
-    The tick integrates into an in-memory dirty set flushed every few
-    seconds, so a raw DB read is stale mid-flight. This is the same
-    read-through path the viewport and REST readers use.
-    """
     return server_persistence.read_positions_through()[soul_id]
 
 
@@ -136,9 +130,6 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
 
         await self._start_hub()
 
-        # Newborn souls spawn at the Commons center (issue #41); the hub
-        # echoes the actual stored position, which the tests drive from
-        # instead of assuming the requested coordinates.
         resp = await _arest(
             self.port,
             "POST",
@@ -225,9 +216,6 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
         self.assertTrue(self._server.started, "hub did not start")
 
-        # Issue #37: the API no longer ticks. Run the sim loop in-process
-        # (same dispatcher/messages as a real sim process) so intents
-        # adjudicate and souls move.
         from server.sim_gateway import get_gateway
 
         self._sim_tick = get_gateway().backend.host.tick
@@ -276,8 +264,6 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
 
     async def test_signed_intent_ack_adjudication_and_movement(self) -> None:
         sx, sy = self.spawn[SOUL_ID]
-        # Target 400 px away along x, staying in-bounds and well inside the
-        # 5 s intent horizon so adjudication does not clamp it.
         tx = sx + 400.0 if sx + 400.0 <= 1870.0 else sx - 400.0
         ty = sy
         ack = await self.pm.send_intent("move_to", SOUL_ID, x=tx, y=ty)
@@ -306,7 +292,6 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
             return pos if math.hypot(pos[0] - sx, pos[1] - sy) > 50.0 else None
 
         pos = await self._wait_for(_moved)
-        # Mid-flight: nearer the target than at spawn, never past it.
         self.assertLess(math.hypot(pos[0] - tx, pos[1] - ty), start_dist)
 
         def _arrived():
@@ -392,7 +377,6 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(err["type"], "error")
             self.assertEqual(err["code"], "CUSTODY_DENIED")
             self.assertEqual(_intent_count(connected["session_id"], "forged-1"), 0)
-            # The forged intent moved nothing: the soul sits at its spawn.
             ox, oy = self.spawn[OTHER_SOUL_ID]
             pos = _rt_position(OTHER_SOUL_ID)
             self.assertAlmostEqual(pos[0], ox, delta=0.5)

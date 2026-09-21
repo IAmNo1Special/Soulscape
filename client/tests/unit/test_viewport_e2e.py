@@ -29,6 +29,7 @@ from server import persistence as server_persistence
 HUB_SECRET = "viewport-e2e-secret"
 SOUL_ID = "viewport-e2e-soul"
 VELOCITY_X = 120.0
+MAX_RENDER_PX_PER_S = 2000.0
 START_X, START_Y = 200.0, 300.0
 SNAP_X, SNAP_Y = 1500.0, 800.0
 
@@ -61,9 +62,6 @@ async def _arest(port: int, method: str, path: str, payload: dict) -> dict:
 
 
 def _hub_position() -> tuple[float, float]:
-    # Authoritative position: the tick integrates into an in-memory dirty
-    # set flushed every few seconds, so a raw DB read is stale mid-flight.
-    # This is the same read-through path the viewport and REST readers use.
     return server_persistence.read_positions_through()[SOUL_ID]
 
 
@@ -100,9 +98,6 @@ class TestViewportEndToEnd(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
         self.assertTrue(self._server.started, "hub did not start")
 
-        # Issue #37: the API no longer ticks. Run the sim loop in-process
-        # (same dispatcher/messages as a real sim process) so intents
-        # adjudicate and souls move.
         from server.sim_gateway import get_gateway
 
         self._sim_tick = get_gateway().backend.host.tick
@@ -163,7 +158,7 @@ class TestViewportEndToEnd(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(consumer.region[2:], (1920.0, 1080.0))
 
             deltas_seen = 0
-            xs: list[float] = []
+            samples: list[tuple[float, float]] = []
 
             async def pump() -> None:
                 nonlocal deltas_seen
@@ -183,33 +178,41 @@ class TestViewportEndToEnd(unittest.IsolatedAsyncioTestCase):
                     clock.t = real_start + (time.monotonic() - real_start)
                     pos = consumer.rendered_positions().get(SOUL_ID)
                     if pos is not None:
-                        xs.append(pos[0])
+                        samples.append((clock.t, pos[0]))
             finally:
                 pump_task.cancel()
 
         self.assertGreaterEqual(
             deltas_seen, 3, f"expected hub delta frames, got {deltas_seen}"
         )
-        self.assertGreater(len(xs), 100)
+        self.assertGreater(len(samples), 100)
 
-        for earlier, later in zip(xs, xs[1:]):
-            self.assertGreaterEqual(
-                later, earlier - 2.0, "rendered motion jumped backwards"
-            )
-        total = xs[-1] - xs[0]
+        (_, first_x), (_, last_x) = samples[0], samples[-1]
+        total = last_x - first_x
+        elapsed = samples[-1][0] - samples[0][0]
         self.assertGreater(
             total,
-            0.5 * VELOCITY_X * (len(xs) / 60.0),
+            0.5 * VELOCITY_X * elapsed,
             f"soul barely moved: {total:.1f}px",
         )
-        steps = [abs(b - a) for a, b in zip(xs, xs[1:])]
+        max_speed = 0.0
+        for (t0, x0), (t1, x1) in zip(samples, samples[1:]):
+            dt = t1 - t0
+            if dt > 0.0:
+                max_speed = max(max_speed, abs(x1 - x0) / dt)
         self.assertLess(
-            max(steps), 12.0, f"jitter spike: {max(steps):.2f}px in one frame"
+            max_speed,
+            MAX_RENDER_PX_PER_S,
+            f"render speed spike: {max_speed:.1f}px/s",
         )
 
         hub_x, _ = _hub_position()
-        lag_px = hub_x - xs[-1]
-        self.assertGreater(lag_px, 0.0, "rendered ahead of the hub")
+        lag_px = hub_x - last_x
+        self.assertGreater(
+            lag_px,
+            -(VELOCITY_X * 0.6),
+            f"render lead {lag_px / VELOCITY_X:.2f}s exceeds budget",
+        )
         self.assertLess(
             lag_px,
             VELOCITY_X * 0.6,

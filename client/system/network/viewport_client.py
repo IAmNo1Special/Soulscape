@@ -26,16 +26,11 @@ MAX_EXTRAPOLATE_SECONDS = 0.4
 MAX_BUFFER_SAMPLES = 32
 _MAX_TURN_RATE = 2.0 * math.pi
 
-#: Hub soul state that renders as a statue (issue #21).
 STATUE_STATE = "collapsed"
 _NORMAL_STATE = "normal"
 
-#: Seconds without a Hub sample before a soul's presence reads stale
-#: (issue #29: the "offline" statue variant). Well above the 400 ms
-#: dead-reckoning cap so live souls never flicker.
 STALE_THRESHOLD_SECONDS = 2.0
 
-#: Dim factor applied to the desaturated statue color.
 _STATUE_DIM = 0.72
 
 _BIO_DEFAULTS = {"satiety": 100.0, "hydration": 100.0, "hp": 100.0, "max_hp": 100.0}
@@ -49,9 +44,7 @@ def _bio_from_entry(entry: dict) -> dict[str, float]:
         "max_hp": float(entry.get("max_hp", 100.0)),
     }
 
-#: Warm tint for dormant statues (issue #22): amber-shifted stone so a
-#: frozen (unfunded) soul is distinguishable from a collapsed one.
-#: Cheap distinction -- same desaturation, different hue.
+
 _DORMANT_TINT = (1.0, 0.78, 0.45)
 
 
@@ -139,8 +132,6 @@ class SoulTrack:
         self.samples: collections.deque[_Sample] = collections.deque(
             maxlen=MAX_BUFFER_SAMPLES
         )
-        # Issue #29: last sample time, for the presence-staleness check
-        # ("offline" statue variant).
         self.last_t: float | None = None
 
     def snap(self, x: float, y: float, now: float) -> None:
@@ -230,27 +221,11 @@ class ViewportConsumer:
         self._clock = clock or time.monotonic
         self._tracks: dict[str, SoulTrack] = {}
         self._states: dict[str, str] = {}
-        # Dormancy (issue #22): wallet-derived freeze, orthogonal to the
-        # lifecycle state. Streams on its own delta domain + snapshot.
         self._dormant: dict[str, bool] = {}
-        # Biology (issue #30, step 0 of #29): authoritative satiety /
-        # hydration / hp so online shader uniforms stop assuming healthy
-        # local defaults. Streams on its own delta domain + snapshot.
         self._bio: dict[str, dict[str, float]] = {}
-        # Wallets (issue #30): per-soul essence for the tray dashboard.
-        # Streams on the economy delta domain + the snapshot's wallets.
         self._wallets: dict[str, float] = {}
-        # Identities (issue #31): name/species/level/activity from the
-        # snapshot -- the hover nameplate and info card read viewport
-        # state, never local guesses.
         self._identities: dict[str, dict] = {}
-        # Transient bubble ops (issue #30): queued here, drained by the
-        # app into the BubbleManager. Never part of the entity state.
         self._bubble_queue: collections.deque[dict] = collections.deque()
-        # Abroad summaries (issue #35): souls on expedition stream the
-        # 4-key summary instead of position/state/dormancy/biology.
-        # Away souls have no track, so rendered_positions() (and the
-        # scene) excludes them; the tray shows them via the away glyph.
         self._abroad: dict[str, dict] = {}
         self._region: tuple[float, float, float, float] | None = None
 
@@ -367,14 +342,8 @@ class ViewportConsumer:
                 float(entry.get("x", 0.0)), float(entry.get("y", 0.0)), now
             )
             self._states[sid] = entry.get("state") or _NORMAL_STATE
-            # Dormancy rides the snapshot (issue #22) so a fresh client
-            # renders frozen statues without waiting for a delta.
             self._dormant[sid] = bool(entry.get("dormant", False))
-            # Biology rides the snapshot (issue #30) so a fresh client
-            # renders uniforms from authoritative values immediately.
             self._bio[sid] = _bio_from_entry(entry)
-            # Identity rides the snapshot (issue #31): hover nameplate
-            # and info card read viewport state, not local guesses.
             self._identities[sid] = {
                 "name": entry.get("name") or sid[:8],
                 "species": entry.get("species") or "Unknown",
@@ -388,9 +357,6 @@ class ViewportConsumer:
             self._bio.pop(sid, None)
             self._wallets.pop(sid, None)
             self._identities.pop(sid, None)
-        # Issue #35: abroad souls ride the snapshot's "abroad" list, not
-        # "souls". They keep their tray identity but lose their track
-        # (no scene rendering while away).
         abroad_ids: set[str] = set()
         for summary in frame.get("abroad") or []:
             if not isinstance(summary, dict):
@@ -441,10 +407,6 @@ class ViewportConsumer:
                 self._wallets.pop(sid, None)
                 self._identities.pop(sid, None)
                 continue
-            # Issue #35: abroad ops move a soul onto the away channel.
-            # The track/state/biology are dropped (no scene rendering
-            # while abroad); identity is kept for the tray tooltip.
-            # abroad_end clears the away state on return.
             if kind == "abroad_end":
                 self._abroad.pop(sid, None)
                 continue
@@ -461,8 +423,6 @@ class ViewportConsumer:
                 self._dormant.pop(eid, None)
                 self._bio.pop(eid, None)
                 continue
-            # Transient bubble ops (issue #30): queue for the app, never
-            # touch the entity state model.
             if kind == "bubble":
                 op_payload = op.get("payload")
                 self._bubble_queue.append(
@@ -480,21 +440,12 @@ class ViewportConsumer:
             if kind != protocol.EntityOpKind.UPSERT.value:
                 continue
             state = op.get("state") or {}
-            # State-only ops (e.g. the issue-#21 statue stream) carry no
-            # position; record the lifecycle state either way.
             if "state" in state:
                 self._states[sid] = state["state"] or _NORMAL_STATE
-            # Dormancy ops (issue #22) ride their own domain, orthogonal
-            # to the lifecycle state.
             if op.get("domain") == "dormancy":
                 self._dormant[sid] = bool(state.get("dormant", False))
-            # Biology ops (issue #30): authoritative vitals for the
-            # shader uniforms, orthogonal to position/state.
             if op.get("domain") == "biology":
                 self._bio[sid] = _bio_from_entry(state)
-            # Identity ops (issue #31): name/species/level/activity track
-            # the Hub mid-session so the nameplate and info card never
-            # wait for a re-snapshot.
             if op.get("domain") == "identity":
                 self._identities[sid] = {
                     "name": state.get("name") or sid[:8],
@@ -502,7 +453,6 @@ class ViewportConsumer:
                     "level": int(state.get("level") or 1),
                     "activity": state.get("activity") or "idle",
                 }
-            # Economy ops carry the per-soul essence for the tray wallet.
             if op.get("domain") == "economy" and "essence" in state:
                 self._wallets[sid] = float(state["essence"])
             if "x" not in state or "y" not in state:

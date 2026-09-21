@@ -11,13 +11,7 @@ jobs:
     with:
       install-command: "uv sync --frozen"
       run-lint: false
-      # Server tests read the hub secret from the environment; this is a
-      # hard-coded test value, not a real credential.
       test-env-json: '{"HUB_SECRET_KEY": "soulscape-secret-123"}'
-      # Capture-library guard (issue #15) runs first, then the full client
-      # unit suite (including the e2e viewport/intent/pet-grammar tests,
-      # whose hub deps are declared in the client dev group) under xvfb
-      # for the display-gated GUI tests, then the server suite.
       test-commands: |
         uv run --package shared python -m pytest shared/tests/ -q -p no:cacheprovider
         uv run --package client python -m pytest client/tests/unit/test_capture_guard.py -q -p no:cacheprovider
