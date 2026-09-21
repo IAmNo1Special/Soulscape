@@ -49,9 +49,10 @@ def _restore_pyglet(prior: dict[str, types.ModuleType | None]) -> None:
 _prior_pyglet = _install_pyglet_stubs()
 try:
     from client.core.soul.soul import Soul  # noqa: E402
-    from client.ui.graphics.scene_renderer import _soul_state  # noqa: E402
 finally:
     _restore_pyglet(_prior_pyglet)
+
+from client.ui.graphics.scene_renderer import _soul_state  # noqa: E402
 
 
 @pytest.fixture

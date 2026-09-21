@@ -342,7 +342,7 @@ class SceneRenderer:
                 anchor_x="left",
                 anchor_y="center",
                 font_size=font_size,
-                bold=(i == 0),
+                weight="bold" if i == 0 else "normal",
                 color=(235, 245, 255, 235),
             ).draw()
         glEnable(GL_DEPTH_TEST)
