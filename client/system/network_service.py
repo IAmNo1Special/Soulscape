@@ -97,6 +97,7 @@ class NetworkService:
             redactor,
             send=self.send_intent,
             get_soul_id=lambda: self.owner_id,
+            ready=self.presence_manager.has_session,
         )
         self._presence_pipeline.start()
         log.info("Tamer presence pipeline started (change + 60s heartbeat).")

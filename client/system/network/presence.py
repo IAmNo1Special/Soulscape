@@ -71,6 +71,19 @@ class PresenceManager:
         self.secret_key = os.getenv("HUB_SECRET_KEY", "")
         self._ws_url = ws_url + f"/ws/{owner_id}"
 
+    def has_session(self) -> bool:
+        """True when a live socket holds a signed session from the Hub.
+
+        The session arrives in the server's `connected` frame; until then
+        (and whenever the socket is down) intents cannot be signed and
+        send_intent drops them.
+        """
+        return (
+            self._ws is not None
+            and self._session_id is not None
+            and self._hmac_key is not None
+        )
+
     async def connect(self) -> None:
         """Start the WebSocket connection loop with auto-reconnect."""
         self._running = True
@@ -94,7 +107,13 @@ class PresenceManager:
                     backoff = 1  # Reset backoff on successful connect
                     auth_failures = 0  # Reset auth failures on success
                     log.info("WebSocket connected to Hub.")
-                    await self._listen(ws)
+                    try:
+                        await self._listen(ws)
+                    finally:
+                        if self._ws is ws and self._running:
+                            self._ws = None
+                            self._session_id = None
+                            self._hmac_key = None
             except websockets.exceptions.ConnectionClosed as e:
                 if e.code == 1008:
                     auth_failures += 1
@@ -195,7 +214,7 @@ class PresenceManager:
     async def send_intent(
         self, kind: str, soul_id: str, **fields: Any
     ) -> dict[str, Any] | None:
-        if self._ws is None or self._session_id is None or self._hmac_key is None:
+        if not self.has_session():
             log.warning("send_intent dropped: no signed session")
             return None
         nonce = secrets.token_urlsafe(16)

@@ -331,6 +331,7 @@ class PresencePipeline:
         poll_s: float = SAMPLER_POLL_SECONDS,
         heartbeat_s: float = HEARTBEAT_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        ready: Callable[[], bool] | None = None,
     ) -> None:
         self._redactor = redactor
         self._send = send
@@ -338,13 +339,22 @@ class PresencePipeline:
         self._poll_s = poll_s
         self._heartbeat_s = heartbeat_s
         self._clock = clock
+        self._ready = ready
         self._last_shipped: Optional[dict[str, Any]] = None
         self._last_ship_at: float = 0.0
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
     def tick_once(self) -> Optional[dict[str, Any]]:
-        """Sample once; ship when changed or heartbeat due. Test seam."""
+        """Sample once; ship when changed or heartbeat due. Test seam.
+
+        When a `ready` gate is set and closed, the tick is skipped
+        entirely -- before sampling, so redactor edge events (lock /
+        unlock / return) are not consumed by a sample that can never
+        ship. The next ready tick re-samples and ships them.
+        """
+        if self._ready is not None and not self._ready():
+            return None
         payload = self._redactor.sample()
         now = self._clock()
         changed = payload != self._last_shipped

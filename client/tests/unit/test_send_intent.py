@@ -85,6 +85,20 @@ async def test_send_intent_signs_and_acks(mock_env):
 
 
 @pytest.mark.asyncio
+async def test_has_session_tracks_socket_and_keys(mock_env):
+    pm = _make_pm()
+    assert pm.has_session() is False
+    pm._ws = FakeWs()
+    assert pm.has_session() is False
+    pm._session_id = "sess-1"
+    assert pm.has_session() is False
+    pm._hmac_key = "key-abc"
+    assert pm.has_session() is True
+    pm._ws = None
+    assert pm.has_session() is False
+
+
+@pytest.mark.asyncio
 async def test_send_intent_dropped_without_session(mock_env):
     pm = _make_pm()
     pm._ws = FakeWs()

@@ -228,3 +228,51 @@ def test_pipeline_payload_matches_server_allowlist():
     assert set(payload) <= {"presence", "idle_bucket", "event", "app_category"}
     assert payload["presence"] in ("active", "idle", "locked")
     assert payload["idle_bucket"] in ("0-5", "5-30", "30+")
+
+
+def test_pipeline_defers_ship_until_session_ready():
+    clock = [1000.0]
+    sampler = pm.FakePresenceSampler(age_s=5.0)
+    redactor = pm.PresenceRedactor(sampler, clock=lambda: clock[0])
+    shipped: list[dict] = []
+    ready = [False]
+    pipe = pm.PresencePipeline(
+        redactor,
+        send=lambda k, s, **f: shipped.append({"kind": k, **f}),
+        get_soul_id=lambda: "soul_1",
+        heartbeat_s=60.0,
+        clock=lambda: clock[0],
+        ready=lambda: ready[0],
+    )
+    assert pipe.tick_once() is None
+    assert pipe.tick_once() is None
+    assert shipped == []
+    ready[0] = True
+    first = pipe.tick_once()
+    assert first is not None
+    assert len(shipped) == 1
+    assert shipped[0]["kind"] == "tamer_presence"
+    assert shipped[0]["presence"] == "active"
+
+
+def test_pipeline_gate_preserves_edge_events():
+    clock = [1000.0]
+    sampler = pm.FakePresenceSampler(age_s=5.0, locked=False)
+    redactor = pm.PresenceRedactor(sampler, clock=lambda: clock[0])
+    shipped: list[dict] = []
+    ready = [False]
+    pipe = pm.PresencePipeline(
+        redactor,
+        send=lambda k, s, **f: shipped.append({"kind": k, **f}),
+        get_soul_id=lambda: "soul_1",
+        clock=lambda: clock[0],
+        ready=lambda: ready[0],
+    )
+    sampler.locked = True
+    assert pipe.tick_once() is None
+    assert shipped == []
+    ready[0] = True
+    payload = pipe.tick_once()
+    assert payload is not None
+    assert shipped[-1]["presence"] == "locked"
+    assert shipped[-1]["event"] == "lock"
