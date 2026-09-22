@@ -1,4 +1,3 @@
-# Python-generated files
 __pycache__/
 *.py[oc]
 build/
@@ -6,37 +5,30 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environment
 .venv
 
-# uv workspace - only the root uv.lock is tracked
 client/uv.lock
 server/uv.lock
 shared/uv.lock
 
-# Environment variables
 *.env
 
-
-# dev docs
-.protel/
 debug_vision/
 gradex_jsons/
 connecting_others.md
-HUB_INTEGRATION_UPDATE.md
 
-# Testing
 *.pytest_cache
 .coverage
 .chroma_db/
 .coverage
 
-# Docker
 .dockerenv
 
-# Database
 *.db
 *.db-*
 *.log
-# Local runtime state written by test/client runs
+
 .soulscape/
+.claude/
+.kilo/
+.ruff_cache/
