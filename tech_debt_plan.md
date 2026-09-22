@@ -118,7 +118,7 @@ This plan addresses 25+ Technical Debt, Risk, and Quirk items identified during 
 **Files:** `shared/enums.py:4` and `client/core/biology/stats.py:17`
 **Problem:** The `Stat(str, Enum)` is defined independently in both `shared/` and `client/core/biology/`. The shared version is unused by the client's simulation code.
 **Fix:**
-- **Prerequisite:** Add `shared/` as a workspace member in `pyproject.toml` (`[tool.uv.workspace]` members) and ensure it's installed in both venvs via `uv sync` from the workspace root
+- **Prerequisite:** Add `shared/` as a workspace member in `pyproject.toml` (`[tool.uv.workspace]` members) and ensure it's installed in both venvs via `uv sync --all-packages` from the workspace root
 - Remove the duplicate `Stat` enum from `client/core/biology/stats.py`
 - Import `Stat` from `shared.enums` in `client/core/biology/stats.py`
 - Do NOT modify `client/core/biology/mechanics.py` — it already uses string comparison at runtime (line 54) and imports `Stat` only in `TYPE_CHECKING`. No runtime change needed.
@@ -153,7 +153,7 @@ This plan addresses 25+ Technical Debt, Risk, and Quirk items identified during 
 **Problem:** The root `main.py` is empty and creates confusion about the actual entry points.
 **Fix:**
 - Delete the empty file
-- The actual entry points are `server/main.py` and `client/main.py`, both invoked via their respective `uv run main.py` commands
+- The actual entry points are `server/main.py` and `client/main.py`, invoked from the repo root via `uv run --package server python -m server` and `uv run --package client python -m client` (plus `uv run --package server python -m server.sim_process` for the SimProcess)
 
 ### 2.6 Add Database Indexes
 **File:** `server/database.py` (schema definitions in `init_db()`)
@@ -169,7 +169,7 @@ This plan addresses 25+ Technical Debt, Risk, and Quirk items identified during 
 **Problem:** `server/pyproject.toml` pins `pydantic>=2.12.5` while `client/pyproject.toml` and root `pyproject.toml` have no pydantic dependency. The separate `.venv` directories (see 5.1) may have different resolved versions, causing silent incompatibility risks.
 **Fix:**
 - Remove `server/.venv` and `client/.venv` (see 5.1)
-- Run `uv sync` from workspace root to unify all dependencies
+- Run `uv sync --all-packages` from workspace root to unify all dependencies
 - Run `uv lock` to regenerate `uv.lock` with consistent versions
 - Verify all tests pass after unification
 
@@ -293,7 +293,7 @@ This plan addresses 25+ Technical Debt, Risk, and Quirk items identified during 
 **Problem:** `server/.venv` and `client/.venv` exist as isolated environments with duplicate dependencies, separate from the root `uv.lock` and workspace. This causes version fragmentation and makes dependency management confusing.
 **Fix:**
 - Delete `server/.venv/` and `client/.venv/` entirely
-- Run `uv sync` from the workspace root (`D:\projects\Soulscape`) to create a single unified environment
+- Run `uv sync --all-packages` from the workspace root (`D:\projects\Soulscape`) to create a single unified environment
 - Run `uv lock --frozen` to regenerate `uv.lock` with consistent versions across all workspace members
 - Verify all tests pass: `uv run pytest` from workspace root
 - Update `.gitignore` to ignore `.venv/` at any depth (already partially covered)

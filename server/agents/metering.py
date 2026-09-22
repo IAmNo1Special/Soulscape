@@ -823,7 +823,7 @@ def _replay_handoff(conn: sqlite3.Connection, settlement_intent_id: str | None) 
         "journal_seq_range": list(seq_range) if seq_range else None,
         "snapshot_id": snapshot_id,
         "cli": (
-            "python -m server.replay "
+            "uv run --package server python -m server.replay "
             f"--snapshot {snapshot_id if snapshot_id is not None else '<id>'} "
             f"--journal-tail {tail} --diff-against recorded"
         ),

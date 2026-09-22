@@ -9,7 +9,7 @@ recorded vs replayed outcomes per intent.
 ## CLI
 
 ```bash
-python -m server.replay --snapshot <id|path> \
+uv run --package server python -m server.replay --snapshot <id|path> \
     --journal-tail <lo-hi|last:N|since:SEQ> \
     [--seed S] [--diff-against recorded] [--json] [--db PATH]
 ```

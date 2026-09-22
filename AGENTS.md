@@ -20,7 +20,7 @@ Soulscape/
 ├── .python-version          # Python version spec
 ├── server/                  # FastAPI backend hub
 │   ├── main.py              # FastAPI app creation, router inclusion, lifespan
-│   ├── __main__.py          # Entry point for `uv run main.py`
+│   ├── __main__.py          # Entry point for `uv run --package server python -m server`
 │   ├── models.py            # Pydantic request/response models
 │   ├── database.py          # SQLite init, schema, connection manager, charge_soul()
 │   ├── security.py          # API key auth, UserIdentity, WebSocket token verification
@@ -32,7 +32,7 @@ Soulscape/
 │   └── soulscape_hub.db     # SQLite database (generated)
 ├── client/                  # Pyglet overlay client
 │   ├── main.py              # SoulscapeApp — main application class
-│   ├── __main__.py          # Entry point for `uv run main.py`
+│   ├── __main__.py          # Entry point for `uv run --package client python -m client`
 │   ├── constants.py         # Rendering/physics constants
 │   ├── core/                # Core simulation logic
 │   │   ├── soul/soul.py     # Soul class (main actor)
@@ -56,7 +56,7 @@ Soulscape/
 ## Technology Stack
 
 - **Language**: Python 3.13+
-- **Build/Package**: Astral uv (`uv sync`, `uv run`)
+- **Build/Package**: Astral uv (`uv sync --all-packages`, `uv run`)
 - **Server**: FastAPI, Pydantic v2, Uvicorn, SQLite (WAL mode), WebSockets
 - **Client**: Pyglet, Google ADK (Gemini), magetools (ChromaDB), PyAutoGUI, httpx, websockets, Pillow, numpy, ttkbootstrap, pystray
 - **Auth**: API key via `X-Hub-Secret` header (`secrets.compare_digest`)
@@ -69,19 +69,19 @@ All commands must be run from the project root (`D:\projects\Soulscape`) unless 
 
 ### Initial Setup
 ```bash
-uv sync                          # Install all workspace dependencies
+uv sync --all-packages        # Install all workspace dependencies (plain `uv sync` omits the members: root is a virtual package)
 ```
 
 ### Running the Hub (Server)
+The Hub needs two processes: the API and the simulation. Run one in each terminal:
 ```bash
-cd server
-uv run main.py                   # Starts at http://0.0.0.0:9785
+uv run --package server python -m server              # API at http://0.0.0.0:9785
+uv run --package server python -m server.sim_process  # SimProcess (required; without it /health reports "degraded" and mutations 503)
 ```
 
 ### Running the Overlay (Client)
 ```bash
-cd client
-uv run main.py                   # Starts the Pyglet overlay window
+uv run --package client python -m client  # Starts the Pyglet overlay window
 ```
 
 ### Testing
@@ -202,7 +202,7 @@ uv add <package>                 # Add dependency to appropriate workspace membe
 ### P4 — Maintenance
 22. **Root `main.py` is 0 bytes** — delete the empty file
 23. **Pydantic version mismatch** — `server/pyproject.toml` pins `pydantic>=2.12.5` while `client/pyproject.toml` and root `pyproject.toml` have no pydantic dependency; the lockfile may resolve different versions across workspace members
-24. **`server/.venv` and `client/.venv`** isolated from workspace — unified via `uv sync` from root
+24. **`server/.venv` and `client/.venv`** isolated from workspace — unified via `uv sync --all-packages` from root
 25. **`shared/` not a workspace member** — makes cross-package imports fragile
 26. **`SoulResponse` missing 21 stat columns** — all stat data silently dropped when returned via FastAPI response_model
 27. **`Stat` enum duplicated** in `shared/enums.py` and `client/core/biology/stats.py`
@@ -217,13 +217,13 @@ uv add <package>                 # Add dependency to appropriate workspace membe
 - Integration tests should cover full CRUD flows: create soul → list item → buy item → post → reply
 
 ## Important Notes for AI Agents
-- **Do not modify `server/.venv/` or `client/.venv/`** — these should be deleted; use `uv sync` from root for a unified environment
+- **Do not modify `server/.venv/` or `client/.venv/`** — these should be deleted; use `uv sync --all-packages` from root for a unified environment
 - **Do not use `test-hub` as a localhost check** — use proper URL parsing via `urllib.parse.urlparse()`
 - **Do not spawn unbounded threads** — use `concurrent.futures.ThreadPoolExecutor(max_workers=N)` instead
 - **Do not send position updates more than 5Hz** — the 33ms broadcast interval should be increased to 200ms
 - **Soul secrets are sensitive** — never log them, never include them in client-side broadcast data (use `include_secret=False` for network payloads)
 - **SQLite WAL mode** is enabled — concurrent reads are safe but writes still serialize
-- **The `shared/` package** is not installed as a separate package — it works because it's in the Python path when run from the workspace root
+- **The `shared/` package** is a uv workspace member (src layout, installed editable via `uv sync --all-packages` from the root) — always run through `uv run` (which syncs it), never rely on a stale `.venv`
 
 ## Agent skills
 

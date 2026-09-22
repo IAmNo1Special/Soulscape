@@ -2,7 +2,7 @@
 
 Forensic re-adjudication for dispute investigations::
 
-    python -m server.replay --snapshot <id|path> --journal-tail <range> \\
+    uv run --package server python -m server.replay --snapshot <id|path> --journal-tail <range> \\
         --seed S [--diff-against recorded] [--json] [--db PATH]
 
 What it does:

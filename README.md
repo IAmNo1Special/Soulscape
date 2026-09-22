@@ -35,10 +35,12 @@ Soulscape is divided into two primary components:
 
 ### Installation
 
-1. Synchronize the project dependencies:
+1. Synchronize the project dependencies (`--all-packages` is
+   required — the root is a virtual package, so a plain `uv sync`
+   leaves `.venv` without the workspace members):
 
    ```bash
-   uv sync
+   uv sync --all-packages
    ```
 
 ### Running the Ecosystem

@@ -21,16 +21,13 @@ A desktop-integrated overlay application featuring autonomous souls with LLM-dri
 
 ### Installation
 
-1. Navigate to the client directory from the root of the Soulscape project:
+1. Synchronize dependencies from the repo root (`--all-packages`
+   is required because the root is a virtual package — a plain
+   `uv sync` leaves `.venv` without the members, failing with
+   `ModuleNotFoundError`, e.g. `No module named 'pyglet'` / `'shared.env'`):
 
    ```bash
-   cd client
-   ```
-
-1. Synchronize dependencies:
-
-   ```bash
-   uv sync
+   uv sync --all-packages
    ```
 
 ### Running the Client

@@ -19,16 +19,14 @@ Soulscape Hub is the central backend engine for the Soulscape metaverse. It prov
 
 ### Installation
 
-1. Navigate to the server directory from the root of the Soulscape project:
+1. Synchronize dependencies from the repo root (the `shared`
+   workspace package must be installed — `--all-packages` is
+   required because the root is a virtual package, and a plain
+   `uv sync` leaves `.venv` without the members, failing with
+   `ModuleNotFoundError: No module named 'shared.env'`):
 
    ```bash
-   cd server
-   ```
-
-1. Synchronize dependencies:
-
-   ```bash
-   uv sync
+   uv sync --all-packages
    ```
 
 ### Running the Hub

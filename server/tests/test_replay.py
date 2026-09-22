@@ -1,4 +1,4 @@
-"""Issue #38: deterministic replay CLI (`python -m server.replay`).
+"""Issue #38: deterministic replay CLI (`uv run --package server python -m server.replay`).
 
 A seeded multi-subsystem scenario is recorded (snapshot + pumped
 intents), then replayed through the CLI. The replayed outcomes must

@@ -6,8 +6,12 @@ tick loop and the exclusive write discipline over sim-owned tables
 IPC protocol (sim_ipc.SimServer) so the API process can submit
 intents, run commands, and query tick state.
 
-Run: ``python -m server.sim_process`` (or ``uv run python -m
-server.sim_process``) from the repo root.
+Run: ``uv run --package server python -m server.sim_process``
+(or ``uv run -m server.sim_process``) from the repo root.
+Run ``uv sync --all-packages`` from the repo root first so the
+workspace ``shared`` package is installed; a root-only ``uv sync``
+leaves ``.venv`` without it and fails with
+``ModuleNotFoundError: No module named 'shared.env'``.
 
 Config (env):
   SIM_HOST / SIM_PORT   IPC bind (default 127.0.0.1:9786)
