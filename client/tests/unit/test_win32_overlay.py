@@ -31,20 +31,8 @@ from client.system.input_router import (  # noqa: E402
 )
 
 
-def _fill_win_rect(ptr: int, left: int, top: int, right: int, bottom: int) -> None:
-    rect = ctypes.cast(ptr, ctypes.POINTER(fullscreen._WinRect)).contents
-    rect.left, rect.top, rect.right, rect.bottom = left, top, right, bottom
-
-
-def _make_fullscreen_user32(
-    fg_hwnd: int, fg_rect: tuple, monitor_rect: tuple, fg_class: str = ""
-) -> MagicMock:
+def _make_monitor_user32(monitor_rect: tuple) -> MagicMock:
     user32 = MagicMock(name="user32")
-    user32.GetForegroundWindow.return_value = fg_hwnd
-
-    def get_rect(hwnd: int, ptr: int) -> int:
-        _fill_win_rect(ptr, *fg_rect)
-        return 1
 
     def get_info(monitor: int, ptr: int) -> int:
         info = ctypes.cast(ptr, ctypes.POINTER(fullscreen._MonitorInfo)).contents
@@ -52,18 +40,8 @@ def _make_fullscreen_user32(
         rc.left, rc.top, rc.right, rc.bottom = monitor_rect
         return 1
 
-    def get_class_name(hwnd: int, buf, n: int) -> int:
-        if not fg_class:
-            return 0
-        for i, ch in enumerate(fg_class[: n - 1]):
-            buf[i] = ch
-        buf[len(fg_class)] = "\x00"
-        return len(fg_class)
-
-    user32.GetWindowRect.side_effect = get_rect
     user32.MonitorFromWindow.return_value = 777
     user32.GetMonitorInfoW.side_effect = get_info
-    user32.GetClassNameW.side_effect = get_class_name
     return user32
 
 
@@ -84,81 +62,9 @@ def _make_soul(x: int, y: int, w: int = 100, h: int = 100) -> SimpleNamespace:
     return SimpleNamespace(x=x, y=y, width=w, height=h)
 
 
-class TestRectCovers:
-    def test_exact_cover(self) -> None:
-        assert fullscreen.rect_covers((0, 0, 1920, 1080), (0, 0, 1920, 1080))
-
-    def test_overscan_covers(self) -> None:
-        assert fullscreen.rect_covers((-8, -8, 1928, 1088), (0, 0, 1920, 1080))
-
-    def test_windowed_does_not_cover(self) -> None:
-        assert not fullscreen.rect_covers((100, 100, 800, 600), (0, 0, 1920, 1080))
-
-    def test_taskbar_gap_does_not_cover(self) -> None:
-        assert not fullscreen.rect_covers((0, 0, 1920, 1040), (0, 0, 1920, 1080))
-
-
-class TestFullscreenDetection:
-    def test_exclusive_fullscreen_detected(self) -> None:
-        user32 = _make_fullscreen_user32(0x100, (0, 0, 1920, 1080), (0, 0, 1920, 1080))
-        assert fullscreen.foreground_is_exclusive_fullscreen(
-            own_hwnd=0x200, user32=user32
-        )
-
-    def test_windowed_foreground_not_detected(self) -> None:
-        user32 = _make_fullscreen_user32(
-            0x100, (100, 100, 900, 700), (0, 0, 1920, 1080)
-        )
-        assert not fullscreen.foreground_is_exclusive_fullscreen(
-            own_hwnd=0x200, user32=user32
-        )
-
-    def test_own_window_never_counts(self) -> None:
-        user32 = _make_fullscreen_user32(0x200, (0, 0, 1920, 1080), (0, 0, 1920, 1080))
-        assert not fullscreen.foreground_is_exclusive_fullscreen(
-            own_hwnd=0x200, user32=user32
-        )
-
-    def test_no_foreground_window(self) -> None:
-        user32 = MagicMock(name="user32")
-        user32.GetForegroundWindow.return_value = 0
-        assert not fullscreen.foreground_is_exclusive_fullscreen(
-            own_hwnd=0x200, user32=user32
-        )
-
-    def test_desktop_progman_never_counts(self) -> None:
-        user32 = _make_fullscreen_user32(
-            0x100, (0, 0, 1920, 1080), (0, 0, 1920, 1080), fg_class="Progman"
-        )
-        assert not fullscreen.foreground_is_exclusive_fullscreen(
-            own_hwnd=0x200, user32=user32
-        )
-
-    def test_desktop_workerw_never_counts(self) -> None:
-        user32 = _make_fullscreen_user32(
-            0x100, (0, 0, 1920, 1080), (0, 0, 1920, 1080), fg_class="WorkerW"
-        )
-        assert not fullscreen.foreground_is_exclusive_fullscreen(
-            own_hwnd=0x200, user32=user32
-        )
-
-    def test_monitor_info_failure_returns_false(self) -> None:
-        user32 = _make_fullscreen_user32(0x100, (0, 0, 1920, 1080), (0, 0, 1920, 1080))
-        user32.GetMonitorInfoW.side_effect = None
-        user32.GetMonitorInfoW.return_value = 0
-        assert not fullscreen.foreground_is_exclusive_fullscreen(
-            own_hwnd=0x200, user32=user32
-        )
-
-    def test_no_win32_returns_false(self) -> None:
-        if sys.platform == "win32":
-            pytest.skip("win32-only guard not exercisable here")
-        assert not fullscreen.foreground_is_exclusive_fullscreen(own_hwnd=1)
-
+class TestMonitorRect:
     def test_monitor_rect_for_window(self) -> None:
-        user32 = _make_fullscreen_user32(
-            0x100, (0, 0, 1920, 1080), (10, 20, 1930, 1100)
-        )
+        user32 = _make_monitor_user32((10, 20, 1930, 1100))
         assert fullscreen.monitor_rect_for_window(0x100, user32=user32) == (
             10,
             20,

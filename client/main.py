@@ -67,7 +67,6 @@ from .system.tray import TrayController
 from .system.window_manager import get_cursor_pos, get_window_manager
 from .system.dirty_tracker import DirtyTracker, frame_needs_redraw
 from .system.dpi import declare_per_monitor_v2_dpi_awareness
-from .system.fullscreen import foreground_is_exclusive_fullscreen
 from .ui.graphics.scene_renderer import SceneRenderer
 from .ui.graphics.visual_reflexes import VisualReflexController
 from .ui.bubbles import (
@@ -162,7 +161,6 @@ class SoulscapeApp:
 
         # Dirty-driven render loop: scene only redraws when flagged dirty.
         self.dirty_tracker = DirtyTracker()
-        self._overlay_parked: bool = False
         self._last_render_snapshot: list | None = None
 
         # Unified Network Service
@@ -437,10 +435,9 @@ class SoulscapeApp:
         self.overlay_window.draw = gated_draw  # type: ignore[method-assign]
 
     def _overlay_housekeeping(self, dt: float) -> None:
-        """Windows overlay policy tick: click-through, parking, DPI."""
+        """Windows overlay policy tick: click-through, DPI."""
         try:
             self._poll_click_through()
-            self._poll_fullscreen_parking()
             if self.window_manager.check_dpi_changed():
                 self.dirty_tracker.mark_dirty()
         except Exception as e:
@@ -461,20 +458,6 @@ class SoulscapeApp:
         if self.input_router.hovered_soul is not soul:
             self.input_router.hovered_soul = soul
             self.dirty_tracker.mark_dirty()
-
-    def _poll_fullscreen_parking(self) -> None:
-        """Hide the overlay while an exclusive-fullscreen app is foreground."""
-        hwnd = getattr(self.window_manager, "hwnd", None)
-        fullscreen = foreground_is_exclusive_fullscreen(own_hwnd=hwnd)
-        if fullscreen and not self._overlay_parked:
-            self.overlay_window.set_visible(False)
-            self._overlay_parked = True
-            log.info("Exclusive fullscreen detected; overlay parked.")
-        elif not fullscreen and self._overlay_parked:
-            self._overlay_parked = False
-            self.window_manager.show_window()
-            self.dirty_tracker.mark_dirty()
-            log.info("Fullscreen ended; overlay restored.")
 
     def handle_empty_click(self, x: int, y: int) -> None:
         """Handle click on empty space."""
