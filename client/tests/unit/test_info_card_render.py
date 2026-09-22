@@ -34,5 +34,25 @@ class InfoCardRenderTest(unittest.TestCase):
         self.renderer.render_info_card(320, 240, [], 640, 480)
 
 
+class BubbleRenderTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.window = pyglet.window.Window(width=640, height=480, visible=False)
+        cls.window.switch_to()
+        from client.ui.graphics.scene_renderer import SceneRenderer
+
+        cls.renderer = SceneRenderer()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.window.close()
+
+    def test_bubble_renders(self) -> None:
+        self.renderer.render_bubbles([(320, 240, "Hello!")])
+
+    def test_no_jobs_is_noop(self) -> None:
+        self.renderer.render_bubbles([])
+
+
 if __name__ == "__main__":
     unittest.main()

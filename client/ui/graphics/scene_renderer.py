@@ -281,7 +281,7 @@ class SceneRenderer:
                 anchor_x="center",
                 anchor_y="bottom",
                 font_size=12,
-                bold=True,
+                weight="bold",
                 color=(235, 245, 255, 230),
             )
             label.draw()
