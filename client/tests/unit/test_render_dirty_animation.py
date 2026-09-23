@@ -89,13 +89,6 @@ def test_statue_soul_does_not_force_redraw(soul: Soul) -> None:
     assert second is False
 
 
-def test_dormant_statue_soul_does_not_force_redraw(soul: Soul) -> None:
-    soul.dormant_statue = True
-    first, second = _two_frames(soul)
-    assert first is True
-    assert second is False
-
-
 def test_paused_sim_does_not_force_redraw(soul: Soul) -> None:
     first, second = _two_frames(soul, sim_paused=True)
     assert first is True

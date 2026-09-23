@@ -125,6 +125,8 @@ async def async_save_souls(souls: list[dict[str, Any]], owner_id: str = "") -> b
         True if save succeeded, False otherwise.
     """
     if get_client_mode() == MODE_ONLINE:
+        if not souls:
+            return True
         from .network.client import NetworkClient
 
         try:
@@ -149,6 +151,8 @@ def save_souls(souls: list[dict[str, Any]]) -> bool:
     If called from the main thread, this can freeze the GUI.
     """
     if get_client_mode() == MODE_ONLINE:
+        if not souls:
+            return True
         from .network.client import NetworkClient
 
         from ..utils.helpers import safe_run_async

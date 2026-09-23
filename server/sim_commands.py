@@ -303,6 +303,47 @@ def souls_upsert(params: dict[str, Any], tick: Any) -> dict[str, Any]:
     }
 
 
+@command("grant_free_soul")
+def grant_free_soul(params: dict[str, Any], tick: Any) -> dict[str, Any]:
+    """Mint a custodian's free first soul, at most once.
+
+    Manual soul spawn is offline-only: online custodians cannot
+    introduce souls by hand. Their first soul is granted here -- on
+    WS hello or first POST /souls -- and later souls are earned in
+    game through sim intents. Commands run under the sim step lock,
+    so the emptiness check and the insert below are serialized.
+
+    params: {"custodian_id": str}
+    """
+    from . import dormancy
+    from . import first_soul
+
+    custodian_id = params["custodian_id"]
+    with database.get_db() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM souls WHERE COALESCE(custodian_id, owner_id) = ? LIMIT 1",
+            (custodian_id,),
+        ).fetchone()
+    if existing is not None:
+        return {"granted": False, "soul_id": None, "secret": None}
+    entry, secret = first_soul.free_soul_entry()
+    entry["essence"] = dormancy.STARTER_GRANT
+    result = souls_upsert(
+        {
+            "custodian_id": custodian_id,
+            "entries": [entry],
+            "delete_inventory_ids": [],
+            "delete_soul_ids": [],
+            "stale_ids": [],
+            "newborn_ids": [entry["soul_id"]],
+        },
+        tick,
+    )
+    if not result.get("saved"):
+        return {"granted": False, "soul_id": None, "secret": None}
+    return {"granted": True, "soul_id": entry["soul_id"], "secret": secret}
+
+
 @command("quip_reserve")
 def quip_reserve(params: dict[str, Any], tick: Any) -> dict[str, Any]:
     """Phase 1 of POST /souls/{id}/quip: reserve a budget slot."""

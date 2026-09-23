@@ -68,7 +68,6 @@ from .system.window_manager import get_cursor_pos, get_window_manager
 from .system.dirty_tracker import DirtyTracker, frame_needs_redraw
 from .system.dpi import declare_per_monitor_v2_dpi_awareness
 from .ui.graphics.scene_renderer import SceneRenderer
-from .ui.graphics.visual_reflexes import VisualReflexController
 from .ui.bubbles import (
     BUBBLE_KINDS,
     KIND_MAILBAG,
@@ -111,9 +110,6 @@ class SoulscapeApp:
         self.tray_controller: Any = None
         self.scene_renderer: Any = None
         self.input_router: Any = None
-        # Issue #29: water-cooler reflexes (unlock greeting, long-idle
-        # nap, input-burst reaction + typing-dip). Local-only.
-        self.reflex_controller: VisualReflexController | None = None
 
         # Issue #30: speech bubbles + noise policy. Config survives
         # restarts via soulscape_bubbles.toml; the policy object is the
@@ -173,6 +169,7 @@ class SoulscapeApp:
         self._pet_press_soul_id: str | None = None
         self._info_card_soul_id: str | None = None
         self._info_card_xy: tuple[float, float] | None = None
+        self._frozen_soul: Soul | None = None
         self.network_service = NetworkService(
             owner_id=self.instance_id, viewport_consumer=self.viewport_consumer
         )
@@ -226,7 +223,6 @@ class SoulscapeApp:
         # 2b. Initialize Scene Renderer and Input Router
         self.scene_renderer = SceneRenderer()
         self.input_router = InputRouter()
-        self.reflex_controller = VisualReflexController()
 
         # Apply initial aura visibility
         self.scene_renderer.aura_visible = self.global_aura_visible
@@ -267,9 +263,14 @@ class SoulscapeApp:
 
         try:
             pyglet.app.run()
+        except KeyboardInterrupt:
+            log.info("Keyboard interrupt received, shutting down...")
         finally:
             # Robust final cleanup
-            self.quit_app()
+            try:
+                self.quit_app()
+            except KeyboardInterrupt:
+                pass
 
     def _setup_window_events(self) -> None:
         """Sets up Pyglet window event handlers."""
@@ -277,7 +278,11 @@ class SoulscapeApp:
         @self.overlay_window.event
         def on_draw() -> None:
             self.overlay_window.clear()
-            self.scene_renderer.render(self.active_souls, self.overlay_window.height)
+            self.scene_renderer.render(
+                self.active_souls,
+                self.overlay_window.width,
+                self.overlay_window.height,
+            )
             positions = self._soul_screen_positions()
             jobs = self.bubble_manager.layout(positions)
             if jobs:
@@ -317,6 +322,10 @@ class SoulscapeApp:
                     # tracking; right press toggles the info card. No
                     # direct commands -- move_to is gone from viewport.
                     soul_id = target_soul.biology.soul_id
+                    log.debug(
+                        f"Viewport press on {target_soul.biology.name} "
+                        f"(button={button})"
+                    )
                     if button == pyglet.window.mouse.LEFT:
                         self._pet_press_soul_id = soul_id
                         if self._pet_gestures is not None:
@@ -334,6 +343,11 @@ class SoulscapeApp:
                     if target_soul.owner_id != self.instance_id:
                         return None
 
+                    # Right-click: freeze the soul until menu action or click-away
+                    if button == pyglet.window.mouse.RIGHT:
+                        target_soul.physics.set_frozen(True)
+                        self._frozen_soul = target_soul
+
                     # Dispatch to target
                     target_soul.on_mouse_press(
                         x, y, button, modifiers, self.overlay_window.height
@@ -343,7 +357,14 @@ class SoulscapeApp:
                         self.input_router.dragged_soul = target_soul
             else:
                 # Clicked on empty space
+                # Unfreeze any frozen soul
+                if self._frozen_soul is not None:
+                    self._frozen_soul.physics.set_frozen(False)
+                    self._frozen_soul = None
+                    self.dirty_tracker.mark_dirty()
+
                 if self.viewport_mode:
+                    log.debug(f"Viewport press on empty space ({x}, {y})")
                     # Dismiss the info card; legacy menu handling below.
                     if self._info_card_soul_id is not None:
                         self._info_card_soul_id = None
@@ -396,19 +417,30 @@ class SoulscapeApp:
 
     def _draw_viewport_pet_overlays(self) -> None:
         """Hover nameplate + right-click info card (issue #31)."""
+        # Online: viewport nameplate from Hub stream
         consumer = self.viewport_consumer
-        if consumer is None:
-            return
-        hovered = self.input_router.hovered_soul
-        if hovered is not None and hovered in self.active_souls:
-            soul_id = hovered.biology.soul_id
-            ident = consumer.soul_identity(soul_id)
-            plate = f"{ident['name']} -- {ident['species']} . Lvl {ident['level']}"
-            self.scene_renderer.render_nameplate(
-                hovered.x + hovered.width / 2,
-                self.overlay_window.height - hovered.draw_y + 10,
-                plate,
-            )
+        if consumer is not None:
+            hovered = self.input_router.hovered_soul
+            if hovered is not None and hovered in self.active_souls:
+                soul_id = hovered.biology.soul_id
+                ident = consumer.soul_identity(soul_id)
+                plate = f"{ident['name']} -- {ident['species']} . Lvl {ident['level']}"
+                self.scene_renderer.render_nameplate(
+                    hovered.x + hovered.width / 2,
+                    self.overlay_window.height - hovered.draw_y + 10,
+                    plate,
+                )
+        # Offline: local hover nameplate
+        else:
+            hovered = self.input_router.hovered_soul
+            if hovered is not None and hovered in self.active_souls:
+                bio = hovered.biology
+                plate = f"{bio.name} -- {bio.species.name} . Lvl {bio.level}"
+                self.scene_renderer.render_nameplate(
+                    hovered.x + hovered.width / 2,
+                    self.overlay_window.height - hovered.draw_y + 10,
+                    plate,
+                )
         if self._info_card_soul_id is not None and self._info_card_xy is not None:
             lines = self._info_card_lines(self._info_card_soul_id)
             x, y = self._info_card_xy
@@ -457,6 +489,8 @@ class SoulscapeApp:
         # without waiting for unrelated redraws.
         if self.input_router.hovered_soul is not soul:
             self.input_router.hovered_soul = soul
+            if soul is not None:
+                log.debug(f"Hovering soul {soul.biology.name}")
             self.dirty_tracker.mark_dirty()
 
     def handle_empty_click(self, x: int, y: int) -> None:
@@ -470,6 +504,14 @@ class SoulscapeApp:
 
         # Define callbacks that schedule on the main thread for safety
         def on_tray_spawn() -> None:
+            if self.viewport_mode:
+                if self.tray_controller is not None:
+                    self.tray_controller._notify(
+                        "Manual spawn is offline-only. Online souls are "
+                        "granted once, then earned in game.",
+                        "Soulscape",
+                    )
+                return
             # Schedule on main thread
             pyglet.clock.schedule_once(lambda dt: self.create_soul(), 0)
 
@@ -610,6 +652,7 @@ class SoulscapeApp:
             on_open_recap=lambda soul_id, day: self._open_recap_view(
                 soul_id, day
             ),
+            can_add_soul=lambda: not self.viewport_mode,
         )
         # Start the tray controller (it handles its own thread)
         self.tray_controller.start()
@@ -669,6 +712,8 @@ class SoulscapeApp:
 
     def show_add_soul_dialog(self) -> None:
         """Shows dialog to add a new soul."""
+        if self.viewport_mode:
+            return
         if self.gui_command_queue:
             self.gui_command_queue.put({"type": GuiCommand.SHOW_ADD_SOUL})
 
@@ -933,8 +978,7 @@ class SoulscapeApp:
         if self.viewport_mode:
             self._update_viewport_souls(dt)
             if not self.sim_paused:
-                self._update_visual_reflexes()
-            self._poll_topmost()
+                self._poll_topmost()
             # Pet grammar (issue #31): a hold becomes a pet as soon as
             # the threshold passes, without waiting for release.
             if (
@@ -950,7 +994,6 @@ class SoulscapeApp:
             soul_physics.begin_separation_frame()
             for soul in self.active_souls:
                 soul.update(dt)
-            self._update_visual_reflexes()
 
         # ... (periodic save/topmost unchanged) ...
         if time.time() - self.last_save_time > 30:
@@ -973,25 +1016,6 @@ class SoulscapeApp:
         if time.time() - self.last_topmost_time > 5:
             self.window_manager.set_always_on_top()
             self.last_topmost_time = time.time()
-
-    def _update_visual_reflexes(self) -> None:
-        """Applies water-cooler reflex overlays to souls (issue #29).
-
-        Local-only: the controller consumes #28's coarse input-activity
-        signal and presence events; nothing leaves the machine.
-        """
-        if self.reflex_controller is None:
-            return
-        soul_ids = [soul.biology.soul_id for soul in self.active_souls]
-        overlays = self.reflex_controller.frame(soul_ids)
-        by_id = {soul.biology.soul_id: soul for soul in self.active_souls}
-        for sid, overlay in overlays.items():
-            soul = by_id.get(sid)
-            if soul is None:
-                continue
-            soul.reflex_kind = overlay.reflex
-            soul.reflex_t = overlay.reflex_t
-            soul.typing_dip = overlay.typing_dip
 
     def _update_abroad_fades(
         self,
@@ -1121,26 +1145,9 @@ class SoulscapeApp:
             # Issue #21: collapsed souls render as statues -- desaturated
             # stone colors and a frozen plasma pulse.
             soul.statue = is_statue(states.get(sid))
-            # Issue #22: dormant (unfunded) souls render as statues too,
-            # amber-tinted to distinguish them from collapsed statues.
-            soul.dormant_statue = consumer.is_dormant(sid)
-            # Issue #29: stale Hub presence renders the "offline" statue
-            # variant (desaturated, frozen).
-            soul.offline_stale = consumer.is_stale(sid)
-            # Issue #30 (step 0 of #29): authoritative biology from the
-            # Hub stream drives the shader uniforms online instead of
-            # healthy local defaults.
-            bio = consumer.soul_biology(sid)
-            soul.biology.satiety = bio["satiety"]
-            soul.biology.hydration = bio["hydration"]
-            soul.biology.stats.max_hp = max(1, int(round(bio["max_hp"])))
-            soul.biology.current_health = max(
-                0,
-                min(soul.biology.stats.max_hp, int(round(bio["hp"]))),
-            )
             # Issue #30: work mode dims visuals.
             soul.work_dim = self.bubble_config.noise.work_mode
-            if not soul.statue and not soul.dormant_statue and not self.sim_paused:
+            if not soul.statue and not self.sim_paused:
                 soul.visual_tick(dt)
 
         needs_draw, self._last_render_snapshot = frame_needs_redraw(
@@ -1154,8 +1161,16 @@ class SoulscapeApp:
         name: str | None = None,
         position: tuple[int, int] | None = None,
         load_saved: bool = False,
-    ) -> Soul:
-        """Creates a new soul and adds it to the overlay."""
+    ) -> Soul | None:
+        """Creates a new soul and adds it to the overlay.
+
+        Manual spawn is an offline-only action: online souls are
+        granted once by the Hub, then earned in game. Returns None
+        when called in viewport mode.
+        """
+        if self.viewport_mode:
+            log.warning("Manual soul spawn is available offline only.")
+            return None
         if name is None:
             name = f"Soul {self.next_soul_id}"
             self.next_soul_id += 1
@@ -1469,6 +1484,12 @@ class SoulscapeApp:
                                 self.dirty_tracker.mark_dirty()
                                 self.persist_souls_state()
 
+                            # Unfreeze the soul after menu action
+                            if self._frozen_soul is not None:
+                                self._frozen_soul.physics.set_frozen(False)
+                                self._frozen_soul = None
+                                self.dirty_tracker.mark_dirty()
+
                 elif cmd_type == GuiCommand.CREATE_SOCIAL_POST:
                     data = msg.get("data")
                     if data:
@@ -1551,6 +1572,8 @@ class SoulscapeApp:
                     if data:
                         # Create new soul with these params
                         soul = self.create_soul(name=data.get("name"))
+                        if soul is None:
+                            continue
                         soul.orb_color_rgb = data.get("orb_color")
                         soul.aura_color_rgb = data.get("aura_color")
                         # Update renderers immediately
@@ -1571,8 +1594,18 @@ class SoulscapeApp:
         log.info("Shutting down Soulscape...")
         self._running = False
 
-        # 1. Save final state
-        self.persist_souls_state()
+        # 1. Save final state (awaited so it isn't cancelled by step 4)
+        if self._loop and self._loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.async_persist_souls_state(), self._loop
+                ).result(timeout=5)
+            except concurrent.futures.TimeoutError:
+                log.warning("Final soul save timed out, continuing shutdown.")
+            except Exception as e:
+                log.warning(f"Final soul save failed: {e}")
+        else:
+            self.persist_souls_state()
 
         # 2. Stop Network Service (Graceful WebSocket closure)
         self.network_service.stop()
@@ -1581,7 +1614,10 @@ class SoulscapeApp:
         for soul in list(self.active_souls):
             soul.stop()
 
-        # 4. Stop background persistence loop
+        # 4. Stop background persistence loop. NOTE: _shutdown_async must
+        # not call loop.stop() itself -- stopping the loop from inside the
+        # coroutine we are awaiting via run_coroutine_threadsafe races with
+        # delivery of the Future result and causes a spurious 5s timeout.
         if self._loop and self._loop.is_running():
             try:
                 asyncio.run_coroutine_threadsafe(
@@ -1591,6 +1627,11 @@ class SoulscapeApp:
                 log.warning("Background loop shutdown timed out.")
             except Exception as e:
                 log.warning(f"Background loop shutdown failed unexpectedly: {e}")
+            finally:
+                try:
+                    self._loop.call_soon_threadsafe(self._loop.stop)
+                except RuntimeError:
+                    pass
             if self._loop_thread and threading.current_thread() != self._loop_thread:
                 self._loop_thread.join(timeout=2.0)
 
@@ -1616,27 +1657,31 @@ class SoulscapeApp:
         pyglet.app.exit()
 
     async def _shutdown_async(self) -> None:
-        """Coroutine to perform formal shutdown operations in the background loop."""
-        try:
-            # Cancel all tasks (like pending persistence)
-            tasks = [
-                t
-                for t in asyncio.all_tasks(self._loop)
-                if t is not asyncio.current_task()
-            ]
-            for t in tasks:
-                t.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-        finally:
-            if self._loop:
-                self._loop.stop()
+        """Coroutine to perform formal shutdown operations in the background loop.
+
+        Must not call loop.stop() itself: the caller awaits this via
+        run_coroutine_threadsafe(...).result() and stops the loop from the
+        waiting thread afterwards. Stopping from in here races with Future
+        result delivery and produces a spurious shutdown timeout.
+        """
+        tasks = [
+            t
+            for t in asyncio.all_tasks(self._loop)
+            if t is not asyncio.current_task()
+        ]
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def main() -> None:
     """Entry point for the application."""
     app = SoulscapeApp()
-    app.run()
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

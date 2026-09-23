@@ -124,3 +124,27 @@ class TestSoul:
         soul.update_from_dict(nested_data)
 
         assert "Received nested 'stats' dictionary" in caplog.text
+
+    def test_local_soul_wanders_from_spawn(self, mock_network_service):
+        """Regression: a local soul must roam away from its spawn point."""
+        from client.core.soul import physics as soul_physics
+
+        wanderer = Soul(
+            orb_color_rgb=(1.0, 0.0, 0.0),
+            aura_color_rgb=(0.0, 1.0, 0.0),
+            name="Wanderer",
+            initial_position=(500, 500),
+            screen_width=1920,
+            screen_height=1080,
+            owner_id="test_owner",
+            local_instance_id="test_owner",
+        )
+        try:
+            x0, y0 = wanderer.x, wanderer.y
+            for _ in range(600):
+                soul_physics.begin_separation_frame()
+                wanderer.update(1.0 / 60.0)
+            moved = abs(wanderer.x - x0) + abs(wanderer.y - y0)
+            assert moved > 5.0, f"soul never wandered (moved {moved:.2f}px)"
+        finally:
+            wanderer.cleanup()

@@ -25,7 +25,7 @@ def frame_needs_redraw(
     ]
     moved = snapshot != last_snapshot
     animating = not sim_paused and any(
-        not soul.statue and not soul.dormant_statue for soul in souls
+        not soul.statue for soul in souls
     )
     return (moved or animating, snapshot)
 

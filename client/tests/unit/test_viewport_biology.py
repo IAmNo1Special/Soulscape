@@ -173,9 +173,7 @@ class TestStreamedGoldenUniforms(unittest.TestCase):
         pulse_rate     = 1.0 + 1.8*(1-0.585) = 1.747
         pulse_strength = 0.25 + 0.75*0.585 = 0.68875
         brightness     = 0.45 + 0.55*0.585 = 0.77175
-        tint: satiety deficit 0.5 is largest -> warm (1.0, 0.55, 0.25)
-              at 0.35*0.5 = 0.175 strength
-        base (0.9, 0.2, 0.3) -> (0.9175, 0.26125, 0.29125)
+        no tint -> base color unchanged
     """
 
     def test_streamed_values_drive_uniforms(self):
@@ -199,9 +197,10 @@ class TestStreamedGoldenUniforms(unittest.TestCase):
         self.assertEqual(uniforms["pulse_strength"], 0.68875)
         self.assertEqual(uniforms["brightness"], 0.77175)
         self.assertEqual(
-            uniforms["base_color_uniform"], (0.9175, 0.26125, 0.29125)
+            uniforms["base_color_uniform"], (0.9, 0.2, 0.3)
         )
         self.assertEqual(uniforms["desat_factor"], 0.0)
+        self.assertEqual(uniforms["opacity"], 1.0)
         self.assertEqual(uniforms["opacity"], 1.0)
 
 

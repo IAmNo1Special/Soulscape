@@ -104,6 +104,21 @@ class TestPersistenceRouting:
         loaded = persistence.load_souls()
         assert [s["soul_id"] for s in loaded] == ["hub-soul"]
 
+    def test_online_empty_save_never_posts_to_hub(self, appdata, monkeypatch):
+        """Regression: a viewport session with no locally-owned souls must
+        not POST an empty list -- the Hub treats absent souls as stale and
+        deletes them."""
+        monkeypatch.setattr(persistence, "get_client_mode", lambda: "online")
+
+        class ExplodingClient:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("NetworkClient must not be constructed")
+
+        monkeypatch.setattr(
+            "client.system.network.client.NetworkClient", ExplodingClient
+        )
+        assert persistence.save_souls([]) is True
+
 
 class TestSecretsNeverHitDisk:
     def test_save_souls_strips_secrets(self, appdata):
@@ -224,3 +239,20 @@ class TestOnlineModeDoesNotTouchLocalStores(unittest.IsolatedAsyncioTestCase):
         store = stores_pkg.get_default_store()
         assert not isinstance(store, LocalStore)
         assert isinstance(store, RemoteStore)
+
+    async def test_online_empty_async_save_never_posts_to_hub(self):
+        """Async variant of the empty-save wipe guard: no Hub POST."""
+        import client.system.network.client as network_client_mod
+
+        persistence.get_client_mode = lambda: "online"
+        real_client = network_client_mod.NetworkClient
+
+        class ExplodingClient:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("NetworkClient must not be constructed")
+
+        network_client_mod.NetworkClient = ExplodingClient
+        try:
+            assert await persistence.async_save_souls([], owner_id="owner-1") is True
+        finally:
+            network_client_mod.NetworkClient = real_client

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from .. import database
 from .. import dormancy
+from .. import first_soul
 from .. import intents
 from .. import plots
 from .. import quips
@@ -347,7 +348,15 @@ def update_souls(
     identity: UserIdentity = Depends(require_scoped),
 ):
     """Updates souls for a custodian. Expects {custodian_id: str, souls: [...]}.
-    Legacy owner_id is accepted during the migration window."""
+    Legacy owner_id is accepted during the migration window.
+
+    Manual spawn is offline-only: non-operators cannot introduce
+    brand-new soul ids -- the first new soul from a soulless
+    custodian is accepted as their free first, later ones are
+    skipped, and an empty first contact mints a server-built free
+    soul (returned as free_soul, secret disclosed once). Operators
+    keep full powers."""
+
     # IDOR Mitigation: non-operators are scoped to their own custody.
     custodian_id = payload.custodian_id or payload.owner_id
     if not custodian_id:
@@ -398,9 +407,21 @@ def update_souls(
             # grant: cached essence = STARTER_GRANT plus a `mint` ledger
             # row, so the ledger stays the truth behind the cache.
             newborn_ids: list[str] = []
+            has_souls = bool(stored_rows)
+            accepted_new = 0
             for s in souls:
                 soul_id = s.get("soul_id")
                 stored = stored_rows.get(soul_id) if soul_id else None
+                if stored is None and soul_id and not identity.is_operator:
+                    if has_souls or accepted_new >= 1:
+                        skipped.append(
+                            {
+                                "soul_id": soul_id,
+                                "reason": first_soul.MANUAL_MINT_DISABLED_REASON,
+                            }
+                        )
+                        continue
+                    accepted_new += 1
                 validated, reason = _validate_soul_state(s, stored, now)
                 if reason is not None:
                     logger.warning(f"Rejected soul save {soul_id}: {reason}")
@@ -409,11 +430,9 @@ def update_souls(
                 validated_souls.append((s, validated))
 
             valid_ids = [s.get("soul_id") for s, _ in validated_souls]
-            seen_ids = {s.get("soul_id") for s, _ in validated_souls}
-            seen_ids |= {
-                item["soul_id"] for item in skipped if item["soul_id"] is not None
-            }
-            stale_ids = [sid for sid in stored_rows if sid not in seen_ids]
+            # Omission is never deletion: clients routinely sync souls
+            # they know while granted or earned souls exist that they
+            # have never seen. There is no delete-by-omission flow.
             # Issue #37: the write section below runs in the sim process
             # (command "souls_upsert"). Validation, custody, and secret
             # math stay here -- they are CPU/reads only.
@@ -486,6 +505,23 @@ def update_souls(
                     }
                 )
             try:
+                free_soul: dict[str, Any] | None = None
+                if not has_souls and not validated_souls:
+                    try:
+                        granted = gateway_for(request).command(
+                            "grant_free_soul", {"custodian_id": custodian_id}
+                        )
+                    except SimUnreachable:
+                        raise HTTPException(
+                            status_code=503, detail="Simulation unavailable"
+                        )
+                    except SimCommandError as exc:
+                        raise HTTPException(status_code=500, detail=str(exc))
+                    if granted.get("granted"):
+                        free_soul = {
+                            "soul_id": granted["soul_id"],
+                            "secret": granted["secret"],
+                        }
                 result = gateway_for(request).command(
                     "souls_upsert",
                     {
@@ -493,7 +529,7 @@ def update_souls(
                         "entries": entries,
                         "delete_inventory_ids": valid_ids,
                         "delete_soul_ids": valid_ids,
-                        "stale_ids": stale_ids,
+                        "stale_ids": [],
                         "newborn_ids": newborn_ids,
                     },
                 )
@@ -520,6 +556,7 @@ def update_souls(
         "status": "success",
         "count": saved,
         "skipped": skipped,
+        "free_soul": free_soul,
         "souls": [
             {"soul_id": s.get("soul_id"), "position": validated["position"]}
             for s, validated in validated_souls

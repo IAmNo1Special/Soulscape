@@ -64,6 +64,7 @@ class TrayController:
         notify_bubble: Callable[[str, str], None] | None = None,
         get_recaps: Callable[[], dict[str, list[dict[str, Any]]]] | None = None,
         on_open_recap: Callable[[str, str], None] | None = None,
+        can_add_soul: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize the tray controller.
 
@@ -93,6 +94,10 @@ class TrayController:
                 first; feeds the "Morning recap" dashboard submenu.
             on_open_recap: Called with (soul_id, day) when a recap day is
                 clicked; None disables the day items.
+            can_add_soul: Returns whether manual soul spawn is allowed;
+                None (default) keeps "Add Soul" enabled. The app passes
+                offline-only here -- online souls are granted, then
+                earned in game.
         """
         self.on_add_soul = on_add_soul
         self.on_toggle_auras = on_toggle_auras
@@ -112,6 +117,7 @@ class TrayController:
         self.notify_bubble = notify_bubble
         self.get_recaps = get_recaps or (lambda: {})
         self.on_open_recap = on_open_recap
+        self.can_add_soul = can_add_soul
         self.icon: pystray.Icon | None = None
         self._thread: threading.Thread | None = None
 
@@ -267,7 +273,13 @@ class TrayController:
             Item("Whereabouts", self._whereabouts_menu()),
             Item("Quips", self._quips_menu()),
             pystray.Menu.SEPARATOR,
-            Item("Add Soul", self._on_add_soul),
+            Item(
+                "Add Soul",
+                self._on_add_soul,
+                enabled=True
+                if self.can_add_soul is None
+                else bool(self.can_add_soul()),
+            ),
             Item("Toggle All Auras", self._on_toggle_auras),
             Item(
                 "Pause simulation",

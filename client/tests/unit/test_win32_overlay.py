@@ -169,6 +169,60 @@ class TestInputRouterPoll:
         assert found is top
 
 
+class TestViewportHoverChain:
+    def test_stream_soul_hover_hits(self) -> None:
+        """Hub snapshot -> consumer -> mapper -> Soul placement (as
+        _update_viewport_souls does) -> hover hit-test (as
+        _poll_click_through does). A cursor on the visual center hits."""
+        from client.core.soul.soul import Soul
+        from client.system.network.viewport_client import (
+            ViewportConsumer,
+            ViewportMapper,
+        )
+
+        soul_id = "de67211ae6aaff916c2bd660adac87a6"
+        consumer = ViewportConsumer(clock=lambda: 1000.0)
+        consumer.apply_frame(
+            {
+                "type": "snapshot",
+                "souls": [
+                    {
+                        "soul_id": soul_id,
+                        "x": 1020.0,
+                        "y": 540.0,
+                        "state": "normal",
+                        "dormant": False,
+                    }
+                ],
+                "wallets": [],
+                "abroad": [],
+                "region": {"x": 0.0, "y": 0.0, "w": 1920.0, "h": 1080.0},
+            }
+        )
+        mapper = ViewportMapper()
+        mapper.set_region(*consumer.region)
+        positions = consumer.rendered_positions(now=1000.0)
+        soul = Soul(
+            orb_color_rgb=(1.0, 0.0, 0.0),
+            aura_color_rgb=(0.0, 1.0, 0.0),
+            name="Hub Soul",
+            initial_position=(1020.0, 540.0),
+            screen_width=1920,
+            screen_height=1080,
+            owner_id="hub",
+            local_instance_id="me",
+        )
+        try:
+            wx, wy = positions[soul_id]
+            sx, sy = mapper.world_to_screen(wx, wy, 1920, 1080)
+            soul.x, soul.y, soul.draw_y = sx, sy, sy
+            router = InputRouter()
+            cursor = (sx + soul.width / 2, sy + soul.height / 2)
+            assert router.poll_soul_under_cursor([soul], cursor, 1080) is soul
+        finally:
+            soul.cleanup()
+
+
 class TestClickThrough:
     def test_enable_sets_transparent(self, monkeypatch) -> None:
         mgr, user32 = _make_manager(monkeypatch)

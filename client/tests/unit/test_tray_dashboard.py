@@ -267,6 +267,46 @@ class TestTrayDashboard(unittest.TestCase):
         self.assertEqual(calls, ["add", "auras", "settings", "board"])
 
 
+class TestAddSoulGating(unittest.TestCase):
+    def test_add_soul_enabled_by_default(self):
+        ctrl = TrayController(
+            on_add_soul=lambda: None,
+            on_toggle_auras=lambda: None,
+            on_settings=lambda: None,
+            on_message_board=lambda: None,
+            on_exit=lambda: None,
+        )
+        item = _find(ctrl._create_menu(), "Add Soul")
+        self.assertTrue(item.enabled)
+
+    def test_add_soul_disabled_when_predicate_false(self):
+        ctrl = TrayController(
+            on_add_soul=lambda: None,
+            on_toggle_auras=lambda: None,
+            on_settings=lambda: None,
+            on_message_board=lambda: None,
+            on_exit=lambda: None,
+            can_add_soul=lambda: False,
+        )
+        item = _find(ctrl._create_menu(), "Add Soul")
+        self.assertFalse(item.enabled)
+
+    def test_add_soul_enabled_when_predicate_true(self):
+        calls = []
+        ctrl = TrayController(
+            on_add_soul=lambda: calls.append("add"),
+            on_toggle_auras=lambda: None,
+            on_settings=lambda: None,
+            on_message_board=lambda: None,
+            on_exit=lambda: None,
+            can_add_soul=lambda: True,
+        )
+        item = _find(ctrl._create_menu(), "Add Soul")
+        self.assertTrue(item.enabled)
+        item.action(None, item)
+        self.assertEqual(calls, ["add"])
+
+
 class _FakeIcon:
     def __init__(self, notified):
         self._notified = notified

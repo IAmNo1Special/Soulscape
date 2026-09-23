@@ -40,8 +40,6 @@ from ...constants import (
 from .resources import ResourceManager, resource_manager
 from .soul_uniforms import (
     STATUE_COLLAPSED,
-    STATUE_DORMANT,
-    STATUE_OFFLINE,
     state_to_uniforms,
 )
 
@@ -50,12 +48,8 @@ if TYPE_CHECKING:
 
 
 def _statue_kind(soul: Soul) -> str | None:
-    if soul.dormant_statue:
-        return STATUE_DORMANT
     if soul.statue:
         return STATUE_COLLAPSED
-    if soul.offline_stale:
-        return STATUE_OFFLINE
     return None
 
 
@@ -69,7 +63,6 @@ def _soul_state(soul: Soul, base_color: tuple[float, float, float]) -> dict:
         "hydration": max(0.0, min(1.0, biology.hydration / 100.0)),
         "hp": biology.get_current_health() / max(1, biology.max_health),
         "statue_kind": _statue_kind(soul),
-        "typing_dip": soul.typing_dip,
         "reflex": soul.reflex_kind,
         "reflex_t": soul.reflex_t,
         "base_color": base_color,
@@ -96,11 +89,14 @@ class SceneRenderer:
         # We access resources via the singleton manager
         self.resources: ResourceManager = resource_manager
 
-    def render(self, souls: list[Soul], overlay_height: int) -> None:
+    def render(
+        self, souls: list[Soul], window_width: int, overlay_height: int
+    ) -> None:
         """Render all souls.
 
         Args:
             souls: List of Soul instances.
+            window_width: Width of the overlay window.
             overlay_height: Height of the overlay window (needed for glViewport).
         """
         if not souls:
@@ -264,6 +260,10 @@ class SceneRenderer:
 
         # Restore Depth Mask for next frame (or other renderers)
         glDepthMask(True)
+        # Restore the full-window viewport: the passes above shrink it
+        # to each soul's box, and the 2D overlays drawn afterwards
+        # (bubbles, nameplate, info card) use window coordinates.
+        glViewport(0, 0, int(window_width), int(overlay_height))
 
     def render_bubbles(self, jobs: list[tuple[float, float, str]]) -> None:
         """Draw transient speech bubbles (issue #30).

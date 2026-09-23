@@ -62,13 +62,24 @@ class GuiService:
     def run(self) -> None:
         """Main entry point for the process."""
         # Use ttkbootstrap Window instead of tk.Tk
-        self.root = ttk.Window(themename="darkly")
+        try:
+            self.root = ttk.Window(themename="darkly")
+        except Exception:
+            return
         if self.root:
-            self.root.withdraw()  # specific root for the service
-            # Poll queue
-            self.root.after(10, self._check_queue)
-            print("DEBUG: GuiService Loop Starting")
-            self.root.mainloop()
+            try:
+                self.root.withdraw()  # specific root for the service
+                # Poll queue
+                self.root.after(10, self._check_queue)
+                print("DEBUG: GuiService Loop Starting")
+                self.root.mainloop()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                try:
+                    self.root.destroy()
+                except Exception:
+                    pass
 
     def _check_queue(self) -> None:
         """Checks the command queue for new messages."""
@@ -326,5 +337,8 @@ def run_gui_service(command_queue: Any, result_queue: Any) -> None:
         command_queue: Queue for commands.
         result_queue: Queue for results.
     """
-    service = GuiService(command_queue, result_queue)
-    service.run()
+    try:
+        service = GuiService(command_queue, result_queue)
+        service.run()
+    except KeyboardInterrupt:
+        pass

@@ -16,7 +16,6 @@ from ...constants import SOUL_HEIGHT, SOUL_WIDTH
 from ...system.command_queue import CommandQueue
 from ...system.logger import log
 from ...system.network.viewport_client import (
-    dormant_statue_orb_color,
     statue_orb_color,
 )
 from ..biology import Gender, SoulBiology, SoulStats, Species
@@ -218,19 +217,8 @@ class Soul:
         # the renderer desaturates the orb/aura (stone treatment) and the
         # plasma pulse freezes (visual_tick is skipped in viewport mode).
         self.statue: bool = False
-        # Issue #22: dormant (unfunded) souls render as statues too, but
-        # amber-tinted to distinguish them from collapsed statues.
-        self.dormant_statue: bool = False
-        # Issue #29: shader-state mapping inputs owned by the client.
-        # offline_stale marks a viewport soul whose Hub presence is
-        # stale/unknown (desaturated "offline" statue variant). The
-        # reflex fields are written each frame by the water-cooler
-        # reflex controller (local-only) and consumed by
-        # state_to_uniforms in the scene renderer.
-        self.offline_stale: bool = False
         self.reflex_kind: str | None = None
         self.reflex_t: float = 0.0
-        self.typing_dip: float = 0.0
 
         # Updates
         self.last_update_time: float = time.time()
@@ -435,19 +423,13 @@ class Soul:
         """Orb color for the shader's base_color_uniform.
 
         Collapsed souls render as statues: desaturated stone gray.
-        Dormant souls render as statues too: amber-tinted stone (issue
-        #22), so the two freeze states are distinguishable.
         """
-        if self.dormant_statue:
-            return dormant_statue_orb_color(self.orb_color_rgb)
         if self.statue:
             return statue_orb_color(self.orb_color_rgb)
         return self.orb_color_rgb
 
     def display_aura_color(self) -> tuple[float, float, float]:
         """Aura color for the shader's base_color_uniform (statue: stone)."""
-        if self.dormant_statue:
-            return dormant_statue_orb_color(self.aura_color_rgb)
         if self.statue:
             return statue_orb_color(self.aura_color_rgb)
         return self.aura_color_rgb

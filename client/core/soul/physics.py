@@ -108,7 +108,7 @@ class SoulPhysics:
         self.target_y: float = self.y
 
         self.roaming_pause: float = 0.0
-        self.roaming_enabled: bool = False  # Souls only move when instructed
+        self.roaming_enabled: bool = True
         self.follow_mouse: bool = False
         self.last_click_time: float = 0
         self.mouse_x: float = 0
@@ -136,6 +136,7 @@ class SoulPhysics:
         self.follow_delay_duration: float = 0.5
         self.name: str = soul.biology.name
         self.is_hovered: bool = False
+        self.frozen: bool = False
 
         # Track previous position for smooth movement
         self.last_x: int = int(self.x)
@@ -148,6 +149,10 @@ class SoulPhysics:
         self.width: int = SOUL_WIDTH
         self.height: int = SOUL_HEIGHT
         log.debug(f"Soul: {self.name} initialized with position ({self.x}, {self.y})")
+
+    def set_frozen(self, frozen: bool) -> None:
+        """Sets the frozen state. When frozen, autonomous movement is paused."""
+        self.frozen = frozen
 
     def on_mouse_press(self, x: int, y: int, button: int, modifiers: int) -> None:
         """Handles mouse press events to initiate dragging.
@@ -278,6 +283,11 @@ class SoulPhysics:
         if self.is_dragging:
             self.vx = 0.0
             self.vy = 0.0
+            return
+
+        # Frozen: skip all autonomous movement (roaming, follow, roaming_pause),
+        # but still allow remote interpolation and dragging.
+        if self.frozen:
             return
 
         # Remote Interpolation (Smooth Movement)

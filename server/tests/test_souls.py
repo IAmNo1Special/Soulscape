@@ -48,14 +48,15 @@ def test_update_and_get_souls(client: TestClient):
     assert drop["inventory"] == {}
 
 
-def test_souls_overwrite(client: TestClient):
+def test_souls_merge_not_overwrite(client: TestClient):
     # First batch
     client.post(
         "/souls",
         json={"owner_id": "user1", "souls": [{"soul_id": "1", "name": "A"}]},
     )
 
-    # Second batch (should overwrite for this owner)
+    # Second batch merges: souls not mentioned are kept (omission is
+    # never deletion -- syncs routinely carry partial knowledge).
     client.post(
         "/souls",
         json={"owner_id": "user1", "souls": [{"soul_id": "2", "name": "B"}]},
@@ -63,9 +64,17 @@ def test_souls_overwrite(client: TestClient):
 
     response = client.get("/souls")
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["soul_id"] == "2"
-    assert data[0]["name"] == "B"
+    assert {s["soul_id"] for s in data} == {"1", "2"}
+
+    # Re-saving a known soul updates it in place.
+    client.post(
+        "/souls",
+        json={"owner_id": "user1", "souls": [{"soul_id": "1", "name": "A2"}]},
+    )
+    response = client.get("/souls")
+    data = response.json()
+    assert {s["soul_id"] for s in data} == {"1", "2"}
+    assert next(s for s in data if s["soul_id"] == "1")["name"] == "A2"
 
 
 def test_get_souls_filter(client: TestClient):

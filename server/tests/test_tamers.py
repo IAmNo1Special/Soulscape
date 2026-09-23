@@ -246,18 +246,20 @@ def test_null_safe_lineage_on_creation(tamer_a):
         },
     )
     assert r.status_code == 200
-    assert r.json()["count"] == 2
+    assert r.json()["count"] == 1
+    assert r.json()["skipped"] == [
+        {"soul_id": "child2", "reason": "manual_mint_disabled"}
+    ]
     with database.get_db() as conn:
         c1 = conn.execute(
             "SELECT mother_id, father_id FROM souls WHERE soul_id = 'child1'"
         ).fetchone()
         c2 = conn.execute(
-            "SELECT mother_id, father_id FROM souls WHERE soul_id = 'child2'"
+            "SELECT soul_id FROM souls WHERE soul_id = 'child2'"
         ).fetchone()
     assert c1["mother_id"] is None
     assert c1["father_id"] is None
-    assert c2["mother_id"] == "mom1"
-    assert c2["father_id"] == "dad1"
+    assert c2 is None
 
 
 def test_tamer_websocket_auth(tamer_a):

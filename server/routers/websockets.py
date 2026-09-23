@@ -490,6 +490,32 @@ async def websocket_presence(
             )
             owned_soul_ids = {row["soul_id"] for row in cursor.fetchall()}
 
+    # Free first soul: manual spawn is offline-only, so a custodian
+    # arriving with zero souls is granted one here (once -- later
+    # souls are earned in game through sim intents). Best-effort: a
+    # sim outage must not break the connection itself.
+    grant_scope = (
+        owner_id if identity.is_operator else (identity.custodian_id or owner_id)
+    )
+    if grant_scope and not owned_soul_ids:
+        try:
+            granted = await asyncio.to_thread(
+                gateway_for(websocket).command,
+                "grant_free_soul",
+                {"custodian_id": grant_scope},
+            )
+        except Exception as e:
+            logger.warning(f"Free-soul grant failed for {grant_scope}: {e}")
+            granted = {}
+        if granted.get("granted"):
+            with database.get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT soul_id FROM souls WHERE COALESCE(custodian_id, owner_id) = ?",
+                    (grant_scope,),
+                )
+                owned_soul_ids = {row["soul_id"] for row in cursor.fetchall()}
+
     # Create HMAC session for this connection
     hmac_key = pysecrets.token_urlsafe(32)
     session_soul_id = next(iter(owned_soul_ids)) if owned_soul_ids else None

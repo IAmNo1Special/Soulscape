@@ -67,21 +67,6 @@ def statue_orb_color(
     return (dimmed, dimmed, dimmed)
 
 
-def dormant_statue_orb_color(
-    orb_color: tuple[float, float, float],
-) -> tuple[float, float, float]:
-    """Amber-tinted stone for a dormant (unfunded) soul (issue #22).
-
-    Same desaturated treatment as a collapsed statue, shifted warm so
-    the two freeze states are visually distinguishable at a glance.
-    """
-    r, g, b = orb_color
-    lum = 0.299 * r + 0.587 * g + 0.114 * b
-    dimmed = lum * _STATUE_DIM
-    tr, tg, tb = _DORMANT_TINT
-    return (dimmed * tr, dimmed * tg, dimmed * tb)
-
-
 def viewport_mode_enabled() -> bool:
     """Viewport mode is the explicit online client mode from settings."""
     return get_client_mode() == MODE_ONLINE
