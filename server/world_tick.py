@@ -1,9 +1,10 @@
 """Hub world tick (issue #7, process-split in issue #37).
 
-Fixed-timestep 5 Hz simulation loop that owns Soul positions and movement
-physics. Owned and run by the sim process (`server/sim_process.py`); the
-API never ticks. The legacy `HUB_AUTHORITATIVE` flag that once gated the
-API-embedded tick is retired -- the sim always ticks when it runs.
+Fixed-timestep 20 Hz simulation loop that owns Soul positions and
+movement physics. Owned and run by the sim process
+(`server/sim_process.py`); the API never ticks. The legacy
+`HUB_AUTHORITATIVE` flag that once gated the API-embedded tick is
+retired -- the sim always ticks when it runs.
 
 The hot path touches only SQLite. No network calls, no LLM calls.
 
@@ -11,7 +12,7 @@ Intent adjudication (issue #14): each tick pumps the durable intent queue
 before integrating motion. A move_to intent re-validates custody against
 live state, then clamps the target to the reachable radius
 `INTENT_MOVE_SPEED * INTENT_HORIZON_SECONDS` and steers the Soul toward it
-at INTENT_MOVE_SPEED. The clamp choice: the tick runs at 5 Hz and steering
+at INTENT_MOVE_SPEED. The clamp choice: the tick runs at 20 Hz and steering
 needs several ticks to converge, so the horizon is deliberately generous —
 any target a Tamer could plausibly click (within 3000 px) is accepted
 verbatim; only far-away forged targets are pulled back along the original
@@ -67,7 +68,7 @@ from .agents import jev_worker as jev_worker_mod
 
 logger = logging.getLogger("soulscape_hub")
 
-TICK_HZ = 5
+TICK_HZ = 20
 TICK_DT = 1.0 / TICK_HZ
 WORLD_EPOCH = 0.0
 _POSITION_MARGIN = persistence.POSITION_MARGIN

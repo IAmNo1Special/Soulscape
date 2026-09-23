@@ -5,16 +5,16 @@ periodic snapshots, and boot recovery with downtime catch-up.
 
 RPO (recovery point objective)
 ------------------------------
-* Soul positions: <= FLUSH_INTERVAL_S (5 s) plus WAL fsync. The 5 Hz tick
-  integrates motion into an in-memory dirty set; the set is flushed to
-  SQLite under BEGIN IMMEDIATE every 5 s or every 1000 dirty entries
-  (whichever fires first), and on graceful stop().
+* Soul positions: <= FLUSH_INTERVAL_S (5 s) plus WAL fsync. The 20 Hz
+  tick integrates motion into an in-memory dirty set; the set is
+  flushed to SQLite under BEGIN IMMEDIATE every 5 s or every 1000
+  dirty entries (whichever fires first), and on graceful stop().
 * Adjudicated intents and journal events: RPO = 0. Adjudication commits
   the intent status, the resulting velocity/move_target, and the journal
   append in ONE transaction before the outcome is observable
   (commit-before-ack, consistent with issue #14).
 * Snapshots: zlib-compressed full-state checkpoints every 5 min
-  (1500 ticks at 5 Hz); the last 3 are kept.
+  (6000 ticks at 20 Hz); the last 3 are kept.
 
 Boot recovery: load the latest good snapshot, verify journal continuity
 from its journal_seq against the journal head (no gaps; on gap fall back
@@ -45,7 +45,9 @@ logger = logging.getLogger("soulscape_hub")
 
 FLUSH_INTERVAL_S = float(os.getenv("SOULSCAPE_FLUSH_INTERVAL_S", "5.0"))
 FLUSH_MAX_DIRTY = 1000
-SNAPSHOT_EVERY_TICKS = int(os.getenv("SOULSCAPE_SNAPSHOT_EVERY_TICKS", "1500"))
+SNAPSHOT_EVERY_TICKS = int(
+    os.getenv("SOULSCAPE_SNAPSHOT_EVERY_TICKS", "6000")
+)  # 5 min at the 20 Hz world tick
 SNAPSHOT_KEEP = 3
 CATCHUP_FAST_FORWARD_S = 60.0
 CATCHUP_MAX_S = 24.0 * 3600.0
@@ -140,7 +142,7 @@ def integrate_soul(
     tick_dt: float,
     bounds: tuple[float, float],
 ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float] | None]:
-    """One exact 5 Hz integration step for a single soul.
+    """One exact tick integration step for a single soul.
 
     Shared by the live tick and boot-recovery replay so both compute
     bit-identical trajectories from the same inputs.

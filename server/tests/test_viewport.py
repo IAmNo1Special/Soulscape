@@ -146,10 +146,10 @@ async def test_backpressure_downgrades_then_closes(monkeypatch):
         session.enqueue(vp._move_op(f"s{i}", 100.0, 200.0), "move")
     rec = _Recorder()
     assert await vp.flush(session, {}, 1, rec) == "saturated"
-    assert session.flush_interval == pytest.approx(0.4)
+    assert session.flush_interval == pytest.approx(vp.PUMP_INTERVAL_SECONDS * 2)
     assert session.pending_count() == 5
     assert await vp.flush(session, {}, 1, rec) == "saturated"
-    assert session.flush_interval == pytest.approx(0.8)
+    assert session.flush_interval == pytest.approx(vp.PUMP_INTERVAL_SECONDS * 4)
     assert await vp.flush(session, {}, 1, rec) == "closed"
     assert rec.frames == []
 

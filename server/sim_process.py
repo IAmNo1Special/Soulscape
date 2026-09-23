@@ -17,7 +17,7 @@ Config (env):
   SIM_HOST / SIM_PORT   IPC bind (default 127.0.0.1:9786)
   HUB_SECRET_KEY        required by nothing here; the sim trusts only
                         localhost callers (same-machine API process).
-  SIM_TICK_HZ           tick rate override (default 5)
+  SIM_TICK_HZ           tick rate override (default 20)
 
 Lifecycle: init_db -> boot recovery (#16) -> boot intent pump ->
 start tick -> serve IPC. SIGTERM/SIGINT or the ``shutdown`` IPC

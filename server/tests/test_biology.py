@@ -183,9 +183,9 @@ def test_collapse_journals_and_zeros_velocity(db_conn):
     assert persistence.EVENT_SOUL_COLLAPSED in _journal_types(db_conn)
 
 
-def test_biology_cadence_one_advance_per_50_steps(db_conn, monkeypatch):
-    # The 0.1 Hz tick fires after every 50th step -- never on the first
-    # step, exactly once per 50 steps.
+def test_biology_cadence_one_advance_per_period(db_conn, monkeypatch):
+    # The 0.1 Hz tick fires after every BIOLOGY_EVERY_TICKS-th step --
+    # never on the first step, exactly once per period.
     calls = []
     real = biology.apply_biology_tick
 
@@ -194,10 +194,11 @@ def test_biology_cadence_one_advance_per_50_steps(db_conn, monkeypatch):
         return real(conn, tick_id, now, tick_dt)
 
     monkeypatch.setattr(biology, "apply_biology_tick", spy)
+    period = biology.BIOLOGY_EVERY_TICKS
     tick = WorldTick()
-    for _ in range(100):
+    for _ in range(2 * period):
         tick.step()
-    assert calls == [49, 99]
+    assert calls == [period - 1, 2 * period - 1]
 
 
 def test_live_tick_and_catchup_agree(db_conn):

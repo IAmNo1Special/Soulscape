@@ -11,6 +11,18 @@ def test_websocket_connect(client: TestClient):
         assert "online_owners" in data
 
 
+def _next_owner_online(websocket, owner_id, attempts=10):
+    """Receive until the owner_online broadcast, skipping interleaved
+    viewport deltas (a fresh connection can grant a free soul, whose
+    upsert delta may legitimately arrive first)."""
+    for _ in range(attempts):
+        data = websocket.receive_json()
+        if data["type"] == "owner_online":
+            assert data["owner_id"] == owner_id
+            return data
+    raise AssertionError(f"no owner_online for {owner_id} in {attempts} frames")
+
+
 def test_websocket_messages_carry_protocol_version(client: TestClient):
     with client.websocket_connect("/ws/user1") as ws1:
         ws1.receive_json()
@@ -18,10 +30,8 @@ def test_websocket_messages_carry_protocol_version(client: TestClient):
         with client.websocket_connect("/ws/user2") as ws2:
             ws2.receive_json()
             assert ws2.receive_json()["type"] == "snapshot"
-            data = ws1.receive_json()
-            assert data["type"] == "owner_online"
+            data = _next_owner_online(ws1, "user2")
             assert data["v"] == 1
-            assert data["owner_id"] == "user2"
 
 
 def test_websocket_broadcast(client: TestClient):
@@ -36,9 +46,8 @@ def test_websocket_broadcast(client: TestClient):
             assert ws2.receive_json()["type"] == "snapshot"
 
             # First user should receive notification
-            data = ws1.receive_json()
+            data = _next_owner_online(ws1, "user2")
             assert data["type"] == "owner_online"
-            assert data["owner_id"] == "user2"
 
 
 def test_websocket_disconnect(client: TestClient):

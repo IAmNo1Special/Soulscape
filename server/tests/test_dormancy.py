@@ -304,8 +304,10 @@ def test_biology_quarter_rate_live_path(db_conn):
     )
     db_conn.commit()
     now = time.time()
-    # One live tick = 50 * 0.2 s = 10 s of decay.
-    biology.apply_biology_tick(db_conn, 1, now, 0.2)
+    # One live tick = BIOLOGY_EVERY_TICKS * TICK_DT = 10 s of decay.
+    from ..world_tick import TICK_DT
+
+    biology.apply_biology_tick(db_conn, 1, now, TICK_DT)
     row = db_conn.execute(
         "SELECT satiety FROM souls WHERE soul_id = 'd2'"
     ).fetchone()

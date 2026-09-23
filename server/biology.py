@@ -33,7 +33,7 @@ the recipient; the feeder is custody-checked as usual. The gift costs a real
 fed_flag + ledger rows + journal + intent status all commit atomically.
 
 Decay runs two ways, with identical rates by construction:
-- live: apply_biology_tick() every 50th world tick (0.1 Hz at 5 Hz);
+- live: apply_biology_tick() every 200th world tick (0.1 Hz at 20 Hz);
 - catch-up: apply_biology_decay() closed-form over the downtime gap
   (called from persistence.recover_world, capped at 24 h).
 Both funnel into _decay_soul(), a pure closed-form advance over a field
@@ -70,7 +70,7 @@ STARVING_SATIETY = 20.0
 HUNGRY_SPEED_MULT = 0.75
 RECOVERY_REST_SECONDS = 6.0 * 3600.0
 
-BIOLOGY_EVERY_TICKS = 50  # 0.1 Hz at the 5 Hz world tick
+BIOLOGY_EVERY_TICKS = 200  # 0.1 Hz at the 20 Hz world tick
 CATCHUP_MAX_SECONDS = 24.0 * 3600.0  # downtime decay cap, mirrors persistence
 
 REST_ACTIVITIES = frozenset({"rest", "idle"})

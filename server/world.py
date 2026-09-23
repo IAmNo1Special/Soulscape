@@ -1,7 +1,7 @@
 """Hub world spatial index and vision rings (issue #20).
 
 Maintains a uniform spatial hash grid over Soul positions, rebuilt every
-tick (5 Hz) from the tick's read-through position view (issue #16: dirty
+tick (20 Hz) from the tick's read-through position view (issue #16: dirty
 set overlaid on SQLite). Plot-grid blocking (issue #19) governs movement
 only; vision here is purely spatial and never consults plot access.
 
@@ -47,7 +47,7 @@ COARSE_RADIUS_STEP = 10.0
 COARSE_RADIUS_VISION_STEP = 25
 COARSE_RADIUS_MAX = 80.0
 COARSE_HYSTERESIS = 4.0
-COARSE_DIFF_EVERY_TICKS = 5
+COARSE_DIFF_EVERY_TICKS = 20  # 1 Hz at the 20 Hz world tick
 DEFAULT_VISION = 25
 
 

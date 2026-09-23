@@ -173,9 +173,11 @@ def test_move_to_within_reach_not_clamped(register_soul):
     assert result["clamped"] is False
     assert result["x"] == 400.0 and result["y"] == 100.0
     tick = WorldTick()
-    for _ in range(3):
+    for _ in range(60):
         tick.step()
-    pos, velocity, target = _soul_state("mv1")
+        pos, velocity, target = _soul_state("mv1")
+        if target is None:
+            break
     assert pos == [400.0, 100.0]
     assert velocity == [0.0, 0.0]
     assert target is None

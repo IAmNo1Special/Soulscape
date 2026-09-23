@@ -299,10 +299,10 @@ def test_recovery_snapshot_fast_forward_matches_live(db_conn):
     tick.step()
     tick.step()
     live_pos, _, _ = _through_state("d1")
-    assert live_pos[0] == pytest.approx(340.0, abs=1e-9)
+    assert live_pos[0] == pytest.approx(100.0 + 600.0 * 2 * TICK_DT, abs=1e-9)
     assert live_pos[1] == pytest.approx(100.0, abs=1e-9)
     tick2 = WorldTick()
-    report = persistence.recover_world(tick2, now=created + 0.4)
+    report = persistence.recover_world(tick2, now=created + 2 * TICK_DT)
     assert report["mode"] == "snapshot"
     assert report["regime"] == "fast_forward"
     assert report["journal_replayed"] == 1

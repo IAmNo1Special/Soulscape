@@ -37,7 +37,7 @@ def set_positions_provider(
     _positions_provider = fn
 
 
-PUMP_INTERVAL_SECONDS = 0.2
+PUMP_INTERVAL_SECONDS = 0.1
 RING_BUFFER_SIZE = 64
 SNAP_JUMP_PX = 250.0
 MOVE_EPSILON_PX = 0.5

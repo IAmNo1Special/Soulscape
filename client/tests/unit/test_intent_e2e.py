@@ -262,6 +262,15 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("timed out waiting for condition")
             await asyncio.sleep(0.1)
 
+    async def _recv_skip_deltas(self, ws, attempts: int = 10):
+        """Next non-delta frame: viewport deltas may interleave with
+        intent acks at the 10 Hz pump rate."""
+        for _ in range(attempts):
+            frame = json.loads(await asyncio.wait_for(ws.recv(), 5.0))
+            if frame.get("type") != "delta":
+                return frame
+        raise AssertionError(f"no non-delta frame in {attempts} receives")
+
     async def test_signed_intent_ack_adjudication_and_movement(self) -> None:
         sx, sy = self.spawn[SOUL_ID]
         tx = sx + 400.0 if sx + 400.0 <= 1870.0 else sx - 400.0
@@ -329,9 +338,9 @@ class TestIntentEndToEnd(unittest.IsolatedAsyncioTestCase):
                 key, session_id, "dup-nonce-1", SOUL_ID, x=300.0, y=300.0
             )
             await ws.send(json.dumps(frame))
-            ack1 = json.loads(await asyncio.wait_for(ws.recv(), 5.0))
+            ack1 = await self._recv_skip_deltas(ws)
             await ws.send(json.dumps(frame))
-            ack2 = json.loads(await asyncio.wait_for(ws.recv(), 5.0))
+            ack2 = await self._recv_skip_deltas(ws)
         finally:
             await ws.close()
         self.assertEqual(ack1["type"], "intent_ack")

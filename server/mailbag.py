@@ -78,9 +78,9 @@ ANSWER_LOYALTY_NUDGE = 0.02
 #: Loyalty decay when a question expires unanswered.
 IGNORE_LOYALTY_DECAY = -0.01
 
-#: World-tick sweep cadence: every 300 ticks = 60 s at 5 Hz. Expiry
-#: granularity of a minute is fine for a 48 h TTL.
-MAILBAG_SWEEP_EVERY_TICKS = 300
+#: World-tick sweep cadence: every 1200 ticks = 60 s at 20 Hz.
+#: Expiry granularity of a minute is fine for a 48 h TTL.
+MAILBAG_SWEEP_EVERY_TICKS = 1200
 
 #: Journal event types.
 EVENT_MAILBAG_ASKED = "mailbag_asked"

@@ -109,11 +109,11 @@ SOURCE_KIND_ROLLUP = "rollup"
 #: Bubble kind for the morning note (client ui/bubbles.py mirrors this).
 BUBBLE_KIND_MORNING_NOTE = "morning_note"
 
-#: World-tick sweep cadence: every 3600 ticks = 12 min at 5 Hz.
-RECAP_SWEEP_EVERY_TICKS = 3600
+#: World-tick sweep cadence: every 14400 ticks = 12 min at 20 Hz.
+RECAP_SWEEP_EVERY_TICKS = 14400
 
-#: World-tick compaction cadence: every 432000 ticks = 24 h at 5 Hz.
-COMPACT_EVERY_TICKS = 432000
+#: World-tick compaction cadence: every 1728000 ticks = 24 h at 20 Hz.
+COMPACT_EVERY_TICKS = 1728000
 
 #: Kind priority for the deterministic selection sort (higher first).
 #: Read whatever journal kinds exist; unknown kinds fall to 1.

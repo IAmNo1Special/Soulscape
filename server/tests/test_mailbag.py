@@ -572,9 +572,7 @@ def test_answer_missing_question_404(client):
 
 
 # ------------------------------------------------------- world-tick sweep
-def test_world_tick_sweeps_mailbag_every_300_ticks(
-    db_conn, register_soul, monkeypatch
-):
+def test_world_tick_sweeps_mailbag_on_cadence(db_conn, register_soul, monkeypatch):
     register_soul("s1", essence=100.0)
     calls = []
     monkeypatch.setattr(
@@ -584,12 +582,13 @@ def test_world_tick_sweeps_mailbag_every_300_ticks(
     )
     from ..world_tick import WorldTick
 
+    period = mailbag.MAILBAG_SWEEP_EVERY_TICKS
     tick = WorldTick()
-    tick.tick_id = 299
+    tick.tick_id = period - 1
     tick.step()
     assert calls == []
     tick.step()
-    assert calls == [300]
+    assert calls == [period]
 
 
 def test_world_tick_sweep_failure_does_not_kill_tick(
