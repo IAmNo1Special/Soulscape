@@ -25,6 +25,23 @@ def reset_rate_limits():
     limiter._hits.clear()
 
 
+@pytest.fixture(autouse=True)
+def disable_baseline_wander():
+    """Keep world-stepping tests deterministic.
+
+    The baseline wander sweep uses unseeded randomness by design;
+    left enabled, idle souls would drift out from under position
+    assertions a few percent of the time. test_wander.py exercises
+    sweep() directly and is unaffected by this flag.
+    """
+    from .. import wander as wander_mod
+
+    was = wander_mod.ENABLED
+    wander_mod.ENABLED = False
+    yield
+    wander_mod.ENABLED = was
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"

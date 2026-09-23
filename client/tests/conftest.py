@@ -30,6 +30,20 @@ def mock_gui_service(mocker):
 
 
 @pytest.fixture(autouse=True)
+def disable_baseline_wander():
+    """Deterministic Hub stepping for e2e tests (see
+    server/tests/conftest.py). The client e2e suites spin a real
+    in-process tick; an unseeded wander would move idle souls out
+    from under render assertions."""
+    from server import wander as wander_mod
+
+    was = wander_mod.ENABLED
+    wander_mod.ENABLED = False
+    yield
+    wander_mod.ENABLED = was
+
+
+@pytest.fixture(autouse=True)
 def auto_cleanup_souls(monkeypatch):
     """Automatically tracks and cleans up Soul instances created during tests."""
     created_souls = []

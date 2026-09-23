@@ -41,6 +41,14 @@ from . import persistence
 
 logger = logging.getLogger("soulscape_hub")
 
+#: Master switch for the tick-driven sweep. True in production; the
+#: test-suite conftests force it False (with restore) so world-stepping
+#: tests stay deterministic -- a 2%/step unseeded wander would
+#: otherwise move idle souls out from under position assertions.
+#: sweep() itself ignores this flag; test_wander.py exercises the
+#: sweep directly.
+ENABLED = True
+
 #: Per-tick wander chance per idle soul. At 20 Hz this averages one
 #: wander per ~10 s of idleness, in the spirit of the offline
 #: 1-3 s roam pauses plus travel time.

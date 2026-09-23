@@ -791,10 +791,11 @@ class WorldTick:
                 except Exception:
                     logger.exception("retention compaction failed")
             self._run_agent_pool(coarse_events)
-            try:
-                wander_mod.sweep(self)
-            except Exception:
-                logger.exception("baseline wander sweep failed")
+            if wander_mod.ENABLED:
+                try:
+                    wander_mod.sweep(self)
+                except Exception:
+                    logger.exception("baseline wander sweep failed")
             try:
                 self._jev_movement_completed(arrived)
             except Exception:
