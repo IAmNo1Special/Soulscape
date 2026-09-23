@@ -21,6 +21,7 @@ from client.system.network.viewport_client import (
     MAX_EXTRAPOLATE_SECONDS,
     ViewportConsumer,
     ViewportMapper,
+    smooth_position,
     viewport_mode_enabled,
 )
 
@@ -231,6 +232,24 @@ class TestDeadReckoning:
         consumer.apply_frame(make_delta([upsert_op("s1", 7.0, 7.0)]))
         pos = consumer.rendered_positions(now=clock.t + 1.0)["s1"]
         assert pos == pytest.approx((7.0, 7.0))
+
+
+class TestSmoothing:
+    def test_moves_toward_target(self):
+        assert smooth_position(0.0, 100.0, 1.0 / 60.0) > 0.0
+        assert smooth_position(0.0, 100.0, 1.0 / 60.0) < 100.0
+
+    def test_converges_within_a_third_of_a_second(self):
+        x = 0.0
+        for _ in range(20):
+            x = smooth_position(x, 100.0, 1.0 / 60.0)
+        assert x == pytest.approx(100.0, abs=5.0)
+
+    def test_zero_dt_holds(self):
+        assert smooth_position(10.0, 100.0, 0.0) == 10.0
+
+    def test_already_there_stays(self):
+        assert smooth_position(50.0, 50.0, 1.0 / 60.0) == pytest.approx(50.0)
 
 
 class TestViewportMapper:

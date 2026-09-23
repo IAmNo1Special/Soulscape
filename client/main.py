@@ -40,6 +40,7 @@ from .system.network.viewport_client import (
     ViewportConsumer,
     ViewportMapper,
     is_statue,
+    smooth_position,
     viewport_mode_enabled,
     viewport_prune_ids,
 )
@@ -1017,6 +1018,15 @@ class SoulscapeApp:
             self.window_manager.set_always_on_top()
             self.last_topmost_time = time.time()
 
+    def _refresh_tray_souls(self) -> None:
+        """Rebuild the tray menu after the viewport soul set changes."""
+        tray = getattr(self, "tray_controller", None)
+        if tray is not None:
+            try:
+                tray.refresh()
+            except Exception:
+                pass
+
     def _update_abroad_fades(
         self,
         dt: float,
@@ -1123,13 +1133,18 @@ class SoulscapeApp:
             self.active_souls.append(soul)
             self.dirty_tracker.mark_dirty()
 
-        for sid in viewport_prune_ids(
+        added = known - set(existing)
+        pruned = viewport_prune_ids(
             existing, known, self.instance_id, self._walkoff_fades
-        ):
+        )
+        for sid in pruned:
             soul = existing[sid]
             soul.cleanup()
             self.active_souls.remove(soul)
             self.dirty_tracker.mark_dirty()
+
+        if added or pruned:
+            self._refresh_tray_souls()
 
         self._away_souls = abroad_now
 
@@ -1140,8 +1155,12 @@ class SoulscapeApp:
             if soul is None:
                 continue
             sx, sy = mapper.world_to_screen(wx, wy, display.width, display.height)
-            soul.x, soul.y = sx, sy
-            soul.draw_y = sy
+            if sid in added:
+                soul.x, soul.y = sx, sy
+            else:
+                soul.x = smooth_position(soul.x, sx, dt)
+                soul.y = smooth_position(soul.y, sy, dt)
+            soul.draw_y = soul.y
             # Issue #21: collapsed souls render as statues -- desaturated
             # stone colors and a frozen plasma pulse.
             soul.statue = is_statue(states.get(sid))

@@ -303,6 +303,7 @@ class TrayController:
         """Rebuild the menu so dynamic labels pick up fresh data."""
         if self.icon is not None:
             try:
+                self.icon.menu = self._create_menu()
                 self.icon.update_menu()
             except Exception:
                 pass

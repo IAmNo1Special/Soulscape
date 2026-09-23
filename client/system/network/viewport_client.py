@@ -24,6 +24,25 @@ from ..persistence import MODE_ONLINE, get_client_mode
 INTERP_DELAY_SECONDS = 0.2
 MAX_EXTRAPOLATE_SECONDS = 0.4
 MAX_BUFFER_SAMPLES = 32
+
+#: Exponential smoothing rate (per second) for Hub-driven sprite
+#: positions. The viewport interpolator emits 5 Hz linear segments;
+#: easing the sprite toward each sample rounds the corners so online
+#: motion reads closer to the 60 fps offline roam. Converges within
+#: ~0.3 s, so arrivals still land crisply.
+VIEWPORT_SMOOTH_RATE_S = 10.0
+
+
+def smooth_position(
+    current: float, target: float, dt: float, rate: float = VIEWPORT_SMOOTH_RATE_S
+) -> float:
+    """One frame of exponential easing toward a viewport sample."""
+    if dt <= 0.0:
+        return current
+    alpha = 1.0 - math.exp(-rate * dt)
+    return current + (target - current) * alpha
+
+
 _MAX_TURN_RATE = 2.0 * math.pi
 
 STATUE_STATE = "collapsed"
