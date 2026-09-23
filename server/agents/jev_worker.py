@@ -128,6 +128,12 @@ class JevWorker:
     def wander_intent_id(self, soul_id: str) -> str | None:
         return self._wander_intent.get(soul_id)
 
+    def wandering(self, soul_id: str) -> bool:
+        """True while the tier owns this soul's motion: an active
+        wander episode or a tracked wander intent in flight. The
+        baseline wander sweep yields to these souls."""
+        return self._wander.active(soul_id) or soul_id in self._wander_intent
+
     def note(
         self,
         soul_id: str,

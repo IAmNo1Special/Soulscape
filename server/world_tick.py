@@ -56,6 +56,7 @@ from . import bridge
 from . import agents
 from . import expeditions
 from . import resources
+from . import wander as wander_mod
 from .agents import metering
 from .agents import reflex
 from .agents import jev as jev_mod
@@ -789,6 +790,10 @@ class WorldTick:
                 except Exception:
                     logger.exception("retention compaction failed")
             self._run_agent_pool(coarse_events)
+            try:
+                wander_mod.sweep(self)
+            except Exception:
+                logger.exception("baseline wander sweep failed")
             try:
                 self._jev_movement_completed(arrived)
             except Exception:
