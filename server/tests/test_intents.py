@@ -181,6 +181,32 @@ def test_move_to_within_reach_not_clamped(register_soul):
     assert target is None
 
 
+def test_amble_wander_move_adjudicates_at_amble_speed(register_soul):
+    from ..agents import jev as jev_mod
+
+    register_soul("am1")
+    _place_soul("am1", 100.0, 100.0)
+    record = intents.enqueue_intent(
+        "sessA",
+        "nA",
+        None,
+        "am1",
+        "move_to",
+        {"x": 400.0, "y": 100.0, "pace": "amble", "wander": True},
+    )
+    WorldTick().pump_intents()
+    with database.get_db() as conn:
+        row = conn.execute(
+            "SELECT status, result FROM intents WHERE intent_id = ?",
+            (record["intent_id"],),
+        ).fetchone()
+    assert row["status"] == "adjudicated"
+    result = json.loads(row["result"])
+    assert result["speed"] == pytest.approx(jev_mod.JEV_AMBLE_SPEED)
+    _, velocity, _ = _soul_state("am1")
+    assert math.hypot(*velocity) == pytest.approx(jev_mod.JEV_AMBLE_SPEED, rel=1e-6)
+
+
 def test_crash_between_ack_and_adjudication_loses_nothing(register_soul):
     register_soul("cr1")
     _place_soul("cr1", 100.0, 100.0)

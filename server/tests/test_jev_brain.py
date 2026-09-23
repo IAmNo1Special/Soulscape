@@ -131,6 +131,32 @@ def test_survival_tripped():
     )
 
 
+def test_snapshot_node_nearby_matches_gather_reach(db_conn):
+    from .. import resources
+
+    reach = resources.GATHER_REACH_WU
+    _insert_soul(db_conn, "s1", x=0.0, y=0.0)
+    agent_pool = pool_mod.AgentPool()
+    far = reflex.StubProvider(food=[(reach + 50.0, 0.0)])
+    snap = jev_brain.build_snapshot(
+        agent_pool, "s1", FakeVision([]), far, ("x",), 1000.0
+    )
+    assert snap["node_exists"] is True
+    assert snap["node_nearby"] is False
+    assert jev_brain.plan_for_goal("sate_needs", snap)[0] == "move_to"
+
+    near = reflex.StubProvider(food=[(reach / 2.0, 0.0)])
+    _insert_soul(db_conn, "s2", x=0.0, y=0.0)
+    snap_near = jev_brain.build_snapshot(
+        agent_pool, "s2", FakeVision([]), near, ("x",), 1000.0
+    )
+    assert snap_near["node_nearby"] is True
+    assert jev_brain.plan_for_goal("sate_needs", snap_near) == [
+        "gather",
+        "eat",
+    ]
+
+
 def _judgments(**over):
     base = {
         "threatened": False,
@@ -329,6 +355,10 @@ def test_payload_sate_move_targets_node():
     assert payload["x"] == 300.0
     assert payload["y"] == 400.0
     assert "speed" not in payload
+    # Amble like explore/socialize: full-speed forage trips finish
+    # inside one viewport pump interval and render as teleports.
+    assert payload["pace"] == "amble"
+    assert payload["wander"] is True
 
 
 def test_payload_socialize_approaches_but_keeps_distance():

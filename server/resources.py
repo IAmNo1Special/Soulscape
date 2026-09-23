@@ -20,7 +20,7 @@ Rules (decided for #34; code is the source of truth):
   where they spawn.
 - Respawn: a node depleted to 0 regrows to full capacity RESPAWN_SECONDS
   (6 h) later. No partial regrow in v1. The world tick sweeps every
-  RESPAWN_SWEEP_EVERY_TICKS (100 ticks, 0.05 Hz per the arch).
+  RESPAWN_SWEEP_EVERY_TICKS (400 ticks, 0.05 Hz per the arch).
 - Gather: 1 unit per `gather` intent; proximity gate GATHER_REACH_WU
   (12 wu) between soul and node, adjudicated server-side.
 - Eat/drink: consume 1 inventory unit -> +EAT_SATIETY_GAIN satiety /
@@ -75,14 +75,24 @@ GATHER_YIELD = 1
 #: Seconds for a depleted node to regrow to full.
 RESPAWN_SECONDS = 6.0 * 3600.0
 
-#: Tick cadence for the respawn sweep (0.05 Hz at the 5 Hz world tick).
-RESPAWN_SWEEP_EVERY_TICKS = 100
+#: Tick cadence for the respawn sweep (0.05 Hz at the 20 Hz world tick).
+RESPAWN_SWEEP_EVERY_TICKS = 400
 
 #: Adjudication proximity gate: soul must be within this distance (wu)
 #: of the node to gather. The reflex emits gather inside its own
 #: CONSUME_REACH_WU (8 wu); the gate is deliberately a little wider so
 #: a valid emission never fails adjudication on float rounding.
 GATHER_REACH_WU = 12.0
+
+#: Queue floor for the JEV follow-up think chained after a successful
+#: gather/eat/drink adjudication. The worker emits one action per
+#: think, so a multi-step sate plan (move -> gather -> eat) would
+#: otherwise stall between steps: movement arrivals already re-trigger
+#: thinking, but inventory completions note nothing and the next step
+#: waits for the 30 s restlessness sweep. A short explicit floor keeps
+#: the chain moving in ~seconds without touching the default 5 s floor
+#: (LLM-spend guard) or the 30 s restlessness cadence.
+FOLLOWUP_NOTE_FLOOR_S = 2.0
 
 #: Seeded-RNG default for node placement. Override with the
 #: SOULSCAPE_RESOURCE_SEED env var. The seed actually used is stored in
@@ -580,3 +590,20 @@ def adjudicate_gather(tick, intent: dict, now: float | None = None) -> None:
         except Exception:
             conn.rollback()
             raise
+    _note_followup(tick, soul_id)
+
+
+def _note_followup(tick, soul_id: str) -> None:
+    """Queue a prompt JEV re-think after an inventory completion.
+
+    Never raises: adjudication must not fail because a best-effort
+    notification did. No-op when the tick carries no JEV worker
+    (JEV disabled, replay, unit-test ticks).
+    """
+    note = getattr(tick, "_jev_note", None)
+    if note is None:
+        return
+    try:
+        note(soul_id, "needs_change", floor_override=FOLLOWUP_NOTE_FLOOR_S)
+    except Exception:
+        logger.exception("gather follow-up note failed for %s", soul_id)

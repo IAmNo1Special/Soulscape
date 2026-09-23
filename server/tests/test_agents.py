@@ -634,6 +634,30 @@ def test_consume_eats_from_inventory(db_conn):
     assert int(qty["quantity"]) == 1
 
 
+def test_consume_success_notes_followup_think(db_conn):
+    from .. import resources
+
+    _insert_soul(db_conn, "s1", satiety=10.0)
+    db_conn.execute(
+        "INSERT INTO soul_inventory (soul_id, item_name, quantity, metadata) "
+        "VALUES ('s1', 'food', 2, NULL)"
+    )
+    db_conn.commit()
+    record = intents.enqueue_intent("test", "n1", None, "s1", "eat", {})
+    tick = WorldTick()
+    notes: list[tuple] = []
+    tick._jev_note = lambda sid, kind, floor_override=None: notes.append(
+        (sid, kind, floor_override)
+    )
+    consume.adjudicate_consume(tick, record)
+    row = db_conn.execute(
+        "SELECT status FROM intents WHERE intent_id = ?",
+        (record["intent_id"],),
+    ).fetchone()
+    assert row["status"] == "adjudicated"
+    assert notes == [("s1", "needs_change", resources.FOLLOWUP_NOTE_FLOOR_S)]
+
+
 def test_consume_rejects_empty_inventory(db_conn):
     _insert_soul(db_conn, "s1", satiety=10.0)
     record = intents.enqueue_intent("test", "n1", None, "s1", "eat", {})

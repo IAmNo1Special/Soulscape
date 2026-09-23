@@ -245,6 +245,46 @@ def test_gather_happy_path(db_conn):
     assert int(soul["xp"]) == resources.XP_GATHER
 
 
+def test_gather_success_notes_followup_think(db_conn):
+    _insert_soul(db_conn, "s1", x=500.0, y=500.0)
+    _insert_node(db_conn, "node:food:g2", "food", 505.0, 500.0, amount=4)
+    record = intents.enqueue_intent(
+        "test", "g2", None, "s1", "gather", {"node_id": "node:food:g2"}
+    )
+    tick = WorldTick()
+    notes: list[tuple] = []
+    tick._jev_note = lambda sid, kind, floor_override=None: notes.append(
+        (sid, kind, floor_override)
+    )
+    resources.adjudicate_gather(tick, record, now=2000.0)
+    row = db_conn.execute(
+        "SELECT status FROM intents WHERE intent_id = ?",
+        (record["intent_id"],),
+    ).fetchone()
+    assert row["status"] == "adjudicated"
+    assert notes == [("s1", "needs_change", resources.FOLLOWUP_NOTE_FLOOR_S)]
+
+
+def test_gather_rejection_notes_no_followup(db_conn):
+    _insert_soul(db_conn, "far", x=0.0, y=0.0)
+    _insert_node(db_conn, "node:food:ok", "food", 500.0, 500.0, amount=5)
+    record = intents.enqueue_intent(
+        "test", "n1", None, "far", "gather", {"node_id": "node:food:ok"}
+    )
+    tick = WorldTick()
+    notes: list[tuple] = []
+    tick._jev_note = lambda sid, kind, floor_override=None: notes.append(
+        (sid, kind, floor_override)
+    )
+    resources.adjudicate_gather(tick, record, now=3000.0)
+    row = db_conn.execute(
+        "SELECT status FROM intents WHERE intent_id = ?",
+        (record["intent_id"],),
+    ).fetchone()
+    assert row["status"] == "rejected"
+    assert notes == []
+
+
 def test_gather_rejections(db_conn):
     _insert_soul(db_conn, "near", x=500.0, y=500.0)
     _insert_soul(db_conn, "far", x=0.0, y=0.0)

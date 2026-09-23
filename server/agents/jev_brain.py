@@ -225,7 +225,9 @@ def build_snapshot(
         "nature": str(row.get("nature") or ""),
         "has_food": has_food,
         "has_water": has_water,
-        "node_nearby": bool(node_info and node_info["distance"] <= 150.0),
+        "node_nearby": bool(
+            node_info and node_info["distance"] <= resources.GATHER_REACH_WU
+        ),
         "node_exists": node_info is not None,
         "nearest_node": node_info,
     }
@@ -351,7 +353,16 @@ def payload_for(goal: str, action: str, snapshot: dict) -> dict:
     if goal == GOAL_SATE and action == "move_to":
         node = snapshot.get("nearest_node") or {}
         npos = node.get("position") or pos
-        return {"x": float(npos[0]), "y": float(npos[1])}
+        # Amble like every other cruising move (explore/socialize):
+        # at full INTENT_MOVE_SPEED a short forage trip finishes
+        # inside one 0.2 s viewport pump interval and renders as a
+        # teleport (plus extrapolation overshoot pops at each stop).
+        return {
+            "x": float(npos[0]),
+            "y": float(npos[1]),
+            "pace": "amble",
+            "wander": True,
+        }
     if goal == GOAL_SATE and action in ("eat", "drink"):
         return {}
     if goal == GOAL_SOCIALIZE and action == "move_to":

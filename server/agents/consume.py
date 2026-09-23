@@ -17,8 +17,11 @@ accrues XP_EAT / XP_DRINK to souls.xp silently (telemetry only).
 """
 
 import json
+import logging
 
 from .. import biology, database, dormancy, persistence, resources
+
+logger = logging.getLogger("soulscape_hub")
 
 #: Intent kinds routed to adjudicate_consume by the tick pump.
 CONSUME_KINDS = frozenset({"eat", "drink"})
@@ -106,3 +109,25 @@ def adjudicate_consume(tick, intent: dict, provider=None) -> None:
         except Exception:
             conn.rollback()
             raise
+    _note_followup(tick, soul_id)
+
+
+def _note_followup(tick, soul_id: str) -> None:
+    """Queue a prompt JEV re-think after an eat/drink completion.
+
+    The worker emits one action per think: without this, an eat that
+    resolves the pressing need leaves the soul idle until the 30 s
+    restlessness sweep instead of promptly wandering. Never raises;
+    no-op when the tick carries no JEV worker.
+    """
+    note = getattr(tick, "_jev_note", None)
+    if note is None:
+        return
+    try:
+        note(
+            soul_id,
+            "needs_change",
+            floor_override=resources.FOLLOWUP_NOTE_FLOOR_S,
+        )
+    except Exception:
+        logger.exception("consume follow-up note failed for %s", soul_id)
