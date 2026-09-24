@@ -153,7 +153,7 @@ This plan addresses 25+ Technical Debt, Risk, and Quirk items identified during 
 **Problem:** The root `main.py` is empty and creates confusion about the actual entry points.
 **Fix:**
 - Delete the empty file
-- The actual entry points are `server/main.py` and `client/main.py`, invoked from the repo root via `uv run --package server python -m server` and `uv run --package client python -m client` (plus `uv run --package server python -m server.sim_process` for the SimProcess)
+- The actual entry points are `server/main.py` and `client/sim_process.py`, invoked from the repo root via `uv run --package server python -m server` and `uv run --package client python -m client` (plus `uv run --package server python -m server.sim_process` for the SimProcess)
 
 ### 2.6 Add Database Indexes
 **File:** `server/database.py` (schema definitions in `init_db()`)
@@ -238,8 +238,9 @@ This plan addresses 25+ Technical Debt, Risk, and Quirk items identified during 
 - Use `concurrent.futures.ThreadPoolExecutor(max_workers=4)` instead of spawning unbounded daemon threads for agent decisions. This prevents thread pool exhaustion when multiple souls have active agents simultaneously.
 
 ### 3.6 Address Client Position Broadcast Frequency
-**File:** `client/main.py:455`
-**Problem:** The client sends position updates to the Hub every ~33ms (30Hz) for all local souls. With N local souls, each broadcast is O(N) in serialization and network send. At scale, this can saturate network bandwidth or the Hub's WebSocket receive buffer.
+**Status:** RETIRED with the Pyglet overlay (`client/main.py` deleted; rendering moved to Godot).
+ Godot position updates to the Hub should still target ~5Hz when the online path is built.
+**Problem (historical):** The client sent position updates to the Hub every ~33ms (30Hz) for all local souls. With N local souls, each broadcast is O(N) in serialization and network send. At scale, this can saturate network bandwidth or the Hub's WebSocket receive buffer.
 **Fix:**
 - Increase the broadcast interval from 33ms to 200ms (5Hz) — position changes are visually smooth at 5Hz for other viewers
 - Ensure the dirty-flag check (position changed >1px since last broadcast) is still applied

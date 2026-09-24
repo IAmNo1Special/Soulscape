@@ -1,6 +1,6 @@
 """Entry point for running the package as a module."""
 
-from .main import main
+from .sim_process import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

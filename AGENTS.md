@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Soulscape is a decentralized metaverse ecosystem comprising a transparent desktop overlay client and a FastAPI-based backend hub. The client renders autonomous "soul" entities directly onto the user's desktop using Pyglet; the hub provides persistent storage, social feeds, a marketplace with tax collection, and real-time WebSocket synchronization.
+Soulscape is a decentralized metaverse ecosystem comprising a Godot-rendered desktop overlay client, a headless Python simulation for offline mode, and a FastAPI-based backend hub. The hub is the single source of truth online; local disk (`souls.json`) is the authority offline. The hub provides persistent storage, social feeds, a marketplace with tax collection, and real-time WebSocket synchronization.
 
 ## Repository Structure
 
@@ -30,7 +30,7 @@ Soulscape/
 │   ├── Dockerfile           # Docker image for deployment
 │   ├── docker-compose.yml   # Docker Compose for local deployment
 │   └── soulscape_hub.db     # SQLite database (generated)
-├── client/                  # Pyglet overlay client
+├── client/                  # Headless offline sim + shared sim assets (rendering lives in Godot: soul-dot)
 │   ├── main.py              # SoulscapeApp — main application class
 │   ├── __main__.py          # Entry point for `uv run --package client python -m client`
 │   ├── constants.py         # Rendering/physics constants
@@ -44,7 +44,7 @@ Soulscape/
 │   │   └── stores/          # DataStore abstraction (LocalStore + RemoteStore)
 │   ├── shaders/             # GLSL shaders for 3D orbs and auras
 │   ├── system/              # Infrastructure: network, persistence, input, tray, window
-│   ├── ui/                  # GUI (tkinter/ttkbootstrap) and graphics (Pyglet shaders)
+│   ├── ui/                  # GUI (tkinter/ttkbootstrap) and logic-only visuals (bubbles, pet gestures)
 │   ├── tests/               # Pytest test suite (unit + integration)
 │   └── utils/               # Helpers, security sanitization, shader utilities
 ├── shared/                  # Shared models and enums (both client and server)
@@ -58,9 +58,9 @@ Soulscape/
 - **Language**: Python 3.13+
 - **Build/Package**: Astral uv (`uv sync --all-packages`, `uv run`)
 - **Server**: FastAPI, Pydantic v2, Uvicorn, SQLite (WAL mode), WebSockets
-- **Client**: Pyglet, Google ADK (Gemini), magetools (ChromaDB), PyAutoGUI, httpx, websockets, Pillow, numpy, ttkbootstrap, pystray
+- **Client**: Godot 4 (rendering, see soul-dot), headless Python sim, Google ADK (Gemini), magetools (ChromaDB), PyAutoGUI, httpx, websockets, Pillow, numpy, ttkbootstrap
 - **Auth**: API key via `X-Hub-Secret` header (`secrets.compare_digest`)
-- **Rendering**: Pyglet with GLSL vertex/fragment shaders for 3D orbs and auras
+- **Rendering**: Godot 4 spatial shaders for 3D orbs and auras (ported from the retired Pyglet GLSL)
 - **Testing**: pytest (run from root with `uv run pytest`)
 
 ## Setup & Development Commands
@@ -79,9 +79,9 @@ uv run --package server python -m server              # API at http://0.0.0.0:97
 uv run --package server python -m server.sim_process  # SimProcess (required; without it /health reports "degraded" and mutations 503)
 ```
 
-### Running the Overlay (Client)
+### Running the Offline Sim (Client)
 ```bash
-uv run --package client python -m client  # Starts the Pyglet overlay window
+uv run --package client python -m client  # Headless sim: ticks souls, writes souls.json for Godot to render
 ```
 
 ### Testing
@@ -157,11 +157,10 @@ uv add <package>                 # Add dependency to appropriate workspace membe
 | POST | `/social/delete/{message_id}` | Delete a post or reply |
 | WS | `/ws/{owner_id}` | WebSocket for real-time presence and soul updates |
 
-### Client Main Loop (`client/main.py`)
-1. `SoulscapeApp.__init__()` — loads settings, souls, creates NetworkService, event loop, GUI process
-2. `SoulscapeApp.run()` — creates Pyglet window, loads souls, starts network, enters `pyglet.app.run()` at 60 FPS
-3. `update_souls(dt)` — called every frame: processes network events, updates physics/biology/AI, broadcasts position updates every ~33ms, saves state every 30s
-4. `check_gui_results()` — polls GUI command queue every 100ms for settings/menu interactions
+### Offline Sim Loop (`client/sim_process.py`)
+1. `amain()` — loads settings/instance/mode, resolves screen size, loads souls from disk
+2. Offline mode — `run_offline()`: 60Hz tick (separation frame, `soul.update(dt)` for physics/biology/AI), persists owned souls every 30s and on shutdown
+3. Online mode — `sync_online()`: pushes owned souls to the Hub once, then exits (Hub owns truth; Godot renders the stream)
 
 ### WebSocket Protocol
 - Connect to `ws(s)://{hub_url}/ws/{owner_id}` with `X-Hub-Secret` header

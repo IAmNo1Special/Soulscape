@@ -1,1 +1,0 @@
-"""Graphics components for Soulscape."""

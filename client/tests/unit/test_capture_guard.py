@@ -38,7 +38,7 @@ ONLINE_ENTRY_MODULES = [
     "client/core/stores/__init__.py",
     "client/core/stores/remote_store.py",
     "client/core/commands.py",
-    "client/main.py",
+    "client/sim_process.py",
 ]
 
 ONLINE_RUNTIME_MODULES = [
@@ -52,6 +52,7 @@ ONLINE_RUNTIME_MODULES = [
     "client.core.commands",
     "client.core.soul.physics",
     "client.core",
+    "client.sim_process",
 ]
 
 
