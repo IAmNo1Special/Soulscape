@@ -30,23 +30,26 @@ Soulscape/
 │   ├── Dockerfile           # Docker image for deployment
 │   ├── docker-compose.yml   # Docker Compose for local deployment
 │   └── soulscape_hub.db     # SQLite database (generated)
-├── client/                  # Headless offline sim + shared sim assets (rendering lives in Godot: soul-dot)
-│   ├── main.py              # SoulscapeApp — main application class
+├── client/                  # Headless offline sim (rendering lives in Godot: soulscape-client)
 │   ├── __main__.py          # Entry point for `uv run --package client python -m client`
-│   ├── constants.py         # Rendering/physics constants
+│   ├── sim_process.py       # Headless sim loop; writes souls.json for Godot to render
+│   ├── constants.py         # Simulation/physics constants
 │   ├── core/                # Core simulation logic
 │   │   ├── soul/soul.py     # Soul class (main actor)
-│   │   ├── soul/agent.py    # SoulAgent (LLM agent via Google ADK + Gemini)
-│   │   ├── soul/physics.py  # SoulPhysics (movement, collision, input)
+│   │   ├── soul/physics.py  # SoulPhysics (movement, collision)
+│   │   ├── soul/goap_brain.py # GOAP planner driving offline behaviour
 │   │   ├── biology/         # SoulBiology, stats, species, gender, mechanics
 │   │   ├── interactions/    # Inventory, Marketplace, MessageBoard
 │   │   ├── commands.py      # Command pattern for actions
 │   │   └── stores/          # DataStore abstraction (LocalStore + RemoteStore)
-│   ├── shaders/             # GLSL shaders for 3D orbs and auras
-│   ├── system/              # Infrastructure: network, persistence, input, tray, window
+│   ├── ai/                  # Parked LLM agent (Google ADK + Gemini) + magetools
+│   ├── system/              # Infrastructure: persistence, network, logging, presence
 │   ├── ui/                  # GUI (tkinter/ttkbootstrap) and logic-only visuals (bubbles, pet gestures)
 │   ├── tests/               # Pytest test suite (unit + integration)
-│   └── utils/               # Helpers, security sanitization, shader utilities
+│   └── utils/               # Helpers, security sanitization
+├── docs/
+│   ├── client-contract.md   # On-disk souls.json / settings.json schema the Godot client reads
+│   ├── architecture.md      # System architecture
 ├── shared/                  # Shared models and enums (both client and server)
 │   ├── models.py            # Pydantic models (Soul, Tamer, Species, etc.)
 │   └── enums.py             # Stat enum
@@ -159,8 +162,11 @@ uv add <package>                 # Add dependency to appropriate workspace membe
 
 ### Offline Sim Loop (`client/sim_process.py`)
 1. `amain()` — loads settings/instance/mode, resolves screen size, loads souls from disk
-2. Offline mode — `run_offline()`: 60Hz tick (separation frame, `soul.update(dt)` for physics/biology/AI), persists owned souls every 30s and on shutdown
+2. Offline mode — `run_offline()`: 60Hz tick (separation frame, `soul.update(dt)` for physics/biology/AI), persists owned souls every 5s and on shutdown (Godot polls the file, so cadence sets motion freshness)
 3. Online mode — `sync_online()`: pushes owned souls to the Hub once, then exits (Hub owns truth; Godot renders the stream)
+
+### Client Contract (`souls.json` / `settings.json`)
+See `docs/client-contract.md` for the on-disk schema the Godot client reads: data-dir resolution per platform, every `settings.json` key, the full `souls.json` entry schema, the 5s write cadence and atomic-write guarantee, and the keys that are deliberately absent (`secret`, `max_hp`, `state`, `x`/`y`). Read it before changing `Soul.to_dict()`, `save_souls()`, or anything a renderer consumes.
 
 ### WebSocket Protocol
 - Connect to `ws(s)://{hub_url}/ws/{owner_id}` with `X-Hub-Secret` header
