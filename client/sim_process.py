@@ -11,6 +11,7 @@ truth), so owned souls are pushed to the Hub once and the process exits.
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import sys
 from collections.abc import Coroutine
@@ -35,21 +36,84 @@ DEFAULT_SCREEN_WIDTH = 1920
 DEFAULT_SCREEN_HEIGHT = 1080
 
 
+def _detect_display_size() -> tuple[int, int] | None:
+    """Best-effort real display size, or None if it cannot be determined."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            width = user32.GetSystemMetrics(0)
+            height = user32.GetSystemMetrics(1)
+            return int(width), int(height)
+        if sys.platform == "darwin":
+            import ctypes
+
+            quartz = ctypes.cdll.LoadLibrary("Quartz")
+            display_id = quartz.CGMainDisplayID()
+            width = quartz.CGDisplayPixelsWide(display_id)
+            height = quartz.CGDisplayPixelsHigh(display_id)
+            return int(width), int(height)
+        if os.environ.get("WAYLAND_DISPLAY"):
+            log.warning(
+                "Running under Wayland: XWayland reports a virtual screen "
+                "spanning every monitor, not a real one. Set display_width and "
+                "display_height in settings.json (or SOULSCAPE_DISPLAY_WIDTH "
+                "and SOULSCAPE_DISPLAY_HEIGHT) so the roam bounds match the "
+                "monitor the overlay is on."
+            )
+            return None
+        if os.environ.get("DISPLAY"):
+            import ctypes
+
+            x11 = ctypes.cdll.LoadLibrary("libX11.so.6")
+            x11.XOpenDisplay.restype = ctypes.c_void_p
+            x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+            x11.XDisplayWidth.restype = ctypes.c_int
+            x11.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            x11.XDisplayHeight.restype = ctypes.c_int
+            x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            handle = x11.XOpenDisplay(None)
+            if not handle:
+                return None
+            try:
+                width = x11.XDisplayWidth(handle, 0)
+                height = x11.XDisplayHeight(handle, 0)
+            finally:
+                x11.XCloseDisplay(handle)
+            if width > 0 and height > 0:
+                return int(width), int(height)
+    except Exception as e:
+        log.debug(f"Display size detection unavailable: {e}")
+    return None
+
+
 def resolve_screen_size(settings: dict[str, Any]) -> tuple[int, int]:
-    """Screen bounds for roaming, without requiring a display server."""
+    """Screen bounds for roaming, without requiring a display server.
+
+    Precedence: explicit settings keys, then SOULSCAPE_DISPLAY_WIDTH/HEIGHT,
+    then real display detection, then a last-resort default. The keys are
+    never written automatically -- auto-filling them would make a stale
+    measurement permanent, since a present key always wins.
+    """
     width = settings.get("display_width")
     height = settings.get("display_height")
     if isinstance(width, int) and isinstance(height, int):
         return width, height
-    if sys.platform == "win32":
+    env_width = os.environ.get("SOULSCAPE_DISPLAY_WIDTH")
+    env_height = os.environ.get("SOULSCAPE_DISPLAY_HEIGHT")
+    if env_width and env_height:
         try:
-            import ctypes
-
-            user32 = ctypes.windll.user32
-            size = (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
-            return int(size[0]), int(size[1])
-        except Exception as e:
-            log.debug(f"System metrics unavailable: {e}")
+            return int(env_width), int(env_height)
+        except ValueError:
+            log.warning(
+                "Ignoring non-integer SOULSCAPE_DISPLAY_WIDTH/HEIGHT: "
+                f"{env_width!r}x{env_height!r}"
+            )
+    detected = _detect_display_size()
+    if detected is not None:
+        return detected
     return DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT
 
 
