@@ -4,22 +4,19 @@
 from __future__ import annotations
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Final
+
+from ..utils.helpers import get_appdata_dir
 
 MAX_LOG_SIZE_BYTES: Final[int] = 5 * 1024 * 1024  # 5 MB
 BACKUP_COUNT: Final[int] = 3
 
 
 def get_log_dir() -> Path:
-    """Get the Soulscape logs directory in %APPDATA%."""
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        logs_dir = Path(appdata) / "Soulscape" / "logs"
-    else:
-        logs_dir = Path.cwd() / ".soulscape" / "logs"
+    """Get the Soulscape logs directory."""
+    logs_dir = get_appdata_dir() / "logs"
 
     logs_dir.mkdir(parents=True, exist_ok=True)
     return logs_dir

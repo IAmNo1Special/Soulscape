@@ -78,13 +78,25 @@ def resource_path(relative_path: str) -> Path:
 
 
 def get_appdata_dir() -> Path:
-    """Get the Soulscape data directory in %APPDATA%."""
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        soulscape_dir = Path(appdata) / "Soulscape"
+    """Get the Soulscape data directory.
+
+    Single source of truth for persistence, logging and the data-dir
+    override. The Godot overlay client resolves the same directory
+    independently, so the two must stay in step.
+    """
+    override = os.environ.get("SOULSCAPE_DATA_DIR")
+    if override:
+        soulscape_dir = Path(override)
     else:
-        # Fallback to current directory
-        soulscape_dir = Path.cwd() / ".soulscape"
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            soulscape_dir = Path(appdata) / "Soulscape"
+        else:
+            home = os.environ.get("HOME")
+            if home:
+                soulscape_dir = Path(home) / ".soulscape"
+            else:
+                soulscape_dir = Path.cwd() / ".soulscape"
 
     soulscape_dir.mkdir(parents=True, exist_ok=True)
     return soulscape_dir
