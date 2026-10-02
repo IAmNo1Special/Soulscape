@@ -94,9 +94,9 @@ Clone and run the Godot project separately:
 godot --path soulscape-client
 ```
 
-Point it at the simulation's data directory if they do not already agree —
-on Linux the sim writes to `CWD/.soulscape` while the overlay looks in
-`~/.soulscape`. See the contract doc.
+Both find the same data directory with no configuration: `%APPDATA%\Soulscape`
+on Windows, `~/.soulscape` elsewhere. Set `SOULSCAPE_DATA_DIR` to override it
+for both.
 
 ## Documentation
 

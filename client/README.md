@@ -47,11 +47,12 @@ switch modes.
 | Platform | Path |
 |---|---|
 | Windows | `%APPDATA%\Soulscape\` |
-| Linux / macOS | **`CWD/.soulscape/`** |
+| Linux / macOS | `~/.soulscape` |
 
-The Linux path depends on the directory you launched from, because
-`APPDATA` is normally unset there. If the Godot client cannot find your souls,
-this is almost always why — see the contract doc.
+`SOULSCAPE_DATA_DIR` overrides this for both the sim and the Godot overlay, so
+a non-default location is a single setting. `get_appdata_dir()` in
+`client/utils/helpers.py` is the single source of truth; logging resolves
+through it too.
 
 `.env` holds `HUB_URL` and `HUB_SECRET_KEY` (the value sent as the
 `X-Hub-Secret` header).
