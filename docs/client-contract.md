@@ -10,21 +10,20 @@ verified against a live sim run on 2026-10-02.
 
 ## Where the files live
 
-Resolved by `client/utils/helpers.py:80-90`:
+Resolved by `client/utils/helpers.py` (`get_appdata_dir`), which is the single
+source of truth for persistence, logging and the override:
 
-| Platform | Path |
-|---|---|
-| Windows | `%APPDATA%\Soulscape\` |
-| Linux / macOS | **`CWD/.soulscape/`** |
+| Order | Platform | Path |
+|---|---|---|
+| 1 | any | `$SOULSCAPE_DATA_DIR` |
+| 2 | Windows | `%APPDATA%\Soulscape\` |
+| 3 | Linux / macOS | `~/.soulscape` |
+| 4 | no `HOME` at all | `CWD/.soulscape` |
 
-The Linux fallback is `Path.cwd() / ".soulscape"`, **not** `~/.soulscape`,
-because `APPDATA` is normally unset there. The data directory therefore depends
-on the directory the sim was launched from.
-
-> **Trap.** The Godot client resolves `~/.soulscape` on Linux
-> (`file_soul_source.gd`), so the two disagree by default. Run the sim from
-> `$HOME`, or point the client at the sim with `SOULSCAPE_DATA_DIR`. Making the
-> sim use `~/.soulscape` unconditionally is the real fix and is still open.
+`APPDATA` is normally unset on Linux and macOS, so those platforms use
+`~/.soulscape` — the same path the Godot client resolves — and the two find
+each other with no configuration. `SOULSCAPE_DATA_DIR` overrides for both, so a
+non-default location is a single setting rather than a per-process argument.
 
 Files in the directory, and which to read:
 
@@ -150,8 +149,8 @@ and exits. The Hub is the single source of truth online
 
 ## Open items
 
-1. **Linux data dir divergence** — sim uses `CWD/.soulscape`, the Godot client
-   uses `~/.soulscape`. Needs one decision.
+1. ~~**Linux data dir divergence**~~ — resolved. Both sides use `~/.soulscape`
+   and honour `SOULSCAPE_DATA_DIR`.
 2. **`display_width` / `display_height` are per-machine manual config.** There
    is no automatic producer, by design — see "Roam bounds resolution". Under
    Wayland nothing trustworthy can detect the real monitor size, so the sim
